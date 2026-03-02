@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from slowapi.middleware import SlowAPIMiddleware
-from starlette.responses import Response
+from starlette.responses import Response, FileResponse
 
 from app.api.routes.admin import router as admin_router
 from app.api.routes.chat import router as chat_router
@@ -322,3 +322,10 @@ else:
         logger.info(f"Contents of /app: {[p.name for p in app_contents]}")
     except Exception as e:
         logger.error(f"Could not list /app contents: {e}")
+
+
+# Catch-all route for SPA client-side routing
+# Serves index.html for any unmatched frontend routes (not API routes)
+@app.get("/{full_path:path}")
+async def serve_spa(full_path: str):
+    return FileResponse(str(static_dir / "index.html"))
