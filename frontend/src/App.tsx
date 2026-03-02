@@ -49,7 +49,13 @@ function App() {
             path="/chat/redesign"
             element={
               <ProtectedRoute>
-                <ChatPageRedesigned />
+                <PageShell
+                  activeItem="chat"
+                  onItemSelect={() => {}}
+                  healthStatus={{ backend: true, embeddings: true, chat: true, loading: false, lastChecked: null }}
+                >
+                  <ChatPageRedesigned />
+                </PageShell>
               </ProtectedRoute>
             }
           />
