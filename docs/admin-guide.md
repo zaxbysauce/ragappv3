@@ -431,17 +431,17 @@ services:
 
 ```bash
 # Reduce memory usage
-CHUNK_SIZE=256
-MAX_CONTEXT_CHUNKS=5
+CHUNK_SIZE_CHARS=1000
+RETRIEVAL_TOP_K=5
 
 # Improve response quality
-RAG_RELEVANCE_THRESHOLD=0.2
+MAX_DISTANCE_THRESHOLD=0.3
 
 # Faster processing (less accurate)
-CHUNK_OVERLAP=25
+CHUNK_OVERLAP_CHARS=100
 
 # Slower processing (more accurate)
-CHUNK_OVERLAP=100
+CHUNK_OVERLAP_CHARS=400
 ```
 
 ### Database Optimization
@@ -618,7 +618,7 @@ OLLAMA_CHAT_URL=http://192.168.1.100:11434
 - Large log files (rotate logs)
 - Fragmented database (run VACUUM)
 - Memory leaks (restart container)
-- Too many documents (increase RAM or reduce MAX_CONTEXT_CHUNKS)
+- Too many documents (increase RAM or reduce RETRIEVAL_TOP_K)
 
 ### Reset to Clean State
 

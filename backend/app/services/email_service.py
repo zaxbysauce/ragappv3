@@ -160,7 +160,7 @@ class EmailIngestionService:
             except asyncio.CancelledError:
                 logger.info("Polling loop cancelled")
                 break
-            except Exception as e:
+            except (OSError, RuntimeError, ConnectionError) as e:
                 self._last_error = str(e)
                 logger.error(f"Error during email polling: {e}", exc_info=True)
 
@@ -211,14 +211,14 @@ class EmailIngestionService:
                 uid_str = uid.decode() if isinstance(uid, bytes) else str(uid)
                 try:
                     await self._process_email(imap_client, uid_str)
-                except Exception as e:
+                except (OSError, RuntimeError, ValueError) as e:
                     logger.error(f"Error processing email UID {uid_str}: {e}", exc_info=True)
                     # Continue to next email even if one fails
 
             # Update last poll time on successful completion
             self._last_poll_time = datetime.now()
 
-        except Exception as e:
+        except (OSError, RuntimeError, ConnectionError) as e:
             logger.error(f"Error during poll iteration: {e}", exc_info=True)
             raise
         finally:
@@ -226,7 +226,7 @@ class EmailIngestionService:
                 try:
                     await imap_client.logout()
                     logger.debug("IMAP connection closed")
-                except Exception as e:
+                except (OSError, ConnectionError) as e:
                     logger.warning(f"Error closing IMAP connection: {e}")
 
     async def _connect_with_backoff(self) -> Union[aioimaplib.IMAP4_SSL, aioimaplib.IMAP4]:
@@ -289,7 +289,7 @@ class EmailIngestionService:
                 self._current_backoff_delay = None
                 return imap_client
 
-            except Exception as e:
+            except (OSError, ConnectionError, RuntimeError, TimeoutError) as e:
                 if "authentication" in str(e).lower():
                     # Auth errors are permanent, don't retry
                     raise
@@ -572,18 +572,20 @@ class EmailIngestionService:
 
             logger.debug(f"Saved attachment to: {temp_path}")
             return temp_path
-        except Exception as e:
+        except (OSError, RuntimeError, ValueError) as e:
             # Clean up temp file on error
             try:
                 os.close(fd)
                 os.unlink(temp_path)
-            except Exception:
+            except (OSError, FileNotFoundError):
+                # File may not exist or already closed
                 pass
             raise Exception(f"Failed to save attachment: {e}")
         finally:
             try:
                 os.close(fd)
-            except Exception:
+            except (OSError, FileNotFoundError):
+                # File may already be closed
                 pass
 
     async def _resolve_vault_id(self, vault_name: Optional[str]) -> int:
@@ -620,7 +622,7 @@ class EmailIngestionService:
                     return 1
             finally:
                 self.pool.release_connection(conn)
-        except Exception as e:
+        except (sqlite3.Error, OSError, RuntimeError) as e:
             logger.error(f"Error resolving vault ID for '{vault_name}': {e}")
             return 1
 

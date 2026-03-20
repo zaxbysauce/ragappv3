@@ -45,7 +45,8 @@ class UploadPathProvider:
                 return row[0] if row else f"vault_{vault_id}"
             finally:
                 pool.release_connection(conn)
-        except Exception:
+        except (sqlite3.Error, OSError, KeyError, IndexError) as e:
+            logger.warning(f"Failed to lookup vault name for ID {vault_id}: {e}")
             return f"vault_{vault_id}"
     
     def resolve(self, filename: str, vault_id: int) -> Path:

@@ -99,7 +99,7 @@ class CSRFManager:
         key = f"csrf:{token}"
         try:
             store.setex(key, self.ttl, "1")
-        except Exception as exc:
+        except (redis.RedisError, ConnectionError, TimeoutError) as exc:
             logger.error("Storage error during token generation: %s", exc)
             raise HTTPException(status_code=503, detail="CSRF storage unavailable")
         return token
@@ -112,13 +112,13 @@ class CSRFManager:
         key = f"csrf:{token}"
         try:
             exists = store.get(key)
-        except Exception as exc:
+        except (redis.RedisError, ConnectionError, TimeoutError) as exc:
             logger.error("Storage error during token validation: %s", exc)
             raise HTTPException(status_code=503, detail="CSRF storage unavailable")
         if exists:
             try:
                 store.expire(key, self.ttl)
-            except Exception:
+            except (redis.RedisError, ConnectionError, TimeoutError):
                 logger.warning("Failed to extend CSRF token TTL")
             return True
         return False
@@ -127,7 +127,7 @@ class CSRFManager:
         store = self._get_store()
         try:
             store.delete(f"csrf:{token}")
-        except Exception:
+        except (redis.RedisError, ConnectionError, TimeoutError):
             logger.warning("Failed to revoke CSRF token (storage error)")
 
 
@@ -190,10 +190,14 @@ def issue_csrf_token(response: Response, csrf_manager: CSRFManager) -> str:
 def require_auth(
     authorization: str = Header(None),
 ) -> dict:
-    """Simple Bearer token auth. Skips if admin_secret_token is unconfigured."""
-    token_configured = settings.admin_secret_token not in ("", "admin-secret-token")
-    if not token_configured:
-        return {"authenticated": True}
+    """Simple Bearer token auth. Requires valid token when admin_secret_token is configured."""
+    # Authentication is always required - check if token is configured
+    if not settings.admin_secret_token:
+        # No token configured - require auth header to be set
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required. Please set ADMIN_SECRET_TOKEN in environment."
+        )
     if not authorization:
         raise HTTPException(status_code=401, detail="Authorization header required")
     if not authorization.lower().startswith("bearer "):

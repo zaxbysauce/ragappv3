@@ -1,0 +1,476 @@
+"""
+Evaluation API routes for RAG pipeline metrics.
+
+Provides endpoints for evaluating RAG pipeline performance using RAGAS metrics.
+"""
+
+import logging
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
+
+from app.api.deps import get_embedding_service
+from app.services.embeddings import EmbeddingService
+
+
+router = APIRouter()
+logger = logging.getLogger(__name__)
+
+
+class RAGASEvaluationRequest(BaseModel):
+    """Request model for RAGAS evaluation endpoint."""
+
+    query: str = Field(..., min_length=1, description="User query to evaluate")
+    answer: str = Field(..., description="Generated answer to evaluate")
+    contexts: List[str] = Field(
+        ..., min_length=1, description="Retrieved context chunks"
+    )
+    ground_truth: Optional[str] = Field(
+        None, description="Ground truth answer for comparison"
+    )
+
+
+class RAGASMetrics(BaseModel):
+    """RAGAS evaluation metrics."""
+
+    faithfulness: float = Field(
+        0.0, ge=0.0, le=1.0, description="Answer grounded in context"
+    )
+    answer_relevancy: float = Field(
+        0.0, ge=0.0, le=1.0, description="Answer relevant to query"
+    )
+    context_precision: float = Field(
+        0.0, ge=0.0, le=1.0, description="Retrieval precision"
+    )
+    context_recall: float = Field(0.0, ge=0.0, le=1.0, description="Retrieval recall")
+    context_relevancy: float = Field(
+        0.0, ge=0.0, le=1.0, description="Context relevance to query"
+    )
+    answer_similarity: Optional[float] = Field(
+        None, ge=0.0, le=1.0, description="Similarity to ground truth"
+    )
+
+
+class RAGASEvaluationResponse(BaseModel):
+    """Response model for RAGAS evaluation endpoint."""
+
+    metrics: RAGASMetrics
+    evaluation_time_ms: int
+    details: Dict[str, Any] = Field(default_factory=dict)
+
+
+def _calculate_faithfulness(answer: str, contexts: List[str]) -> float:
+    """
+    Calculate faithfulness score (answer grounded in context).
+
+    Simple heuristic: check what proportion of answer sentences
+    have n-gram overlap with context.
+    """
+    import re
+
+    if not answer or not contexts:
+        return 0.0
+
+    # Combine all contexts
+    combined_context = " ".join(contexts).lower()
+
+    # Split answer into sentences
+    sentences = re.split(r"(?<=[.!?])\s+", answer)
+    if not sentences:
+        return 0.0
+
+    supported_count = 0
+    for sentence in sentences:
+        sentence = sentence.strip().lower()
+        if len(sentence) < 5:  # Skip very short sentences
+            continue
+
+        # Extract key phrases (2-3 word n-grams)
+        words = sentence.split()
+        if len(words) < 2:
+            continue
+
+        # Check for n-gram overlap
+        found_overlap = False
+        for i in range(len(words) - 1):
+            bigram = f"{words[i]} {words[i + 1]}"
+            if bigram in combined_context:
+                found_overlap = True
+                break
+
+            if i < len(words) - 2:
+                trigram = f"{words[i]} {words[i + 1]} {words[i + 2]}"
+                if trigram in combined_context:
+                    found_overlap = True
+                    break
+
+        if found_overlap:
+            supported_count += 1
+
+    total_sentences = len([s for s in sentences if len(s.strip()) >= 5])
+    return supported_count / total_sentences if total_sentences > 0 else 0.0
+
+
+def _calculate_answer_relevancy(query: str, answer: str) -> float:
+    """
+    Calculate answer relevancy score.
+
+    Simple heuristic: check keyword overlap between query and answer.
+    """
+    if not query or not answer:
+        return 0.0
+
+    query_words = set(query.lower().split())
+    answer_words = set(answer.lower().split())
+
+    # Remove common stop words
+    stop_words = {
+        "the",
+        "a",
+        "an",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "have",
+        "has",
+        "had",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "could",
+        "should",
+        "may",
+        "might",
+        "must",
+        "shall",
+        "can",
+        "need",
+        "dare",
+        "ought",
+        "used",
+        "to",
+        "of",
+        "in",
+        "for",
+        "on",
+        "with",
+        "at",
+        "by",
+        "from",
+        "as",
+        "into",
+        "through",
+        "during",
+        "before",
+        "after",
+        "above",
+        "below",
+        "between",
+        "under",
+        "and",
+        "but",
+        "or",
+        "yet",
+        "so",
+        "if",
+        "because",
+        "although",
+        "though",
+        "while",
+        "where",
+        "when",
+        "that",
+        "which",
+        "who",
+        "whom",
+        "whose",
+        "what",
+        "this",
+        "these",
+        "those",
+        "i",
+        "you",
+        "he",
+        "she",
+        "it",
+        "we",
+        "they",
+        "me",
+        "him",
+        "her",
+        "us",
+        "them",
+        "my",
+        "your",
+        "his",
+        "her",
+        "its",
+        "our",
+        "their",
+        "mine",
+        "yours",
+        "hers",
+        "ours",
+        "theirs",
+        "myself",
+        "yourself",
+        "himself",
+        "herself",
+        "itself",
+        "ourselves",
+        "yourselves",
+        "themselves",
+    }
+
+    query_words = query_words - stop_words
+    answer_words = answer_words - stop_words
+
+    if not query_words:
+        return 1.0  # Query has no meaningful words
+
+    overlap = query_words & answer_words
+    return len(overlap) / len(query_words)
+
+
+def _calculate_context_precision(contexts: List[str], query: str) -> float:
+    """
+    Calculate context precision score.
+
+    Measures how many retrieved chunks are actually relevant to the query.
+    """
+    if not contexts or not query:
+        return 0.0
+
+    query_words = set(query.lower().split()) - {
+        "the",
+        "a",
+        "an",
+        "is",
+        "are",
+        "in",
+        "of",
+        "and",
+        "to",
+    }
+
+    if not query_words:
+        return 1.0
+
+    relevant_count = 0
+    for context in contexts:
+        context_words = set(context.lower().split())
+        overlap = query_words & context_words
+        # Consider context relevant if it shares at least 20% of query terms
+        if len(overlap) >= max(1, len(query_words) * 0.2):
+            relevant_count += 1
+
+    return relevant_count / len(contexts)
+
+
+def _calculate_context_recall(
+    contexts: List[str], ground_truth: Optional[str]
+) -> float:
+    """
+    Calculate context recall score.
+
+    Measures how much of the ground truth is covered by the retrieved contexts.
+    """
+    if not contexts or not ground_truth:
+        return 1.0  # No ground truth to compare, assume perfect
+
+    combined_context = " ".join(contexts).lower()
+    ground_truth_words = set(ground_truth.lower().split())
+
+    # Remove stop words
+    stop_words = {
+        "the",
+        "a",
+        "an",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "in",
+        "of",
+        "and",
+        "to",
+        "for",
+        "on",
+        "with",
+        "at",
+        "by",
+    }
+    ground_truth_words = ground_truth_words - stop_words
+
+    if not ground_truth_words:
+        return 1.0
+
+    found_in_context = sum(1 for word in ground_truth_words if word in combined_context)
+    return found_in_context / len(ground_truth_words)
+
+
+def _calculate_context_relevancy(contexts: List[str], query: str) -> float:
+    """
+    Calculate average context relevancy to query.
+
+    Measures semantic relevance of each context chunk to the query.
+    """
+    if not contexts or not query:
+        return 0.0
+
+    query_words = set(query.lower().split())
+    stop_words = {
+        "the",
+        "a",
+        "an",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "in",
+        "of",
+        "and",
+        "to",
+        "for",
+        "on",
+        "with",
+        "at",
+        "by",
+    }
+    query_words = query_words - stop_words
+
+    if not query_words:
+        return 1.0
+
+    total_relevancy = 0.0
+    for context in contexts:
+        context_words = set(context.lower().split())
+        overlap = query_words & context_words
+        relevancy = len(overlap) / len(query_words) if query_words else 0.0
+        total_relevancy += min(1.0, relevancy * 2)  # Scale up but cap at 1.0
+
+    return total_relevancy / len(contexts)
+
+
+async def _calculate_answer_similarity(
+    answer: str, ground_truth: Optional[str], embedding_service: EmbeddingService
+) -> Optional[float]:
+    """
+    Calculate semantic similarity between answer and ground truth.
+
+    Uses embeddings to compare semantic meaning.
+    """
+    if not ground_truth or not answer:
+        return None
+
+    try:
+        answer_embedding = await embedding_service.embed_single(answer)
+        truth_embedding = await embedding_service.embed_single(ground_truth)
+
+        # Calculate cosine similarity
+        import math
+
+        dot_product = sum(a * b for a, b in zip(answer_embedding, truth_embedding))
+        norm1 = math.sqrt(sum(a * a for a in answer_embedding))
+        norm2 = math.sqrt(sum(b * b for b in truth_embedding))
+
+        if norm1 == 0 or norm2 == 0:
+            return 0.0
+
+        return dot_product / (norm1 * norm2)
+    except Exception as e:
+        logger.warning("Failed to calculate answer similarity: %s", e)
+        return None
+
+
+@router.post("/eval/ragas", response_model=RAGASEvaluationResponse)
+async def ragas_evaluation(
+    request: RAGASEvaluationRequest,
+    embedding_service: EmbeddingService = Depends(get_embedding_service),
+):
+    """
+    Evaluate RAG pipeline using RAGAS metrics.
+
+    Calculates:
+    - Faithfulness: How well the answer is grounded in retrieved contexts
+    - Answer Relevancy: How relevant the answer is to the query
+    - Context Precision: Proportion of retrieved contexts that are relevant
+    - Context Recall: Coverage of ground truth in retrieved contexts
+    - Context Relevancy: Average relevance of contexts to query
+    - Answer Similarity: Semantic similarity to ground truth (if provided)
+
+    Args:
+        request: RAGASEvaluationRequest containing query, answer, contexts
+
+    Returns:
+        RAGASEvaluationResponse with computed metrics and evaluation details
+
+    Raises:
+        HTTPException: 400 if request validation fails, 500 on evaluation error
+    """
+    import time
+
+    start_time = time.time()
+
+    try:
+        # Calculate all metrics
+        faithfulness = _calculate_faithfulness(request.answer, request.contexts)
+        answer_relevancy = _calculate_answer_relevancy(request.query, request.answer)
+        context_precision = _calculate_context_precision(
+            request.contexts, request.query
+        )
+        context_recall = _calculate_context_recall(
+            request.contexts, request.ground_truth
+        )
+        context_relevancy = _calculate_context_relevancy(
+            request.contexts, request.query
+        )
+        answer_similarity = await _calculate_answer_similarity(
+            request.answer, request.ground_truth, embedding_service
+        )
+
+        evaluation_time_ms = int((time.time() - start_time) * 1000)
+
+        metrics = RAGASMetrics(
+            faithfulness=faithfulness,
+            answer_relevancy=answer_relevancy,
+            context_precision=context_precision,
+            context_recall=context_recall,
+            context_relevancy=context_relevancy,
+            answer_similarity=answer_similarity,
+        )
+
+        details = {
+            "query_length": len(request.query),
+            "answer_length": len(request.answer),
+            "context_count": len(request.contexts),
+            "ground_truth_provided": request.ground_truth is not None,
+        }
+
+        logger.info(
+            "RAGAS evaluation completed: faithfulness=%.3f, relevancy=%.3f, precision=%.3f, "
+            "recall=%.3f, time_ms=%d",
+            faithfulness,
+            answer_relevancy,
+            context_precision,
+            context_recall,
+            evaluation_time_ms,
+        )
+
+        return RAGASEvaluationResponse(
+            metrics=metrics, evaluation_time_ms=evaluation_time_ms, details=details
+        )
+
+    except Exception as e:
+        logger.error("RAGAS evaluation failed: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Evaluation failed: {str(e)}")

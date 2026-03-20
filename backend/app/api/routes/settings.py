@@ -377,10 +377,41 @@ def put_settings(
     conn: sqlite3.Connection = Depends(get_db),
     auth: dict = Depends(require_auth),
 ):
-    """Apply settings update and persist to database."""
-    result = _apply_settings_update(update)
+    """Update existing settings. Returns 404 if any setting does not exist."""
+    # Determine which fields are being updated
+    fields_to_update = [
+        field for field in ALLOWED_FIELDS
+        if getattr(update, field) is not None
+    ]
+
+    if not fields_to_update:
+        raise HTTPException(status_code=400, detail="No valid fields provided for update")
+
+    # Check if all settings being updated exist in the database
+    placeholders = ", ".join(["?"] * len(fields_to_update))
+    cursor = conn.execute(
+        f"SELECT key FROM settings_kv WHERE key IN ({placeholders})",
+        tuple(fields_to_update)
+    )
+    existing_keys = {row[0] for row in cursor.fetchall()}
+
+    missing_keys = set(fields_to_update) - existing_keys
+    if missing_keys:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Settings not found: {', '.join(sorted(missing_keys))}"
+        )
+
+    # Apply updates only to existing settings
+    for field in fields_to_update:
+        value = getattr(update, field)
+        setattr(settings, field, value)
+
+    # Persist updates to database
     _persist_settings(conn, update)
-    return result
+
+    # Return updated settings
+    return _apply_settings_update(update)
 
 
 @router.get("/csrf-token")

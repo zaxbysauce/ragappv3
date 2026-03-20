@@ -247,7 +247,7 @@ async def update_vault(
             new_name = request.name
             if old_name != new_name:
                 await asyncio.to_thread(_rename_vault_folder, old_name, new_name)
-        except Exception as e:
+        except (OSError, shutil.Error) as e:
             # Log but don't fail the rename - folder rename is not critical
             logging.getLogger(__name__).warning(f"Failed to rename vault folder: {e}")
 
@@ -311,7 +311,7 @@ async def delete_vault(
                 str(vault_id)
             )
             logger.info("Deleted %d chunks from vector store for vault_id %s", deleted_chunks, vault_id)
-        except Exception as e:
+        except (OSError, RuntimeError, ValueError) as e:
             logger.warning("Error deleting chunks from vector store: %s", e)
             # Continue with database deletion even if vector store fails
 
@@ -351,7 +351,7 @@ async def delete_vault(
     except HTTPException:
         await asyncio.to_thread(lambda: conn.rollback())
         raise
-    except Exception as e:
+    except (sqlite3.Error, OSError, RuntimeError) as e:
         await asyncio.to_thread(lambda: conn.rollback())
         logger.exception("Error deleting vault %d", vault_id)
         raise HTTPException(status_code=500, detail=f"Delete failed: {e}")

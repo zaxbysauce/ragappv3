@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { PageShell } from "@/components/layout/PageShell";
 import ChatPage from "@/pages/ChatPage";
 import ChatPageRedesigned from "@/pages/ChatPageRedesigned";
@@ -41,35 +42,37 @@ function MainApp() {
 
 function App() {
   return (
-    <BrowserRouter>
-      <AuthProvider>
-        <Routes>
-          <Route path="/login" element={<LoginPage />} />
-          <Route
-            path="/chat/redesign"
-            element={
-              <ProtectedRoute>
-                <PageShell
-                  activeItem="chat"
-                  onItemSelect={() => {}}
-                  healthStatus={{ backend: true, embeddings: true, chat: true, loading: false, lastChecked: null }}
-                >
-                  <ChatPageRedesigned />
-                </PageShell>
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/*"
-            element={
-              <ProtectedRoute>
-                <MainApp />
-              </ProtectedRoute>
-            }
-          />
-        </Routes>
-      </AuthProvider>
-    </BrowserRouter>
+    <ErrorBoundary>
+      <BrowserRouter>
+        <AuthProvider>
+          <Routes>
+            <Route path="/login" element={<LoginPage />} />
+            <Route
+              path="/chat/redesign"
+              element={
+                <ProtectedRoute>
+                  <PageShell
+                    activeItem="chat"
+                    onItemSelect={() => {}}
+                    healthStatus={{ backend: true, embeddings: true, chat: true, loading: false, lastChecked: null }}
+                  >
+                    <ChatPageRedesigned />
+                  </PageShell>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/*"
+              element={
+                <ProtectedRoute>
+                  <MainApp />
+                </ProtectedRoute>
+              }
+            />
+          </Routes>
+        </AuthProvider>
+      </BrowserRouter>
+    </ErrorBoundary>
   );
 }
 

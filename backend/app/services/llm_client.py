@@ -2,11 +2,15 @@
 OpenAI-compatible LLM chat client using httpx.
 """
 import json
+import logging
 from typing import AsyncGenerator, List, Dict, Any, Optional
 
 import httpx
 
 from app.config import settings
+from app.services.circuit_breaker import llm_cb, CircuitBreakerError
+
+logger = logging.getLogger(__name__)
 
 
 class LLMError(Exception):
@@ -62,6 +66,27 @@ class LLMClient:
             raise RuntimeError("LLMClient not started. Call start() before using the client.")
         return self._client
     
+    def _log_pool_stats(self) -> None:
+        """Log connection pool statistics for monitoring."""
+        try:
+            client = self._client
+            if client is None:
+                return
+            pool = getattr(client, '_transport', None)
+            if pool and hasattr(pool, '_pool'):
+                pool_obj = pool._pool
+                connections = getattr(pool_obj, '_num_connections', 0)
+                keepalive = getattr(pool_obj, '_num_keepalive', 0)
+                limits = getattr(pool_obj, '_limits', None)
+                max_connections = getattr(limits, 'max_connections', 10) if limits else 10
+                max_keepalive = getattr(limits, 'max_keepalive_connections', 5) if limits else 5
+                logger.info(
+                    f"LLM client pool: {connections}/{max_connections} connections, "
+                    f"{keepalive}/{max_keepalive} keepalive"
+                )
+        except Exception:
+            pass  # Silently ignore any errors accessing internal pool state
+    
     async def chat_completion(
         self,
         messages: List[Dict[str, str]],
@@ -95,7 +120,7 @@ class LLMClient:
         }
         
         try:
-            response = await client.post(url, json=payload)
+            response = await llm_cb(client.post)(url, json=payload)
             response.raise_for_status()
             data = response.json()
             
@@ -105,8 +130,12 @@ class LLMClient:
             message = data["choices"][0].get("message", {})
             content = message.get("content", "")
             
+            # Log connection pool metrics
+            self._log_pool_stats()
+            
             return content
-        
+        except CircuitBreakerError as e:
+            raise LLMError(f"LLM service is currently unavailable (circuit breaker open): {e}") from e
         except httpx.TimeoutException as e:
             raise LLMError(f"Request timed out after {self.timeout}s") from e
         except httpx.HTTPStatusError as e:
@@ -149,7 +178,7 @@ class LLMClient:
         }
         
         try:
-            async with client.stream("POST", url, json=payload) as response:
+            async with llm_cb(client.stream)("POST", url, json=payload) as response:
                 response.raise_for_status()
                 
                 # Validate content-type for SSE
@@ -199,6 +228,9 @@ class LLMClient:
                 except GeneratorExit:
                     # Generator was closed by consumer - clean exit
                     raise
+            
+            # Log connection pool metrics after streaming completes
+            self._log_pool_stats()
         except LLMError:
             # Re-raise LLMError exceptions (e.g., from content-type validation) cleanly
             raise

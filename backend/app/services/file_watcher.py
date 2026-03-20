@@ -218,5 +218,4 @@ class FileWatcher:
 
     @property
     def is_running(self) -> bool:
-        """Check if the file watcher is currently running."""
         return self._running

@@ -349,10 +349,8 @@ class BackgroundProcessor:
 
     @property
     def is_running(self) -> bool:
-        """Check if the background processor is currently running."""
         return self._running
 
     @property
     def queue_size(self) -> int:
-        """Get the current number of items in the queue."""
         return self.queue.qsize()

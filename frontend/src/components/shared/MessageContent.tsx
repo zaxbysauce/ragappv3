@@ -1,22 +1,13 @@
 import { MarkdownContent } from "./MarkdownContent";
 import type { Message } from "@/stores/useChatStore";
+import type { Source } from "@/lib/api";
 import React from "react";
 import { useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
-// TODO: Move this type definition to the appropriate location (e.g., types.ts or useChatStore)
-export interface RAGSource {
-  id: string;
-  file_id: string;
-  filename: string;
-  snippet: string;
-  score: number;
-  metadata: Record<string, any>;
-}
-
 interface SourcesListProps {
-  sources: RAGSource[];
+  sources: Source[];
 }
 
 const SourcesList = React.memo(function SourcesList({ sources }: SourcesListProps) {
@@ -61,14 +52,6 @@ const SourcesList = React.memo(function SourcesList({ sources }: SourcesListProp
                 {source.snippet?.substring(0, 100)}
                 {source.snippet && source.snippet.length > 100 ? '...' : ''}
               </p>
-              {/* TODO: Add metadata display if needed */}
-              {/* {source.metadata && Object.keys(source.metadata).length > 0 && (
-                <div className="mt-1 text-xs text-gray-500">
-                  {Object.entries(source.metadata).map(([key, value]) => (
-                    <span key={key} className="mr-2">{key}: {String(value)}</span>
-                  ))}
-                </div>
-              )} */}
             </div>
           ))}
         </div>
@@ -81,7 +64,6 @@ export const MessageContent = React.memo(function MessageContent({ message }: { 
   const assistantContent = message.role === "assistant" ? (
     <>
       <MarkdownContent content={message.content} />
-      {/* @ts-ignore - sources property may not exist on all Message types yet */}
       {message.sources && <SourcesList sources={message.sources} />}
     </>
   ) : (

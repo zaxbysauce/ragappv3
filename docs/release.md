@@ -611,7 +611,7 @@ groups:
 **Resolution:**
 - Verify documents show as "indexed" in database
 - Check vector store connectivity
-- Verify `rag_relevance_threshold` setting (default: 0.1)
+- Verify `max_distance_threshold` setting (default: 0.5)
 - Test embedding service is generating vectors
 
 #### 3. Chat Stream Interrupted

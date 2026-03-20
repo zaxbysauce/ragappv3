@@ -22,7 +22,8 @@ def cleanup_backups(directory: Path, retention_days: int) -> list[Path]:
             try:
                 path.unlink()
                 removed.append(path)
-            except Exception:
+            except (OSError, PermissionError, FileNotFoundError):
+                # File may be locked or already deleted
                 continue
     return removed
 

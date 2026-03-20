@@ -1,4 +1,5 @@
 import axios from "axios";
+import { setChatHistory as storageSetChatHistory, getChatHistory as storageGetChatHistory } from "./storage";
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || "/api";
 
@@ -552,24 +553,15 @@ export function chatStream(
 }
 
 export function getChatHistory(): ChatHistoryItem[] {
-  try {
-    const stored = localStorage.getItem("kv_chat_history");
-    if (!stored) {
-      return [];
-    }
-    const parsed = JSON.parse(stored);
-    if (Array.isArray(parsed)) {
-      return parsed as ChatHistoryItem[];
-    }
-    return [];
-  } catch {
-    return [];
-  }
+  return storageGetChatHistory();
 }
 
-export function saveChatHistory(history: ChatHistoryItem[]): void {
+export async function saveChatHistory(history: ChatHistoryItem[]): Promise<void> {
   try {
-    localStorage.setItem("kv_chat_history", JSON.stringify(history));
+    const success = await storageSetChatHistory(history);
+    if (!success) {
+      console.warn("Failed to save chat history: quota exceeded even after trimming");
+    }
   } catch (err) {
     console.error("Failed to save chat history:", err);
   }

@@ -1,6 +1,7 @@
 """
 Application configuration using Pydantic Settings.
 """
+
 import logging
 from pathlib import Path
 from pydantic import SecretStr, field_validator, model_validator
@@ -11,30 +12,28 @@ logger = logging.getLogger(__name__)
 
 class Settings(BaseSettings):
     """Application settings with environment variable support."""
-    
+
     model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore"
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
     )
-    
+
     # Server configuration
     port: int = 8080
-    
-    # Base data directory
-    data_dir: Path = Path("/data/knowledgevault")
-    
+
+    # Base data directory - use relative path for cross-platform compatibility
+    data_dir: Path = Path("./data")
+
     # Ollama configuration
     ollama_embedding_url: str = "http://host.docker.internal:11434"
     ollama_chat_url: str = "http://host.docker.internal:11434"
-    
+
     # Model configuration
     embedding_model: str = "nomic-embed-text"
     chat_model: str = "qwen2.5:32b"
-    
+
     # Embedding dimension (auto-detected from model, but can be overridden)
     embedding_dim: int = 768
-    
+
     # Document processing configuration (character-based - NEW)
     chunk_size_chars: int | None = None
     """Character-based chunk size for document processing. Default 1200 chars (~300 tokens) leaves room for instruction prefix."""
@@ -71,17 +70,17 @@ class Settings(BaseSettings):
     """TEI-compatible reranker endpoint URL. Empty = use sentence-transformers locally."""
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
     """HuggingFace model ID for local reranking, or model name sent to TEI endpoint."""
-    reranking_enabled: bool = False
+    reranking_enabled: bool = True
     """Enable cross-encoder reranking after vector retrieval."""
-    reranker_top_n: int = 5
+    reranker_top_n: int = 7
     """Number of chunks to keep after reranking."""
-    initial_retrieval_top_k: int = 20
+    initial_retrieval_top_k: int = 25
     """Chunks fetched from vector store BEFORE reranking."""
 
     # ── Hybrid search configuration ─────────────────────────────────────────
     hybrid_search_enabled: bool = True
     """Combine BM25 keyword search with dense vector search using RRF fusion."""
-    hybrid_alpha: float = 0.5
+    hybrid_alpha: float = 0.6
     """Weight for dense vs sparse scores in RRF. 0.0 = pure BM25, 1.0 = pure dense."""
 
     # ── Contextual chunking configuration ─────────────────────────────────────
@@ -99,12 +98,45 @@ class Settings(BaseSettings):
     """Overlap ratio between adjacent chunks at each scale (0.0-1.0)."""
 
     # ── Query transformation configuration ────────────────────────────────────
-    query_transformation_enabled: bool = False
+    query_transformation_enabled: bool = True
     """Enable query transformation using step-back prompting for broader retrieval."""
 
     # ── Retrieval evaluation configuration ────────────────────────────────────
-    retrieval_evaluation_enabled: bool = False
+    retrieval_evaluation_enabled: bool = True
     """Enable CRAG-style retrieval evaluation (CONFIDENT/AMBIGUOUS/NO_MATCH classification)."""
+
+    # ── Context distillation configuration ────────────────────────────
+    context_distillation_enabled: bool = False
+    """Enable context distillation: deduplicate sentences and optionally synthesize context."""
+
+    context_distillation_dedup_threshold: float = 0.92
+    """Cosine similarity threshold for sentence deduplication in context distillation (0.0-1.0)."""
+
+    context_distillation_synthesis_enabled: bool = False
+    """Enable LLM-based context synthesis when retrieval evaluation returns NO_MATCH or AMBIGUOUS."""
+
+    # ── Token budget configuration ────────────────────────────────────────
+    context_max_tokens: int = 6000
+    """Maximum approximate tokens for packed context before prompt building."""
+
+    # ── Chunking strategy ──────────────────────────────────────────────
+    semantic_chunking_strategy: str = "title"
+    """Chunking strategy: 'title' for fixed-size, 'embedding' for cosine-similarity breakpoints."""
+
+    # ── HyDE (Hypothetical Document Embeddings) configuration ──
+    hyde_enabled: bool = False
+    """Enable HyDE: generate a hypothetical answer passage and embed it as additional query vector."""
+
+    # ── Sparse search configuration ──────────────────────────────────
+    sparse_search_max_candidates: int = 1000
+    """Maximum candidate records to scan during learned sparse dot-product search."""
+
+    # ── Retrieval recency configuration ──────────────────────────
+    retrieval_recency_weight: float = 0.1
+    """Weight for recency score blending in RRF fusion (0.0 = disabled, 1.0 = fully recency-based)."""
+
+    recency_decay_lambda: float = 0.001
+    """Exponential decay rate (lambda) for recency scoring. Higher values decay faster."""
 
     # ── Tri-vector embedding configuration (BGE-M3) ────────────────────────────
     tri_vector_search_enabled: bool = False
@@ -130,11 +162,11 @@ class Settings(BaseSettings):
     csrf_token_ttl: int = 900
     admin_rate_limit: str = "10/minute"
     health_check_api_key: str = "health-api-key"
-    
+
     # Auto-scan configuration
     auto_scan_enabled: bool = True
     auto_scan_interval_minutes: int = 60
-    
+
     # Logging configuration
     log_level: str = "INFO"
 
@@ -142,15 +174,29 @@ class Settings(BaseSettings):
     enable_model_validation: bool = False
 
     # Admin security
-    admin_secret_token: str = "admin-secret-token"
+    admin_secret_token: str = (
+        ""  # Must be set via environment variable - no default for security
+    )
     audit_hmac_key_version: str = "v1"
 
     # Security settings
     max_file_size_mb: int = 50
     allowed_extensions: set[str] = {
-        ".txt", ".md", ".pdf", ".docx", ".csv", ".json",
-        ".sql", ".py", ".js", ".ts", ".html", ".css",
-        ".xml", ".yaml", ".yml"
+        ".txt",
+        ".md",
+        ".pdf",
+        ".docx",
+        ".csv",
+        ".json",
+        ".sql",
+        ".py",
+        ".js",
+        ".ts",
+        ".html",
+        ".css",
+        ".xml",
+        ".yaml",
+        ".yml",
     }
 
     # IMAP Email Ingestion configuration
@@ -181,6 +227,38 @@ class Settings(BaseSettings):
 
     # CORS settings
     backend_cors_origins: list[str] = ["http://localhost:5173"]
+
+    # Helper validation functions (consolidated validators)
+    @staticmethod
+    def _validate_int_range(
+        v: int, min_val: int | None, max_val: int | None, field_name: str
+    ) -> int:
+        """Validate an integer is within a specified range."""
+        if min_val is not None and v < min_val:
+            raise ValueError(f"{field_name} must be >= {min_val}")
+        if max_val is not None and v > max_val:
+            raise ValueError(f"{field_name} must be <= {max_val}")
+        return v
+
+    @staticmethod
+    def _validate_float_range(
+        v: float, min_val: float | None, max_val: float | None, field_name: str
+    ) -> float:
+        """Validate a float is within a specified range."""
+        if min_val is not None and v < min_val:
+            raise ValueError(f"{field_name} must be >= {min_val}")
+        if max_val is not None and v > max_val:
+            raise ValueError(f"{field_name} must be <= {max_val}")
+        return v
+
+    @staticmethod
+    def _validate_enum(v: str, allowed: set[str], field_name: str) -> str:
+        """Validate a string is one of the allowed values."""
+        if v not in allowed:
+            raise ValueError(
+                f"{field_name} must be one of: {', '.join(sorted(allowed))}"
+            )
+        return v
 
     # Migration validators for backward compatibility
     @field_validator("chunk_size_chars", mode="before")
@@ -228,38 +306,32 @@ class Settings(BaseSettings):
             return legacy_vector_top_k
         return 12
 
+    # Consolidated range validators using helper functions
     @field_validator("embedding_batch_max_retries", mode="after")
     @classmethod
     def validate_embedding_batch_max_retries(cls, v: int) -> int:
-        """Validate embedding batch max retries is an integer in range 0..10."""
-        if v < 0 or v > 10:
-            raise ValueError("embedding_batch_max_retries must be in range 0..10")
-        return v
+        """Validate embedding batch max retries is in range 0..10."""
+        return cls._validate_int_range(v, 0, 10, "embedding_batch_max_retries")
 
     @field_validator("embedding_batch_min_sub_size", mode="after")
     @classmethod
     def validate_embedding_batch_min_sub_size(cls, v: int) -> int:
-        """Validate embedding batch minimum sub-size is an integer >= 1."""
-        if v < 1:
-            raise ValueError("embedding_batch_min_sub_size must be >= 1")
-        return v
+        """Validate embedding batch minimum sub-size is >= 1."""
+        return cls._validate_int_range(v, 1, None, "embedding_batch_min_sub_size")
 
     @field_validator("embedding_batch_size", mode="after")
     @classmethod
     def validate_embedding_batch_size(cls, v: int) -> int:
         """Validate embedding batch size is >= 1."""
-        if v < 1:
-            raise ValueError("embedding_batch_size must be >= 1")
-        return v
+        return cls._validate_int_range(v, 1, None, "embedding_batch_size")
 
     @field_validator("document_parsing_strategy", mode="after")
     @classmethod
     def validate_document_parsing_strategy(cls, v: str) -> str:
         """Validate document parsing strategy is one of: fast, hi_res, auto."""
-        allowed = {"fast", "hi_res", "auto"}
-        if v not in allowed:
-            raise ValueError(f"document_parsing_strategy must be one of: {', '.join(sorted(allowed))}")
-        return v
+        return cls._validate_enum(
+            v, {"fast", "hi_res", "auto"}, "document_parsing_strategy"
+        )
 
     @field_validator("multi_scale_chunk_sizes", mode="after")
     @classmethod
@@ -273,16 +345,16 @@ class Settings(BaseSettings):
             raise ValueError("multi_scale_chunk_sizes must contain unique values")
         for size in unique_sizes:
             if size <= 0:
-                raise ValueError("multi_scale_chunk_sizes must contain only positive integers")
+                raise ValueError(
+                    "multi_scale_chunk_sizes must contain only positive integers"
+                )
         return ",".join(str(x) for x in unique_sizes)
 
     @field_validator("multi_scale_overlap_ratio", mode="after")
     @classmethod
     def validate_multi_scale_overlap_ratio(cls, v: float) -> float:
         """Validate multi_scale_overlap_ratio is in range 0.0-1.0."""
-        if v < 0.0 or v > 1.0:
-            raise ValueError("multi_scale_overlap_ratio must be in range 0.0-1.0")
-        return v
+        return cls._validate_float_range(v, 0.0, 1.0, "multi_scale_overlap_ratio")
 
     @model_validator(mode="after")
     def validate_batch_config_consistency(self) -> "Settings":
@@ -295,39 +367,50 @@ class Settings(BaseSettings):
 
     @property
     def documents_dir(self) -> Path:
-        """Directory for storing documents."""
         return self.data_dir / "documents"
-    
+
     @property
     def uploads_dir(self) -> Path:
-        """Directory for temporary uploads."""
         return self.data_dir / "uploads"
-    
+
     @property
     def vaults_dir(self) -> Path:
-        """Directory for vault-specific data."""
         path = self.data_dir / "vaults"
         path.mkdir(parents=True, exist_ok=True)
         return path
-    
+
+    def vault_dir(self, vault_id: int) -> Path:
+        """Canonical per-vault storage directory, keyed by integer ID."""
+        path = self.data_dir / "vaults" / str(vault_id)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def vault_uploads_dir(self, vault_id: int) -> Path:
+        """Canonical per-vault uploads directory."""
+        path = self.vault_dir(vault_id) / "uploads"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def vault_documents_dir(self, vault_id: int) -> Path:
+        """Canonical per-vault documents directory."""
+        path = self.vault_dir(vault_id) / "documents"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
     @property
     def orphan_vault_id(self) -> int:
-        """Default vault ID for files not associated with a specific vault."""
         return 1
-    
+
     @property
     def library_dir(self) -> Path:
-        """Directory for library files."""
         return self.data_dir / "library"
-    
+
     @property
     def lancedb_path(self) -> Path:
-        """Path to LanceDB database."""
         return self.data_dir / "lancedb"
-    
+
     @property
     def sqlite_path(self) -> Path:
-        """Path to SQLite database."""
         return self.data_dir / "app.db"
 
     @property
@@ -346,7 +429,9 @@ class Settings(BaseSettings):
         if self.embedding_query_prefix:
             return self.embedding_query_prefix
         if "qwen" in self.embedding_model.lower():
-            return "Instruct: Retrieve relevant technical documentation passages.\nQuery: "
+            return (
+                "Instruct: Retrieve relevant technical documentation passages.\nQuery: "
+            )
         return ""
 
 

@@ -118,7 +118,7 @@ async def _get_unseen_count(
         uids = data[0].split()
         return len(uids)
 
-    except Exception as e:
+    except (asyncio.TimeoutError, OSError, ConnectionError) as e:
         # Log but don't fail the entire status endpoint
         import logging
         logger = logging.getLogger(__name__)
@@ -128,7 +128,8 @@ async def _get_unseen_count(
         if imap_client:
             try:
                 await imap_client.logout()
-            except Exception:
+            except (asyncio.TimeoutError, OSError, ConnectionError):
+                # Ignore logout errors
                 pass
 
 

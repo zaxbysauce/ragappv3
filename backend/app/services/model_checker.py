@@ -6,6 +6,7 @@ from typing import Dict, Any
 import httpx
 
 from app.config import settings
+from app.services.circuit_breaker import model_checker_cb, CircuitBreakerError
 
 
 class ModelCheckerError(Exception):
@@ -101,7 +102,8 @@ class ModelChecker:
                 # No explicit path and no special port - check if it's localhost:1234 pattern
                 if ':1234' in parsed.netloc:
                     return 'openai_compatible'
-        except Exception:
+        except (ValueError, AttributeError):
+            # URL parsing failed, continue with default provider
             pass
         
         # Default to Ollama for backward compatibility
@@ -185,12 +187,13 @@ class ModelChecker:
                 'available': False,
                 'error': f"Request failed: {str(e)}"
             }
-        except Exception as e:
+        except (ValueError, TypeError, RuntimeError) as e:
             return {
                 'available': False,
                 'error': f"Unexpected error: {str(e)}"
             }
-    
+
+    @model_checker_cb
     async def _check_openai_compatible_model(
         self,
         client: httpx.AsyncClient,
@@ -238,7 +241,12 @@ class ModelChecker:
                 'available': False,
                 'error': f"Model '{model_name}' not found. Available models: {', '.join(available_model_ids) or 'none'}"
             }
-        
+
+        except CircuitBreakerError as e:
+            return {
+                'available': False,
+                'error': f"Circuit breaker open: {str(e)}"
+            }
         except httpx.TimeoutException:
             return {
                 'available': False,
@@ -254,7 +262,7 @@ class ModelChecker:
                 'available': False,
                 'error': f"Request failed: {str(e)}"
             }
-        except Exception as e:
+        except (ValueError, TypeError, RuntimeError) as e:
             return {
                 'available': False,
                 'error': f"Unexpected error: {str(e)}"

@@ -15,6 +15,8 @@ from typing import List, Dict, Any, Optional, Tuple
 
 import httpx
 
+from app.services.circuit_breaker import reranking_cb, CircuitBreakerError
+
 logger = logging.getLogger(__name__)
 
 _local_model = None  # lazy-loaded CrossEncoder instance
@@ -116,9 +118,12 @@ class RerankingService:
             "truncate": True,
         }
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(url, json=payload)
-            response.raise_for_status()
-            data = response.json()
+            try:
+                response = await reranking_cb(client.post)(url, json=payload)
+                response.raise_for_status()
+                data = response.json()
+            except CircuitBreakerError:
+                raise
 
         # data is list of {"index": int, "score": float}
         # Sort by score descending before slicing to ensure correct results

@@ -26,8 +26,6 @@ interface DocumentCardProps {
   };
   /** Callback when delete action is triggered */
   onDelete: (id: string) => void;
-  /** Additional actions (optional) */
-  onAction?: (action: string, id: string) => void;
   /** Loading state for delete action */
   isDeleting?: boolean;
   /** Selection state for bulk operations */
@@ -48,7 +46,6 @@ interface DocumentCardProps {
 export function DocumentCard({
   document,
   onDelete,
-  onAction: _onAction,
   isDeleting = false,
   isSelected = false,
   onSelectionChange,
@@ -92,7 +89,7 @@ export function DocumentCard({
               >
                 {document.filename}
               </h3>
-              {/* TODO: Optional subtitle (e.g., file extension) */}
+  
             </div>
           </div>
 
@@ -119,7 +116,7 @@ export function DocumentCard({
                 <Trash2 className="w-4 h-4 mr-2" />
                 Delete
               </DropdownMenuItem>
-              {/* TODO: Add more actions (e.g., download, reprocess) if needed */}
+
             </DropdownMenuContent>
           </DropdownMenu>
         </div>

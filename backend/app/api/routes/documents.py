@@ -134,7 +134,7 @@ async def retry_document(
         return {"file_id": file_id, "status": "scheduled"}
     except HTTPException:
         raise
-    except Exception as exc:
+    except (sqlite3.Error, OSError, RuntimeError) as exc:
         logger.exception("Error reprocessing document %d", file_id)
         await asyncio.to_thread(
             _record_document_action,
@@ -578,12 +578,12 @@ async def delete_document(
     file_name = row["file_name"]
 
     try:
-        # Delete from vector store first (wrapped in to_thread to avoid blocking)
+        # Delete from vector store first
         try:
             db = vector_store.db
-            if db is not None and "chunks" in db.table_names():
-                vector_store.table = db.open_table("chunks")
-                deleted_chunks = await asyncio.to_thread(vector_store.delete_by_file, str(file_id))
+            if db is not None and "chunks" in await db.table_names():
+                vector_store.table = await db.open_table("chunks")
+                deleted_chunks = await vector_store.delete_by_file(str(file_id))
                 logger.info("Deleted %d chunks from vector store for file_id %s", deleted_chunks, file_id)
             else:
                 logger.debug("Chunks table not found, skipping vector store deletion for file_id %s", file_id)
@@ -641,9 +641,9 @@ async def batch_delete_documents(
             # Delete from vector store first
             try:
                 db = vector_store.db
-                if db is not None and "chunks" in db.table_names():
-                    vector_store.table = db.open_table("chunks")
-                    await asyncio.to_thread(vector_store.delete_by_file, str(file_id))
+                if db is not None and "chunks" in await db.table_names():
+                    vector_store.table = await db.open_table("chunks")
+                    await vector_store.delete_by_file(str(file_id))
             except Exception as e:
                 logger.warning("Error deleting chunks from vector store for file_id %d: %s", file_id, e)
 
@@ -689,9 +689,9 @@ async def delete_all_vault_documents(
             # Delete from vector store first
             try:
                 db = vector_store.db
-                if db is not None and "chunks" in db.table_names():
-                    vector_store.table = db.open_table("chunks")
-                    await asyncio.to_thread(vector_store.delete_by_file, str(file_id))
+                if db is not None and "chunks" in await db.table_names():
+                    vector_store.table = await db.open_table("chunks")
+                    await vector_store.delete_by_file(str(file_id))
             except Exception as e:
                 logger.warning("Error deleting chunks from vector store for file_id %d: %s", file_id, e)
 

@@ -529,7 +529,7 @@ class DocumentProcessor:
                     texts = [c.text for c in chunks]
                     
                     # Check if tri-vector embeddings are supported
-                    use_tri_vector = self.embedding_service.supports_tri_vector
+                    use_tri_vector = await self.embedding_service.detect_tri_vector_support()
                     if use_tri_vector:
                         logger.info("Tri-vector embedding enabled: generating dense + sparse vectors")
                         # Generate tri-vector embeddings (dense + sparse + colbert)
@@ -608,8 +608,8 @@ class DocumentProcessor:
                     
                     # Initialize vector table with embedding dimension and add chunks
                     embedding_dim = len(embeddings[0])
-                    await asyncio.to_thread(self.vector_store.init_table, embedding_dim)
-                    await asyncio.to_thread(self.vector_store.add_chunks, records)
+                    await self.vector_store.init_table(embedding_dim)
+                    await self.vector_store.add_chunks(records)
         except Exception as e:
             # Phase 3: Update status to error on failure
             # Get connection again to update error status

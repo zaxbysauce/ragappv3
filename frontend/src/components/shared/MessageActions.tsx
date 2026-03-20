@@ -5,8 +5,6 @@ import { toast } from "sonner";
 
 interface MessageActionsProps {
   content: string;
-  // TODO: Add sources prop if needed for copying with sources
-  // sources?: RAGSource[];
 }
 
 export const MessageActions = React.memo(function MessageActions({ content }: MessageActionsProps) {

@@ -1,27 +1,93 @@
 """
 Dual-provider embedding client service supporting Ollama and OpenAI-compatible APIs.
 """
+
 import asyncio
+import hashlib
 import httpx
 import logging
-from typing import List
+from collections import OrderedDict
+from typing import List, Optional
 from urllib.parse import urljoin, urlparse
 from app.config import settings
+from app.services.circuit_breaker import embeddings_cb, CircuitBreakerError
 
 logger = logging.getLogger(__name__)
 
 
+class LRUCache:
+    """Simple LRU cache with size limit and hit/miss statistics."""
+
+    def __init__(self, maxsize: int = 1000):
+        self.maxsize = maxsize
+        self._cache: OrderedDict[str, List[float]] = OrderedDict()
+        self._hits = 0
+        self._misses = 0
+
+    def get(self, key: str) -> Optional[List[float]]:
+        """Get value from cache, moving to end if found (LRU)."""
+        if key in self._cache:
+            self._cache.move_to_end(key)
+            self._hits += 1
+            return self._cache[key]
+        self._misses += 1
+        return None
+
+    def set(self, key: str, value: List[float]) -> None:
+        """Set value in cache, evicting oldest if at capacity."""
+        if self.maxsize <= 0:
+            return
+        if key in self._cache:
+            self._cache.move_to_end(key)
+        self._cache[key] = value
+        if len(self._cache) > self.maxsize:
+            self._cache.popitem(last=False)
+
+    @property
+    def hits(self) -> int:
+        return self._hits
+
+    @property
+    def misses(self) -> int:
+        return self._misses
+
+    @property
+    def size(self) -> int:
+        return len(self._cache)
+
+    def get_stats(self) -> dict:
+        """Return cache statistics."""
+        total = self._hits + self._misses
+        hit_rate = (self._hits / total * 100) if total > 0 else 0
+        return {
+            "hits": self._hits,
+            "misses": self._misses,
+            "size": self.size,
+            "maxsize": self.maxsize,
+            "hit_rate": round(hit_rate, 2),
+        }
+
+    def clear(self) -> None:
+        """Clear cache and reset statistics."""
+        self._cache.clear()
+        self._hits = 0
+        self._misses = 0
+
+
 class EmbeddingError(Exception):
     """Exception raised for embedding service errors."""
+
     pass
 
 
 class EmbeddingService:
     """Service for generating text embeddings via Ollama or OpenAI-compatible APIs."""
-    
+
     # Hard caps for input validation
     MAX_BATCH_SIZE = 512  # Maximum number of texts per batch call
-    MAX_TEXT_LENGTH = 8192  # Maximum characters per text (derived from chunk_size_chars=8192)
+    MAX_TEXT_LENGTH = (
+        8192  # Maximum characters per text (derived from chunk_size_chars=8192)
+    )
     MIN_SPLIT_CHARS = 200  # Minimum text length to attempt single-text splitting
 
     def __init__(self):
@@ -31,28 +97,28 @@ class EmbeddingService:
         # Validate base_url
         if not base_url:
             raise EmbeddingError("Embedding service is not configured")
-        if not base_url.startswith(('http://', 'https://')):
+        if not base_url.startswith(("http://", "https://")):
             raise EmbeddingError("Invalid embedding URL configuration")
 
         # Detect provider mode based on URL path
         self.provider_mode, self.embeddings_url = self._detect_provider_mode(base_url)
-        
+
         # Tri-vector embedding configuration
         self._tri_vector_enabled = settings.tri_vector_search_enabled
         self._supports_tri_vector: bool = False  # Lazy-detected via property
         self._flag_base_url: str | None = None
-        
+
         if self._tri_vector_enabled:
             # Use FlagEmbedding URL if tri-vector is enabled
             self._flag_base_url = settings.flag_embedding_url or base_url
-            self.embeddings_url = urljoin(self._flag_base_url, '/v1/embeddings')
-        
+            self.embeddings_url = urljoin(self._flag_base_url, "/v1/embeddings")
+
         self.timeout = 60.0
-        
+
         # Read embedding prefixes from settings
         self.embedding_doc_prefix = settings.embedding_doc_prefix
         self.embedding_query_prefix = settings.embedding_query_prefix
-        
+
         # Auto-apply Qwen3 instruction prefixes for better retrieval quality
         # With llama.cpp -ub 8192, we have plenty of headroom for these prefixes
         if settings.embedding_model.lower().find("qwen") >= 0:
@@ -60,149 +126,167 @@ class EmbeddingService:
                 self.embedding_doc_prefix = "Instruct: Represent this technical documentation passage for retrieval.\nDocument: "
             if not self.embedding_query_prefix:
                 self.embedding_query_prefix = "Instruct: Retrieve relevant technical documentation passages.\nQuery: "
-        
+
         # Persistent HTTP client — created once, reused for all embedding calls
         self._client = httpx.AsyncClient(
             timeout=self.timeout,
             limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
         )
-    
-    @property
-    def supports_tri_vector(self) -> bool:
+
+        # LRU cache for embed_single requests (disabled for local models if embedding_url is not set)
+        # Cache is enabled when using external embedding services
+        self._embed_cache = LRUCache(maxsize=1000)
+
+    async def detect_tri_vector_support(self) -> bool:
         """
         Lazy detection - returns True if FlagEmbedding server detected.
-        
-        Performs synchronous detection on first access using httpx sync client.
+
+        Performs async detection on first access using the persistent async client.
         """
         if self._supports_tri_vector:
             return True
         if not self._tri_vector_enabled or not self._flag_base_url:
             return False
-        
-        # Run detection synchronously using httpx sync client (only first time)
-        self._supports_tri_vector = self._detect_flag_embedding_server_sync()
+
+        # Run detection asynchronously using the persistent async client (only first time)
+        self._supports_tri_vector = await self._detect_flag_embedding_server_async()
         if self._supports_tri_vector:
             logger.info("FlagEmbedding server detected - tri-vector embeddings enabled")
         else:
-            logger.warning("Tri-vector enabled but FlagEmbedding server not detected - falling back to dense-only")
+            logger.warning(
+                "Tri-vector enabled but FlagEmbedding server not detected - falling back to dense-only"
+            )
         return self._supports_tri_vector
-    
+
+    @property
+    def supports_tri_vector(self) -> bool:
+        """
+        Property accessor for cached tri-vector support status.
+
+        Note: This returns the cached value. Call detect_tri_vector_support()
+        to perform the actual detection.
+        """
+        return self._supports_tri_vector
+
     def _detect_provider_mode(self, base_url: str) -> tuple:
         """
         Detect which embedding provider mode to use based on URL path.
-        
+
         Detection strategy:
         - If URL path includes '/api/embeddings' -> Ollama mode
         - If URL path includes '/v1/embeddings' -> OpenAI mode
         - If no explicit embeddings path:
           - Port 1234 -> OpenAI mode (LM Studio default)
           - Otherwise -> Ollama mode
-        
+
         Args:
             base_url: The configured embedding URL
-            
+
         Returns:
             Tuple of (provider_mode, embeddings_url)
         """
         parsed = urlparse(base_url)
         path = parsed.path
-        
+
         # Check for explicit paths
-        if '/api/embeddings' in path:
+        if "/api/embeddings" in path:
             # Already has Ollama path, use as-is
-            return ('ollama', base_url)
-        elif '/v1/embeddings' in path:
+            return ("ollama", base_url)
+        elif "/v1/embeddings" in path:
             # Already has OpenAI path, use as-is
-            return ('openai', base_url)
-        
+            return ("openai", base_url)
+
         # No explicit path - determine by port
         port = parsed.port
         if port == 1234:
             # LM Studio default port - use OpenAI mode
-            base_url = base_url.rstrip('/') + '/v1/embeddings'
-            return ('openai', base_url)
+            base_url = base_url.rstrip("/") + "/v1/embeddings"
+            return ("openai", base_url)
         else:
             # Default to Ollama mode
-            base_url = base_url.rstrip('/') + '/api/embeddings'
-            return ('ollama', base_url)
+            base_url = base_url.rstrip("/") + "/api/embeddings"
+            return ("ollama", base_url)
 
-    def _detect_flag_embedding_server_sync(self) -> bool:
+    async def _detect_flag_embedding_server_async(self) -> bool:
         """
-        Synchronously detect if the embedding server is a FlagEmbedding server with tri-vector support.
-        
+        Asynchronously detect if the embedding server is a FlagEmbedding server with tri-vector support.
+
         Used for lazy detection during initialization.
-        
+
         Returns:
             True if FlagEmbedding server detected, False otherwise.
         """
         # Type guard: urljoin requires non-None base URL
-        assert self._flag_base_url is not None, "Flag base URL must be set for tri-vector detection"
+        assert self._flag_base_url is not None, (
+            "Flag base URL must be set for tri-vector detection"
+        )
         try:
-            health_url = urljoin(self._flag_base_url, '/health')
-            import httpx
-            response = httpx.get(health_url, timeout=5.0)
+            health_url = urljoin(self._flag_base_url, "/health")
+            response = await self._client.get(health_url, timeout=5.0)
             if response.status_code == 200:
                 data = response.json()
-                return data.get('supports_sparse', False)
-        except Exception as e:
+                return data.get("supports_sparse", False)
+        except (httpx.TimeoutException, httpx.HTTPError, ValueError, OSError) as e:
             logger.debug(f"FlagEmbedding detection failed: {e}")
         return False
-    
+
     def _build_payload(self, text: str) -> dict:
         """
         Build the API request payload based on provider mode.
-        
+
         Args:
             text: The text to embed
-            
+
         Returns:
             Dictionary payload for the API request
         """
-        if self.provider_mode == 'openai':
-            return {
-                "model": settings.embedding_model,
-                "input": text
-            }
+        if self.provider_mode == "openai":
+            return {"model": settings.embedding_model, "input": text}
         else:  # ollama mode
-            return {
-                "model": settings.embedding_model,
-                "prompt": text
-            }
-    
+            return {"model": settings.embedding_model, "prompt": text}
+
     def _extract_embedding(self, data: dict) -> List[float]:
         """
         Extract embedding vector from API response based on provider mode.
-        
+
         Args:
             data: Parsed JSON response from the API
-            
+
         Returns:
             List of float values representing the embedding vector
-            
+
         Raises:
             EmbeddingError: If embedding cannot be extracted
         """
-        if self.provider_mode == 'openai':
+        if self.provider_mode == "openai":
             # OpenAI format: data[0].embedding
             if "data" not in data:
-                logger.error("Embedding API response missing 'data' field in OpenAI mode")
+                logger.error(
+                    "Embedding API response missing 'data' field in OpenAI mode"
+                )
                 raise EmbeddingError("Embedding API response is invalid")
             if not isinstance(data["data"], list) or len(data["data"]) == 0:
-                logger.error("Embedding API response 'data' field is empty or invalid in OpenAI mode")
+                logger.error(
+                    "Embedding API response 'data' field is empty or invalid in OpenAI mode"
+                )
                 raise EmbeddingError("Embedding API response is invalid")
             embedding = data["data"][0].get("embedding")
             if embedding is None:
-                logger.error("Embedding API response missing 'data[0].embedding' field in OpenAI mode")
+                logger.error(
+                    "Embedding API response missing 'data[0].embedding' field in OpenAI mode"
+                )
                 raise EmbeddingError("Embedding API response is invalid")
         else:  # ollama mode
             # Ollama format: embedding
             embedding = data.get("embedding")
             if embedding is None:
-                logger.error("Embedding API response missing 'embedding' field in Ollama mode")
+                logger.error(
+                    "Embedding API response missing 'embedding' field in Ollama mode"
+                )
                 raise EmbeddingError("Embedding API response is invalid")
-        
+
         return embedding
-    
+
     async def embed_single(self, text: str) -> List[float]:
         """
         Generate embedding for a single text.
@@ -210,6 +294,9 @@ class EmbeddingService:
         Applies the query prefix (if configured) to the input text before embedding.
         The query prefix is used for retrieval queries and must remain constant for
         a given index to ensure consistent embedding space.
+
+        Results are cached using an LRU cache to avoid redundant API calls for
+        repeated text inputs.
 
         Args:
             text: The text to embed.
@@ -221,20 +308,25 @@ class EmbeddingService:
             EmbeddingError: If the API request fails or returns non-200 status.
         """
         # Validate text input
-        if text is None:
-            raise EmbeddingError("Text cannot be None")
         if not text.strip():
             raise EmbeddingError("Text cannot be empty or whitespace only")
 
         # Apply query prefix for retrieval queries
-        text_to_embed = self.embedding_query_prefix + text if self.embedding_query_prefix else text
+        text_to_embed = (
+            self.embedding_query_prefix + text if self.embedding_query_prefix else text
+        )
+
+        # Check cache using hash of the text as key
+        cache_key = hashlib.md5(text_to_embed.encode("utf-8")).hexdigest()
+        cached = self._embed_cache.get(cache_key)
+        if cached is not None:
+            return cached
 
         try:
-            response = await self._client.post(
-                self.embeddings_url,
-                json=self._build_payload(text_to_embed)
+            response = await embeddings_cb(self._client.post)(
+                self.embeddings_url, json=self._build_payload(text_to_embed)
             )
-            
+
             if response.status_code != 200:
                 logger.warning(
                     f"Embedding API returned status {response.status_code} for {self.provider_mode} mode: {response.text}"
@@ -251,13 +343,18 @@ class EmbeddingService:
                 )
                 raise EmbeddingError("Invalid response from embedding service")
 
-            return self._extract_embedding(data)
-            
+            embedding = self._extract_embedding(data)
+
+            # Store in cache
+            self._embed_cache.set(cache_key, embedding)
+
+            return embedding
+
         except httpx.TimeoutException:
             raise EmbeddingError("Embedding request timed out")
         except httpx.HTTPError:
             raise EmbeddingError("Embedding HTTP error occurred")
-    
+
     async def validate_embedding_dimension(self, expected_dim: int) -> bool:
         """
         Validate that the embedding dimension matches the expected value.
@@ -274,12 +371,12 @@ class EmbeddingService:
                 does not match the expected value.
         """
         # Validate expected_dim input
-        if expected_dim is None:
-            raise EmbeddingError("expected_dim cannot be None")
         if not isinstance(expected_dim, int) or expected_dim <= 0:
-            raise EmbeddingError(f"expected_dim must be a positive integer, got {expected_dim}")
+            raise EmbeddingError(
+                f"expected_dim must be a positive integer, got {expected_dim}"
+            )
 
-        embedding = await self.embed_single('dimension_check')
+        embedding = await self.embed_single("dimension_check")
         actual_dim = len(embedding)
         if actual_dim != expected_dim:
             raise EmbeddingError(
@@ -287,7 +384,9 @@ class EmbeddingService:
             )
         return True
 
-    async def embed_batch(self, texts: List[str], batch_size: int | None = None) -> List[List[float]]:
+    async def embed_batch(
+        self, texts: List[str], batch_size: int | None = None
+    ) -> List[List[float]]:
         """
         Generate embeddings for a batch of texts using true API batching.
 
@@ -311,25 +410,23 @@ class EmbeddingService:
         """
         if not texts:
             return []
-        
+
         # Input validation guards
         for idx, text in enumerate(texts):
-            if text is None:
-                raise EmbeddingError(f"Text at index {idx} is None")
             if not text.strip():
                 raise EmbeddingError(f"Text at index {idx} is empty or whitespace only")
             if len(text) > self.MAX_TEXT_LENGTH:
                 raise EmbeddingError(
                     f"Text at index {idx} exceeds maximum length ({self.MAX_TEXT_LENGTH} characters)"
                 )
-        
+
         # Use configured batch size if not specified
         if batch_size is None:
             batch_size = settings.embedding_batch_size
-        
+
         # Clamp batch_size to valid range
         batch_size = max(1, min(batch_size, self.MAX_BATCH_SIZE))
-        
+
         # Apply document prefix to all texts
         texts_to_embed = []
         for text in texts:
@@ -337,54 +434,54 @@ class EmbeddingService:
                 texts_to_embed.append(self.embedding_doc_prefix + text)
             else:
                 texts_to_embed.append(text)
-        
+
         # Process in batches using true API batching
         all_embeddings: List[List[float]] = []
         for i in range(0, len(texts_to_embed), batch_size):
-            batch = texts_to_embed[i:i + batch_size]
+            batch = texts_to_embed[i : i + batch_size]
             embeddings = await self._embed_batch_api(batch)
             all_embeddings.extend(embeddings)
-        
+
         return all_embeddings
 
     async def embed_multi(self, texts: List[str]) -> List[dict]:
         """
         Generate tri-vector embeddings (dense + sparse + colbert) for multiple texts.
-        
+
         Args:
             texts: List of texts to embed
-            
+
         Returns:
             List of dicts with keys: 'dense' (list), 'sparse' (dict), 'colbert' (None)
             If server doesn't support tri-vector, returns dense-only with sparse=None.
         """
-        # Use property to trigger lazy detection if not already done
-        if not self.supports_tri_vector:
+        # Async detection on first access
+        if not await self.detect_tri_vector_support():
             # Fall back to dense-only
             dense_embeddings = await self.embed_batch(texts)
             return [
                 {"dense": emb, "sparse": None, "colbert": None}
                 for emb in dense_embeddings
             ]
-        
+
         # Call FlagEmbedding /embed endpoint
         try:
-            embed_url = urljoin(self.embeddings_url, '/embed')
+            embed_url = urljoin(self.embeddings_url, "/embed")
             response = await self._client.post(
                 embed_url,
                 json={"input": texts},
-                headers={"Content-Type": "application/json"}
+                headers={"Content-Type": "application/json"},
             )
             response.raise_for_status()
             return response.json()
-        except Exception as e:
+        except (httpx.TimeoutException, httpx.HTTPError, ValueError, OSError) as e:
             logger.error(f"Tri-vector embedding failed: {e}")
             raise EmbeddingError(f"Failed to generate tri-vector embeddings: {e}")
 
     async def _embed_batch_api(self, texts: List[str]) -> List[List[float]]:
         """
         Send a batch of texts to the embedding API in a single request.
-        
+
         Implements adaptive batching: automatically retries with smaller sub-batches
         when llama.cpp token overflow errors occur.
 
@@ -399,48 +496,87 @@ class EmbeddingService:
         """
         max_retries = settings.embedding_batch_max_retries
         min_sub_size = settings.embedding_batch_min_sub_size
-        
-        return await self._embed_batch_with_retry(self._client, texts, max_retries, min_sub_size)
-    
-    async def _embed_batch_with_retry(self, client: httpx.AsyncClient, texts: List[str], 
-                                      max_retries: int, min_sub_size: int, retry_count: int = 0) -> List[List[float]]:
+
+        return await self._embed_batch_with_retry(
+            self._client, texts, max_retries, min_sub_size
+        )
+
+    def _log_pool_stats(self, client: httpx.AsyncClient) -> None:
+        """Log connection pool and cache statistics for monitoring."""
+        try:
+            pool = getattr(client, "_transport", None)
+            if pool and hasattr(pool, "_pool"):
+                pool_obj = pool._pool
+                connections = getattr(pool_obj, "_num_connections", 0)
+                keepalive = getattr(pool_obj, "_num_keepalive", 0)
+                limits = getattr(pool_obj, "_limits", None)
+                max_connections = (
+                    getattr(limits, "max_connections", 20) if limits else 20
+                )
+                max_keepalive = (
+                    getattr(limits, "max_keepalive_connections", 10) if limits else 10
+                )
+                cache_stats = self._embed_cache.get_stats()
+                logger.info(
+                    f"Embedding service pool: {connections}/{max_connections} connections, "
+                    f"{keepalive}/{max_keepalive} keepalive, "
+                    f"cache: {cache_stats['hits']} hits, {cache_stats['misses']} misses, "
+                    f"{cache_stats['hit_rate']}% hit rate, {cache_stats['size']}/{cache_stats['maxsize']} entries"
+                )
+        except Exception:
+            pass  # Silently ignore any errors accessing internal pool state
+
+    def get_cache_stats(self) -> dict:
+        """
+        Get embedding cache statistics.
+
+        Returns:
+            Dictionary with cache statistics including hits, misses,
+            hit rate percentage, current size, and max size.
+        """
+        return self._embed_cache.get_stats()
+
+    async def _embed_batch_with_retry(
+        self,
+        client: httpx.AsyncClient,
+        texts: List[str],
+        max_retries: int,
+        min_sub_size: int,
+        retry_count: int = 0,
+    ) -> List[List[float]]:
         """
         Internal method that handles the retry logic for adaptive batching.
-        
+
         Args:
             client: HTTP client for making requests
             texts: List of texts to embed
             max_retries: Maximum number of retry attempts
             min_sub_size: Minimum sub-batch size before giving up
-            
+
         Returns:
             List of embedding vectors
-            
+
         Raises:
             EmbeddingError: If all retries fail
         """
         # Empty-input guard
         if not texts:
             return []
-        
+
         try:
             # Build payload with array of inputs
-            if self.provider_mode == 'openai':
-                payload = {
-                    "model": settings.embedding_model,
-                    "input": texts
-                }
+            if self.provider_mode == "openai":
+                payload = {"model": settings.embedding_model, "input": texts}
             else:  # ollama mode
-                payload = {
-                    "model": settings.embedding_model,
-                    "input": texts
-                }
-            
-            response = await client.post(
-                self.embeddings_url,
-                json=payload
-            )
-            
+                payload = {"model": settings.embedding_model, "input": texts}
+
+            try:
+                response = await embeddings_cb(client.post)(
+                    self.embeddings_url, json=payload
+                )
+            except CircuitBreakerError as e:
+                raise EmbeddingError(f"Embedding service circuit breaker is open: {e}")
+
             # Check for token overflow error in HTTP 500 responses
             if response.status_code == 500:
                 error_text = response.text.lower()
@@ -452,7 +588,7 @@ class EmbeddingService:
                     return await self._handle_overflow_retry(
                         client, texts, max_retries, min_sub_size, retry_count
                     )
-            
+
             if response.status_code != 200:
                 logger.warning(
                     f"Embedding API returned status {response.status_code} for {self.provider_mode} mode: {response.text}"
@@ -462,24 +598,24 @@ class EmbeddingService:
                 )
 
             data = response.json()
-            
+
             # Extract embeddings from response
-            if self.provider_mode == 'openai':
+            if self.provider_mode == "openai":
                 # OpenAI format: data[].embedding
-                embeddings = [item['embedding'] for item in data['data']]
+                embeddings = [item["embedding"] for item in data["data"]]
             else:
                 # Ollama format may vary - try common formats
-                if 'embeddings' in data:
-                    embeddings = data['embeddings']
-                elif 'embedding' in data:
+                if "embeddings" in data:
+                    embeddings = data["embeddings"]
+                elif "embedding" in data:
                     # Single embedding returned - shouldn't happen with batch
-                    embeddings = [data['embedding']]
+                    embeddings = [data["embedding"]]
                 else:
                     logger.error(
                         f"Unexpected response format for {self.provider_mode} mode: {data.keys()}"
                     )
                     raise EmbeddingError("Unexpected response from embedding service")
-            
+
             # Validate embedding structure
             if not isinstance(embeddings, list):
                 logger.error("Embedding API response 'embeddings' is not a list")
@@ -492,7 +628,7 @@ class EmbeddingService:
                     if not isinstance(val, (int, float)):
                         logger.error(f"Embedding value at [{i}][{j}] is not a number")
                         raise EmbeddingError("Embedding API response is invalid")
-            
+
             # Validate embedding count matches input count
             if len(embeddings) != len(texts):
                 logger.error(
@@ -501,9 +637,12 @@ class EmbeddingService:
                 raise EmbeddingError(
                     f"Embedding count mismatch: expected {len(texts)}, got {len(embeddings)}"
                 )
-            
+
+            # Log connection pool metrics
+            self._log_pool_stats(client)
+
             return embeddings
-            
+
         except httpx.TimeoutException as e:
             logger.warning(
                 f"Embedding batch request timed out for {self.provider_mode} mode: {e}"
@@ -520,27 +659,34 @@ class EmbeddingService:
                 )
             # For single-item batches: simple backoff retry
             if retry_count < max_retries:
-                backoff_delay = min(0.5 * (2 ** retry_count), 2.0)
-                logger.info(f"Retrying single-item timeout (attempt {retry_count + 1}/{max_retries}) after {backoff_delay}s")
+                backoff_delay = min(0.5 * (2**retry_count), 2.0)
+                logger.info(
+                    f"Retrying single-item timeout (attempt {retry_count + 1}/{max_retries}) after {backoff_delay}s"
+                )
                 await asyncio.sleep(backoff_delay)
                 return await self._embed_batch_with_retry(
                     client, texts, max_retries, min_sub_size, retry_count + 1
                 )
-            raise EmbeddingError(f"Embedding request timed out after {max_retries} retries")
+            raise EmbeddingError(
+                f"Embedding request timed out after {max_retries} retries"
+            )
         except httpx.HTTPError as e:
             # Check if this is a token overflow error
             error_msg = str(e)
             response_text = ""
-            
+
             # Try to get response text from the exception if available
             try:
-                resp = getattr(e, 'response', None)
+                resp = getattr(e, "response", None)
                 if resp is not None:
                     response_text = resp.text.lower()
-            except Exception:
+            except (AttributeError, ValueError):
+                # Response object may not have text attribute
                 pass
-            
-            if self._is_token_overflow_error(error_msg) or self._is_token_overflow_error(response_text):
+
+            if self._is_token_overflow_error(
+                error_msg
+            ) or self._is_token_overflow_error(response_text):
                 logger.warning(
                     f"Token overflow error for {self.provider_mode} mode: {response_text}"
                 )
@@ -558,56 +704,56 @@ class EmbeddingService:
     def _split_text_at_midpoint(self, text: str) -> tuple:
         """
         Split a single text into two parts at a boundary-aware midpoint.
-        
+
         Prefers splitting at newline or space characters near the midpoint
         to produce more natural splits. Falls back to strict midpoint if
         boundary-aware split would result in empty sides.
-        
+
         Args:
             text: The text to split
-            
+
         Returns:
             Tuple of (left_text, right_text), both non-empty for splittable text
         """
         if len(text) <= 1:
             return (text, "")
-        
+
         midpoint = len(text) // 2
-        
+
         # Try to find a better boundary near the midpoint
         # Look for newline first, then space
         search_start = max(0, midpoint - 50)
         search_end = min(len(text), midpoint + 50)
-        
+
         # Search for newline near midpoint (forward)
         for i in range(midpoint, search_end):
-            if text[i] == '\n':
-                left, right = text[:i+1], text[i+1:]
+            if text[i] == "\n":
+                left, right = text[: i + 1], text[i + 1 :]
                 # Ensure both sides are non-empty for splittable text
                 if left and right:
                     return (left, right)
-        
+
         # Search for newline near midpoint (backward)
         for i in range(midpoint - 1, search_start - 1, -1):
-            if text[i] == '\n':
-                left, right = text[:i+1], text[i+1:]
+            if text[i] == "\n":
+                left, right = text[: i + 1], text[i + 1 :]
                 if left and right:
                     return (left, right)
-        
+
         # Search for space near midpoint (forward)
         for i in range(midpoint, search_end):
-            if text[i] == ' ':
+            if text[i] == " ":
                 left, right = text[:i], text[i:]
                 if left and right:
                     return (left, right)
-        
+
         # Search for space near midpoint (backward)
         for i in range(midpoint - 1, search_start - 1, -1):
-            if text[i] == ' ':
+            if text[i] == " ":
                 left, right = text[:i], text[i:]
                 if left and right:
                     return (left, right)
-        
+
         # Fall back to strict midpoint (guaranteed non-empty for len > 1)
         left, right = text[:midpoint], text[midpoint:]
         # Double-check: if either is empty, adjust to ensure both non-empty
@@ -617,17 +763,19 @@ class EmbeddingService:
         elif not right:
             right = text[-1:]
             left = text[:-1]
-        
+
         return (left, right)
-    
-    def _mean_pool_embeddings(self, emb1: List[float], emb2: List[float]) -> List[float]:
+
+    def _mean_pool_embeddings(
+        self, emb1: List[float], emb2: List[float]
+    ) -> List[float]:
         """
         Mean-pool two embedding vectors into one.
-        
+
         Args:
             emb1: First embedding vector
             emb2: Second embedding vector
-            
+
         Returns:
             Mean-pooled embedding vector
         """
@@ -635,27 +783,33 @@ class EmbeddingService:
             raise EmbeddingError(
                 f"Cannot mean-pool embeddings of different dimensions: {len(emb1)} vs {len(emb2)}"
             )
-        
+
         return [(a + b) / 2.0 for a, b in zip(emb1, emb2)]
-    
-    async def _handle_overflow_retry(self, client: httpx.AsyncClient, texts: List[str],
-                                     max_retries: int, min_sub_size: int, retry_count: int) -> List[List[float]]:
+
+    async def _handle_overflow_retry(
+        self,
+        client: httpx.AsyncClient,
+        texts: List[str],
+        max_retries: int,
+        min_sub_size: int,
+        retry_count: int,
+    ) -> List[List[float]]:
         """
         Helper method to handle overflow retry logic with bounded retries and minimum split size.
-        
+
         For single-item overflow, attempts to split the text and mean-pool the results.
         For multi-item overflow, splits the batch and processes each half.
-        
+
         Args:
             client: HTTP client for making requests
             texts: List of texts to embed
             max_retries: Maximum number of retry attempts
             min_sub_size: Minimum sub-batch size before giving up
             retry_count: Current retry attempt count
-            
+
         Returns:
             List of embedding vectors
-            
+
         Raises:
             EmbeddingError: If bounded retries exhausted or split size too small
         """
@@ -667,11 +821,11 @@ class EmbeddingService:
             raise EmbeddingError(
                 f"Max retries ({max_retries}) exhausted for embedding batch"
             )
-        
+
         # Handle single-item overflow with text splitting
         if len(texts) == 1:
             single_text = texts[0]
-            
+
             # Check if text is too short to split - raise actionable error
             if len(single_text) < self.MIN_SPLIT_CHARS:
                 logger.warning(
@@ -681,10 +835,10 @@ class EmbeddingService:
                     f"Single input ({len(single_text)} chars) exceeds token limit and is too short to split. "
                     f"Ensure chunk_size_chars is below server batch size limit (minimum {self.MIN_SPLIT_CHARS} chars required for recovery)."
                 )
-            
+
             # Split text at boundary-aware midpoint and recurse
             left_text, right_text = self._split_text_at_midpoint(single_text)
-            
+
             # Guard: if either side is empty after split, raise actionable error
             if not left_text or not right_text:
                 logger.error(
@@ -694,30 +848,38 @@ class EmbeddingService:
                     "Cannot split text for embedding recovery: split produced empty segment. "
                     "Ensure chunk_size_chars is within server limits."
                 )
-            
+
             logger.info(
                 f"Splitting single input ({len(single_text)} chars) into parts ({len(left_text)} + {len(right_text)} chars), retry {retry_count}"
             )
-            
+
             # Small bounded async backoff
-            backoff_delay = min(0.5 * (2 ** retry_count), 1.0)
+            backoff_delay = min(0.5 * (2**retry_count), 1.0)
             await asyncio.sleep(backoff_delay)
-            
+
             # Recurse on each part with incremented retry count
             left_embeddings = await self._embed_batch_with_retry(
-                client, [left_text], max_retries, min_sub_size, retry_count=retry_count + 1
+                client,
+                [left_text],
+                max_retries,
+                min_sub_size,
+                retry_count=retry_count + 1,
             )
             right_embeddings = await self._embed_batch_with_retry(
-                client, [right_text], max_retries, min_sub_size, retry_count=retry_count + 1
+                client,
+                [right_text],
+                max_retries,
+                min_sub_size,
+                retry_count=retry_count + 1,
             )
-            
+
             # Mean-pool the two embeddings into one
             logger.debug("Using mean-pooling for overflow recovery")
             pooled = self._mean_pool_embeddings(left_embeddings[0], right_embeddings[0])
-            
+
             # Return single embedding to preserve one-embedding-per-input contract
             return [pooled]
-        
+
         # Multi-item batch overflow - use existing split behavior
         # Check if we've reached minimum split size
         if len(texts) <= min_sub_size:
@@ -727,16 +889,16 @@ class EmbeddingService:
             raise EmbeddingError(
                 f"Cannot split batch further: {len(texts)} items below minimum split size"
             )
-        
+
         # Split at midpoint and recurse with backoff
         midpoint = len(texts) // 2
         left_texts = texts[:midpoint]
         right_texts = texts[midpoint:]
-        
+
         # Small bounded async backoff (exponential, capped at 1s)
-        backoff_delay = min(0.5 * (2 ** retry_count), 1.0)
+        backoff_delay = min(0.5 * (2**retry_count), 1.0)
         await asyncio.sleep(backoff_delay)
-        
+
         # Recurse on left then right to preserve order
         left_embeddings = await self._embed_batch_with_retry(
             client, left_texts, max_retries, min_sub_size, retry_count=retry_count + 1
@@ -744,40 +906,88 @@ class EmbeddingService:
         right_embeddings = await self._embed_batch_with_retry(
             client, right_texts, max_retries, min_sub_size, retry_count=retry_count + 1
         )
-        
+
         return left_embeddings + right_embeddings
-    
+
     def _is_token_overflow_error(self, error_msg: str) -> bool:
         """
         Detect if an error message indicates a token overflow from llama.cpp.
-        
+
         Args:
             error_msg: The error message string
-            
+
         Returns:
             True if this is a token overflow error, False otherwise
         """
         error_lower = error_msg.lower()
-        
+
         # Check for common llama.cpp token overflow patterns
         # Pattern 1: "input (X tokens) is too large" - typical llama.cpp error
         if "input (" in error_lower and "tokens) is too large" in error_lower:
             return True
-        
+
         # Pattern 2: "too large to process" with "current batch size" - OpenAI mode error
-        if "too large to process" in error_lower and "current batch size" in error_lower:
+        if (
+            "too large to process" in error_lower
+            and "current batch size" in error_lower
+        ):
             return True
-        
+
         # Pattern 3: "token limit exceeded"
         if "token limit exceeded" in error_lower:
             return True
-        
+
         # Pattern 4: "batch size too small"
         if "batch size too small" in error_lower:
             return True
-        
+
         return False
 
+    async def embed_query_sparse(self, text: str) -> dict:
+        """
+        Generate a sparse vector for a single query text using FlagEmbedding /embed endpoint.
+
+        Args:
+            text: Query text to embed.
+
+        Returns:
+            dict mapping token IDs (str) to float weights.
+
+        Raises:
+            EmbeddingError: If the server call fails or returns no sparse vector.
+        """
+        if not self._flag_base_url:
+            raise EmbeddingError(
+                "FlagEmbedding server not configured (flag_embedding_url is empty)"
+            )
+
+        text_to_embed = (
+            (self.embedding_query_prefix + text)
+            if self.embedding_query_prefix
+            else text
+        )
+        try:
+            async with asyncio.timeout(0.2):
+                embed_url = urljoin(self._flag_base_url, "/embed")
+                response = await self._client.post(
+                    embed_url,
+                    json={"input": [text_to_embed]},
+                    headers={"Content-Type": "application/json"},
+                )
+                response.raise_for_status()
+                results = response.json()
+                sparse = results[0].get("sparse") if results else None
+                if not sparse:
+                    raise EmbeddingError(
+                        "FlagEmbedding /embed returned no sparse vector"
+                    )
+                return sparse
+        except asyncio.TimeoutError:
+            raise EmbeddingError("Sparse embedding request timed out (200ms)")
+        except EmbeddingError:
+            raise
+        except Exception as e:
+            raise EmbeddingError(f"Failed to generate sparse query vector: {e}") from e
 
     async def close(self) -> None:
         """Close the persistent HTTP client and release connection pool resources.
@@ -788,5 +998,3 @@ class EmbeddingService:
         client = getattr(self, "_client", None)
         if client is not None and not client.is_closed:
             await client.aclose()
-
-

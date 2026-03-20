@@ -3,7 +3,7 @@
 import sqlite3
 from contextlib import contextmanager
 
-from fastapi import Request, Depends
+from fastapi import Request
 
 from app.config import Settings, settings
 from app.models.database import get_pool, SQLiteConnectionPool
@@ -68,21 +68,9 @@ def get_reranking_service(request: Request):
     return request.app.state.reranking_service
 
 
-def get_rag_engine(
-    embedding_service: EmbeddingService = Depends(get_embedding_service),
-    vector_store: VectorStore = Depends(get_vector_store),
-    memory_store: MemoryStore = Depends(get_memory_store),
-    llm_client: LLMClient = Depends(get_llm_client),
-    reranking_service: RerankingService = Depends(get_reranking_service),
-) -> RAGEngine:
-    """Return a new RAGEngine initialized with dependencies."""
-    return RAGEngine(
-        embedding_service=embedding_service,
-        vector_store=vector_store,
-        memory_store=memory_store,
-        llm_client=llm_client,
-        reranking_service=reranking_service,
-    )
+def get_rag_engine(request: Request) -> RAGEngine:
+    """Return the cached RAGEngine singleton from app state."""
+    return request.app.state.rag_engine
 
 
 def get_toggle_manager(request: Request) -> ToggleManager:

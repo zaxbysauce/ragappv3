@@ -1,0 +1,373 @@
+"""Document retrieval service for RAG pipeline.
+
+Handles document retrieval, filtering by relevance thresholds, and window expansion.
+"""
+
+import json
+import logging
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
+
+from app.config import settings
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class RAGSource:
+    """Represents a retrieved document source."""
+    text: str
+    file_id: str
+    score: float
+    metadata: Dict[str, Any]
+
+
+class DocumentRetrievalService:
+    """Service for retrieving and filtering relevant documents."""
+
+    def __init__(
+        self,
+        vector_store: Optional[Any] = None,
+        max_distance_threshold: Optional[float] = None,
+        retrieval_top_k: Optional[int] = None,
+        retrieval_window: Optional[int] = None,
+    ) -> None:
+        """Initialize the document retrieval service.
+
+        Args:
+            vector_store: Vector store instance for fetching adjacent chunks
+            max_distance_threshold: Maximum distance threshold for filtering
+            retrieval_top_k: Maximum number of results to return
+            retrieval_window: Window size for expanding results with adjacent chunks
+        """
+        self.vector_store = vector_store
+        self.max_distance_threshold = max_distance_threshold or settings.max_distance_threshold
+        self.retrieval_top_k = retrieval_top_k or settings.retrieval_top_k
+        self.retrieval_window = retrieval_window or settings.retrieval_window
+        self.relevance_threshold = settings.rag_relevance_threshold  # Legacy support
+
+    def filter_relevant(
+        self,
+        results: List[Dict[str, Any]],
+        top_k: Optional[int] = None,
+    ) -> List[RAGSource]:
+        """Filter retrieved documents by relevance threshold.
+
+        Uses _distance from LanceDB (lower is better) or score (higher is better
+        for backward compatibility). Falls back to returning top results if
+        all results are filtered out.
+
+        Args:
+            results: List of raw search results from vector store
+            top_k: Maximum number of results to return (defaults to retrieval_top_k)
+
+        Returns:
+            List of filtered RAGSource objects
+        """
+        if top_k is None:
+            top_k = self.retrieval_top_k
+
+        sources: List[RAGSource] = []
+        distances: List[float] = []
+
+        input_count = len(results)
+        logger.debug(
+            "Filtering: input_results=%d, max_distance_threshold=%s",
+            input_count,
+            self.max_distance_threshold
+        )
+        if results:
+            first_distances = [r.get("_distance", r.get("score")) for r in results[:5]]
+            logger.debug("First few _distance values: %s", first_distances)
+
+        for record in results:
+            has_distance = "_distance" in record
+            distance = record.get("_distance")
+            if distance is None:
+                score = record.get("score")
+                if score is None:
+                    score = 1.0
+                distance = score
+
+            distances.append(distance)
+
+            threshold = self.max_distance_threshold
+            if threshold is None:
+                threshold = self.relevance_threshold
+
+            should_skip = False
+            if threshold is not None:
+                if has_distance:
+                    should_skip = distance > threshold
+                else:
+                    should_skip = distance < threshold
+
+            if should_skip:
+                continue
+
+            sources.append(
+                RAGSource(
+                    text=record.get("text", ""),
+                    file_id=record.get("file_id", ""),
+                    score=distance,
+                    metadata=self._normalize_metadata(record.get("metadata")),
+                )
+            )
+
+        if distances:
+            initial_count = len(distances)
+            filtered_count = len(sources)
+            min_dist = min(distances)
+            max_dist = max(distances)
+            mean_dist = sum(distances) / len(distances)
+
+            logger.info(
+                "Vector search: initial=%d, filtered=%d, min=%.3f, max=%.3f, mean=%.3f, threshold=%.3f",
+                initial_count, filtered_count, min_dist, max_dist, mean_dist, self.max_distance_threshold
+            )
+
+        # Apply window expansion if enabled
+        if self.retrieval_window > 0:
+            sources = self.expand_window(sources)
+
+        # Fallback if all results were filtered
+        if input_count > 0 and len(sources) == 0:
+            safe_threshold = self.max_distance_threshold
+            if safe_threshold is None:
+                safe_threshold = self.relevance_threshold
+
+            if safe_threshold is None:
+                logger.warning(
+                    "Threshold filtering removed all %d results (max_distance_threshold=%s). "
+                    "Applying fallback: returning top %d results without threshold filtering.",
+                    input_count,
+                    safe_threshold,
+                    min(top_k, len(results))
+                )
+            else:
+                logger.warning(
+                    "Threshold filtering removed all %d results (max_distance_threshold=%.3f). "
+                    "Applying fallback: returning top %d results without threshold filtering.",
+                    input_count,
+                    safe_threshold,
+                    min(top_k, len(results))
+                )
+
+            fallback_limit = min(top_k, len(results))
+            sources = []
+            for record in results[:fallback_limit]:
+                distance = record.get("_distance")
+                if distance is None:
+                    score = record.get("score")
+                    if score is None:
+                        score = 1.0
+                    distance = score
+                sources.append(
+                    RAGSource(
+                        text=record.get("text", ""),
+                        file_id=record.get("file_id", ""),
+                        score=distance,
+                        metadata=self._normalize_metadata(record.get("metadata")),
+                    )
+                )
+
+        logger.debug("Filtering complete: %d results returned", len(sources))
+        return sources
+
+    def expand_window(self, sources: List[RAGSource]) -> List[RAGSource]:
+        """Expand search results by fetching adjacent chunks (N±window).
+
+        Args:
+            sources: Initial list of RAGSource chunks from vector search
+
+        Returns:
+            Expanded list of RAGSource chunks with adjacent context
+        """
+        if not sources or not self.vector_store:
+            return sources
+
+        window = self.retrieval_window
+
+        # Group sources by (file_id, chunk_scale) to avoid cross-scale window mixing
+        file_chunks: Dict[str, List[RAGSource]] = {}
+        for source in sources:
+            chunk_scale = source.metadata.get("chunk_scale", "default")
+            if chunk_scale == "default" or chunk_scale is None:
+                group_key = source.file_id
+            else:
+                group_key = f"{source.file_id}_{chunk_scale}"
+
+            if group_key not in file_chunks:
+                file_chunks[group_key] = []
+            file_chunks[group_key].append(source)
+
+        chunk_uids_to_fetch: List[str] = []
+
+        for group_key, file_sources in file_chunks.items():
+            if "_" in group_key:
+                parts = group_key.rsplit("_", 1)
+                if len(parts) == 2:
+                    file_id, chunk_scale = parts
+                else:
+                    file_id = group_key
+                    chunk_scale = "default"
+            else:
+                file_id = group_key
+                chunk_scale = "default"
+
+            indices = [int(s.metadata.get("chunk_index", 0)) for s in file_sources]
+
+            for chunk_index in indices:
+                start_idx = max(0, chunk_index - window)
+                end_idx = chunk_index + window
+
+                for idx in range(start_idx, end_idx + 1):
+                    if chunk_scale != "default":
+                        chunk_uid = f"{file_id}_{chunk_scale}_{idx}"
+                    else:
+                        chunk_uid = f"{file_id}_{idx}"
+                    chunk_uids_to_fetch.append(chunk_uid)
+
+        # Fetch adjacent chunks from vector store
+        if chunk_uids_to_fetch:
+            adjacent_chunks = self.vector_store.get_chunks_by_uid(chunk_uids_to_fetch)
+
+            adjacent_lookup: Dict[str, Dict[str, Any]] = {}
+            for chunk in adjacent_chunks:
+                chunk_id = chunk.get("id", "")
+                if chunk_id:
+                    adjacent_lookup[chunk_id] = chunk
+
+            expanded_sources: List[RAGSource] = []
+            seen_uids: set = set()
+
+            # First, add the original sources
+            for source in sources:
+                chunk_index = source.metadata.get("chunk_index", 0)
+                chunk_scale = source.metadata.get("chunk_scale", "default")
+                if chunk_scale and chunk_scale != "default":
+                    uid = f"{source.file_id}_{chunk_scale}_{chunk_index}"
+                else:
+                    uid = f"{source.file_id}_{chunk_index}"
+                if uid not in seen_uids:
+                    expanded_sources.append(source)
+                    seen_uids.add(uid)
+
+            # Then, add adjacent chunks that aren't already in the results
+            for chunk_uid in chunk_uids_to_fetch:
+                if chunk_uid in seen_uids:
+                    continue
+
+                parts = chunk_uid.rsplit("_", 2)
+
+                if len(parts) == 3:
+                    file_id, chunk_scale, chunk_index_str = parts
+                elif len(parts) == 2:
+                    file_id, chunk_index_str = parts
+                    chunk_scale = None
+                else:
+                    continue
+
+                try:
+                    chunk_index = int(chunk_index_str)
+                except ValueError:
+                    continue
+
+                if chunk_uid in adjacent_lookup:
+                    chunk = adjacent_lookup[chunk_uid]
+
+                    has_distance = "_distance" in chunk
+                    distance = chunk.get("_distance")
+                    if distance is None:
+                        score = chunk.get("score")
+                        if score is None:
+                            score = 1.0
+                        distance = score
+
+                    metadata = self._normalize_metadata(chunk.get("metadata"))
+                    if chunk_scale:
+                        metadata["chunk_scale"] = chunk_scale
+
+                    expanded_source = RAGSource(
+                        text=chunk.get("text", ""),
+                        file_id=file_id,
+                        score=distance,
+                        metadata=metadata,
+                    )
+                    expanded_sources.append(expanded_source)
+                    seen_uids.add(chunk_uid)
+
+            # Sort by (file_id, chunk_index)
+            def sort_key(source: RAGSource) -> tuple:
+                idx = source.metadata.get("chunk_index", 0)
+                try:
+                    idx = int(idx)
+                except (ValueError, TypeError):
+                    idx = 0
+                return (source.file_id, idx)
+
+            expanded_sources.sort(key=sort_key)
+
+            # Cap to retrieval_top_k total
+            if len(expanded_sources) > self.retrieval_top_k:
+                expanded_sources = expanded_sources[:self.retrieval_top_k]
+
+            return expanded_sources
+
+        return sources
+
+    def _normalize_metadata(self, metadata: Any) -> Dict[str, Any]:
+        """Ensure metadata is a dict, parsing JSON string if needed.
+
+        Args:
+            metadata: Raw metadata (dict, JSON string, or other)
+
+        Returns:
+            Normalized dictionary
+        """
+        if isinstance(metadata, dict):
+            return metadata
+        if isinstance(metadata, str):
+            try:
+                parsed = json.loads(metadata)
+                if isinstance(parsed, dict):
+                    return parsed
+            except (json.JSONDecodeError, TypeError) as exc:
+                logger.warning("Failed to parse metadata JSON: %s", exc)
+        return {}
+
+    def to_source_metadata(self, chunk: RAGSource) -> Dict[str, Any]:
+        """Convert RAGSource to source metadata dictionary.
+
+        Args:
+            chunk: RAGSource to convert
+
+        Returns:
+            Dictionary with source metadata
+        """
+        filename = (
+            chunk.metadata.get("source_file")
+            or chunk.metadata.get("filename")
+            or chunk.metadata.get("section_title")
+            or "Unknown document"
+        )
+        return {
+            "id": chunk.file_id,
+            "file_id": chunk.file_id,
+            "filename": filename,
+            "snippet": chunk.text[:300] if chunk.text else "",
+            "score": chunk.score,
+            "metadata": chunk.metadata,
+        }
+
+    def format_chunk(self, chunk: RAGSource) -> str:
+        """Format a chunk for inclusion in the prompt context.
+
+        Args:
+            chunk: RAGSource to format
+
+        Returns:
+            Formatted string with source and text
+        """
+        source_title = chunk.metadata.get("source_file") or chunk.metadata.get("section_title") or "document"
+        return f"Source {source_title} (score: {chunk.score:.2f}):\n{chunk.text}"

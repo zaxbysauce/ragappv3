@@ -237,7 +237,7 @@ async def create_memory(
     except sqlite3.Error as e:
         logger.exception("Database error in create_memory (content length: %d)", len(request.content))
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
-    except Exception as e:
+    except (ValueError, TypeError, RuntimeError) as e:
         logger.exception("Unexpected error in create_memory (content length: %d)", len(request.content))
         raise HTTPException(status_code=500, detail=f"Server error: {e}")
     
@@ -348,9 +348,10 @@ async def update_memory(
             created_at=row[5],
             updated_at=row[6],
         )
-    except Exception:
+    except (sqlite3.Error, OSError) as e:
+        logger.error(f"Database error during memory update: {e}")
         await asyncio.to_thread(lambda: conn.rollback())
-        raise
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
 
 @router.delete("/memories/{memory_id}")

@@ -360,7 +360,7 @@ class SQLiteConnectionPool:
             conn.execute("PRAGMA busy_timeout=30000;")
             conn.execute("PRAGMA foreign_keys = ON;")
             return conn
-        except Exception:
+        except (sqlite3.Error, OSError):
             # Decrement created count on any failure
             with self._lock:
                 self._created_count -= 1
@@ -517,7 +517,7 @@ class SQLiteConnectionPool:
             if conn is not None:
                 try:
                     self.release_connection(conn)
-                except Exception:
+                except (RuntimeError, sqlite3.Error):
                     # Ignore release errors to avoid masking original exception
                     pass
 

@@ -2,7 +2,7 @@
 Tests for tri-vector embedding service functionality.
 
 Tests cover:
-1. Lazy tri-vector detection via supports_tri_vector property
+1. Async tri-vector detection via detect_tri_vector_support() method
 2. URL parsing using urljoin() (security fix)
 3. Client reuse in embed_multi() (resource management)
 4. embed_multi() method returning tri-vectors
@@ -52,105 +52,110 @@ def mock_settings():
         yield mock
 
 
-class TestSupportsTriVector:
-    """Test suite for lazy tri-vector detection via supports_tri_vector property."""
+class TestDetectTriVectorSupport:
+    """Test suite for async tri-vector detection via detect_tri_vector_support() method."""
 
     def test_supports_tri_vector_returns_false_when_disabled(self, mock_settings):
         """Test that supports_tri_vector returns False when tri_vector_search_enabled=False."""
         mock_settings.tri_vector_search_enabled = False
-        
+
         service = EmbeddingService()
-        
+
         assert service.supports_tri_vector is False
 
     def test_supports_tri_vector_returns_false_when_no_flag_base_url(self, mock_settings):
         """Test that supports_tri_vector returns False when flag_base_url is not set."""
         mock_settings.tri_vector_search_enabled = True
         mock_settings.flag_embedding_url = None
-        
+
         service = EmbeddingService()
-        
+
         # Even with tri_vector enabled, if flag_base_url is None, should return False
         assert service.supports_tri_vector is False
 
-    def test_supports_tri_vector_triggers_detection_on_first_access(self, mock_settings):
-        """Test that supports_tri_vector triggers detection on first access."""
+    @pytest.mark.asyncio
+    async def test_detect_tri_vector_support_triggers_on_first_access(self, mock_settings):
+        """Test that detect_tri_vector_support triggers detection on first access."""
         mock_settings.tri_vector_search_enabled = True
         mock_settings.flag_embedding_url = "http://localhost:8000"
-        
-        with patch('app.services.embeddings.httpx.get') as mock_get:
+
+        service = EmbeddingService()
+
+        with patch.object(service._client, 'get', new_callable=AsyncMock) as mock_get:
             # Mock successful detection
             mock_response = MagicMock()
             mock_response.status_code = 200
             mock_response.json.return_value = {"supports_sparse": True}
             mock_get.return_value = mock_response
-            
-            service = EmbeddingService()
-            
+
             # First access should trigger detection
-            result = service.supports_tri_vector
-            
+            result = await service.detect_tri_vector_support()
+
             assert result is True
             # Verify detection was called
             mock_get.assert_called_once()
-            # Get the URL that was passed to httpx.get
+            # Get the URL that was passed to client.get
             call_args = mock_get.call_args
             assert 'health' in call_args[0][0]
 
-    def test_supports_tri_vector_caches_result(self, mock_settings):
-        """Test that supports_tri_vector caches the result after first detection."""
+    @pytest.mark.asyncio
+    async def test_detect_tri_vector_support_caches_result(self, mock_settings):
+        """Test that detect_tri_vector_support caches the result after first detection."""
         mock_settings.tri_vector_search_enabled = True
         mock_settings.flag_embedding_url = "http://localhost:8000"
-        
-        with patch('app.services.embeddings.httpx.get') as mock_get:
+
+        service = EmbeddingService()
+
+        with patch.object(service._client, 'get', new_callable=AsyncMock) as mock_get:
             mock_response = MagicMock()
             mock_response.status_code = 200
             mock_response.json.return_value = {"supports_sparse": True}
             mock_get.return_value = mock_response
-            
-            service = EmbeddingService()
-            
+
             # First access
-            _ = service.supports_tri_vector
+            _ = await service.detect_tri_vector_support()
             first_call_count = mock_get.call_count
-            
+
             # Second access should use cached value
-            result = service.supports_tri_vector
-            
+            result = await service.detect_tri_vector_support()
+
             assert result is True
             # Detection should only be called once
             assert mock_get.call_count == first_call_count
 
-    def test_supports_tri_vector_returns_false_on_detection_failure(self, mock_settings):
-        """Test that supports_tri_vector returns False when detection fails."""
+    @pytest.mark.asyncio
+    async def test_detect_tri_vector_support_returns_false_on_failure(self, mock_settings):
+        """Test that detect_tri_vector_support returns False when detection fails."""
         mock_settings.tri_vector_search_enabled = True
         mock_settings.flag_embedding_url = "http://localhost:8000"
-        
-        with patch('app.services.embeddings.httpx.get') as mock_get:
-            # Mock connection error
-            mock_get.side_effect = Exception("Connection refused")
-            
-            service = EmbeddingService()
-            
-            result = service.supports_tri_vector
-            
+
+        service = EmbeddingService()
+
+        with patch.object(service._client, 'get', new_callable=AsyncMock) as mock_get:
+            # Mock httpx error (which is caught by the code)
+            import httpx
+            mock_get.side_effect = httpx.ConnectError("Connection refused")
+
+            result = await service.detect_tri_vector_support()
+
             assert result is False
 
-    def test_supports_tri_vector_returns_false_when_supports_sparse_false(self, mock_settings):
-        """Test that supports_tri_vector returns False when server reports no sparse support."""
+    @pytest.mark.asyncio
+    async def test_detect_tri_vector_support_returns_false_when_sparse_false(self, mock_settings):
+        """Test that detect_tri_vector_support returns False when server reports no sparse support."""
         mock_settings.tri_vector_search_enabled = True
         mock_settings.flag_embedding_url = "http://localhost:8000"
-        
-        with patch('app.services.embeddings.httpx.get') as mock_get:
+
+        service = EmbeddingService()
+
+        with patch.object(service._client, 'get', new_callable=AsyncMock) as mock_get:
             mock_response = MagicMock()
             mock_response.status_code = 200
             mock_response.json.return_value = {"supports_sparse": False}
             mock_get.return_value = mock_response
-            
-            service = EmbeddingService()
-            
-            result = service.supports_tri_vector
-            
+
+            result = await service.detect_tri_vector_support()
+
             assert result is False
 
 
@@ -204,44 +209,48 @@ class TestEmbedMultiFallback:
 class TestURLConstructionSecurity:
     """Test suite for URL construction using urljoin (security fix)."""
 
-    def test_urljoin_used_for_health_endpoint(self, mock_settings):
+    @pytest.mark.asyncio
+    async def test_urljoin_used_for_health_endpoint(self, mock_settings):
         """Test that URL construction uses urljoin for health endpoint."""
         mock_settings.tri_vector_search_enabled = True
         mock_settings.flag_embedding_url = "http://localhost:8000"
-        
-        with patch('app.services.embeddings.httpx.get') as mock_get:
+
+        service = EmbeddingService()
+
+        with patch.object(service._client, 'get', new_callable=AsyncMock) as mock_get:
             mock_response = MagicMock()
             mock_response.status_code = 200
             mock_response.json.return_value = {"supports_sparse": True}
             mock_get.return_value = mock_response
-            
-            service = EmbeddingService()
-            _ = service.supports_tri_vector
-            
+
+            _ = await service.detect_tri_vector_support()
+
             # Verify URL was constructed correctly with urljoin
             call_args = mock_get.call_args
             called_url = call_args[0][0]
-            
+
             # Should be http://localhost:8000/health (properly joined)
             assert called_url == "http://localhost:8000/health"
 
-    def test_urljoin_handles_trailing_slash(self, mock_settings):
+    @pytest.mark.asyncio
+    async def test_urljoin_handles_trailing_slash(self, mock_settings):
         """Test that urljoin handles base URLs with trailing slash."""
         mock_settings.tri_vector_search_enabled = True
         mock_settings.flag_embedding_url = "http://localhost:8000/"
-        
-        with patch('app.services.embeddings.httpx.get') as mock_get:
+
+        service = EmbeddingService()
+
+        with patch.object(service._client, 'get', new_callable=AsyncMock) as mock_get:
             mock_response = MagicMock()
             mock_response.status_code = 200
             mock_response.json.return_value = {"supports_sparse": True}
             mock_get.return_value = mock_response
-            
-            service = EmbeddingService()
-            _ = service.supports_tri_vector
-            
+
+            _ = await service.detect_tri_vector_support()
+
             call_args = mock_get.call_args
             called_url = call_args[0][0]
-            
+
             # urljoin should handle trailing slash correctly
             assert called_url == "http://localhost:8000/health"
 
@@ -250,17 +259,18 @@ class TestURLConstructionSecurity:
         """Test that embed_multi uses urljoin for /embed endpoint."""
         mock_settings.tri_vector_search_enabled = True
         mock_settings.flag_embedding_url = "http://localhost:8000"
-        
-        with patch('app.services.embeddings.httpx.get') as mock_get:
+
+        service = EmbeddingService()
+
+        with patch.object(service._client, 'get', new_callable=AsyncMock) as mock_get:
             # Mock successful detection
             mock_response = MagicMock()
             mock_response.status_code = 200
             mock_response.json.return_value = {"supports_sparse": True}
             mock_get.return_value = mock_response
-            
-            service = EmbeddingService()
-            _ = service.supports_tri_vector  # Trigger detection
-        
+
+            _ = await service.detect_tri_vector_support()  # Trigger detection
+
         # Now test embed_multi with tri-vector support
         with patch.object(service._client, 'post', new_callable=AsyncMock) as mock_post:
             mock_post_response = MagicMock()
@@ -269,14 +279,14 @@ class TestURLConstructionSecurity:
                 {"dense": [0.1] * 768, "sparse": {"indices": [1, 2], "values": [0.5, 0.3]}, "colbert": None}
             ]
             mock_post.return_value = mock_post_response
-            
+
             texts = ["test text"]
             await service.embed_multi(texts)
-            
+
             # Verify URL was constructed with urljoin
             call_args = mock_post.call_args
             called_url = call_args[0][0]
-            
+
             # Should be http://localhost:8000/embed (properly joined)
             assert called_url == "http://localhost:8000/embed"
 
@@ -356,18 +366,19 @@ class TestClientReuse:
         """Test that embed_multi uses self._client when tri-vector is supported."""
         mock_settings.tri_vector_search_enabled = True
         mock_settings.flag_embedding_url = "http://localhost:8000"
-        
-        with patch('app.services.embeddings.httpx.get') as mock_get:
+
+        service = EmbeddingService()
+
+        with patch.object(service._client, 'get', new_callable=AsyncMock) as mock_get:
             mock_response = MagicMock()
             mock_response.status_code = 200
             mock_response.json.return_value = {"supports_sparse": True}
             mock_get.return_value = mock_response
-            
-            service = EmbeddingService()
-            _ = service.supports_tri_vector
-        
+
+            _ = await service.detect_tri_vector_support()
+
         client = service._client
-        
+
         with patch.object(client, 'post', new_callable=AsyncMock) as mock_post:
             mock_post_response = MagicMock()
             mock_post_response.raise_for_status = MagicMock()
@@ -375,9 +386,9 @@ class TestClientReuse:
                 {"dense": [0.1] * 768, "sparse": {"indices": [1], "values": [0.5]}, "colbert": None}
             ]
             mock_post.return_value = mock_post_response
-            
+
             result = await service.embed_multi(["test text"])
-            
+
             mock_post.assert_called_once()
 
     @pytest.mark.asyncio
@@ -439,16 +450,17 @@ class TestEmbedMultiTriVector:
         """Test that embed_multi returns tri-vector format when supported."""
         mock_settings.tri_vector_search_enabled = True
         mock_settings.flag_embedding_url = "http://localhost:8000"
-        
-        with patch('app.services.embeddings.httpx.get') as mock_get:
+
+        service = EmbeddingService()
+
+        with patch.object(service._client, 'get', new_callable=AsyncMock) as mock_get:
             mock_detection_response = MagicMock()
             mock_detection_response.status_code = 200
             mock_detection_response.json.return_value = {"supports_sparse": True}
             mock_get.return_value = mock_detection_response
-            
-            service = EmbeddingService()
-            _ = service.supports_tri_vector
-        
+
+            _ = await service.detect_tri_vector_support()
+
         # Mock the tri-vector response
         expected_response = [
             {
@@ -487,22 +499,25 @@ class TestEmbedMultiTriVector:
         """Test that embed_multi raises EmbeddingError on HTTP error."""
         mock_settings.tri_vector_search_enabled = True
         mock_settings.flag_embedding_url = "http://localhost:8000"
-        
-        with patch('app.services.embeddings.httpx.get') as mock_get:
+
+        service = EmbeddingService()
+
+        with patch.object(service._client, 'get', new_callable=AsyncMock) as mock_get:
             mock_detection_response = MagicMock()
             mock_detection_response.status_code = 200
             mock_detection_response.json.return_value = {"supports_sparse": True}
             mock_get.return_value = mock_detection_response
-            
-            service = EmbeddingService()
-            _ = service.supports_tri_vector
-        
+
+            _ = await service.detect_tri_vector_support()
+
         with patch.object(service._client, 'post', new_callable=AsyncMock) as mock_post:
-            mock_post.side_effect = Exception("Network error")
-            
+            # Mock httpx error (which triggers EmbeddingError conversion)
+            import httpx
+            mock_post.side_effect = httpx.ConnectError("Network error")
+
             with pytest.raises(EmbeddingError) as context:
                 await service.embed_multi(["test"])
-            
+
             assert "tri-vector" in str(context.value).lower()
 
     @pytest.mark.asyncio
@@ -510,31 +525,32 @@ class TestEmbedMultiTriVector:
         """Test that embed_multi posts to the /embed endpoint with correct payload."""
         mock_settings.tri_vector_search_enabled = True
         mock_settings.flag_embedding_url = "http://localhost:8000"
-        
-        with patch('app.services.embeddings.httpx.get') as mock_get:
+
+        service = EmbeddingService()
+
+        with patch.object(service._client, 'get', new_callable=AsyncMock) as mock_get:
             mock_detection_response = MagicMock()
             mock_detection_response.status_code = 200
             mock_detection_response.json.return_value = {"supports_sparse": True}
             mock_get.return_value = mock_detection_response
-            
-            service = EmbeddingService()
-            _ = service.supports_tri_vector
-        
+
+            _ = await service.detect_tri_vector_support()
+
         with patch.object(service._client, 'post', new_callable=AsyncMock) as mock_post:
             mock_response = MagicMock()
             mock_response.raise_for_status = MagicMock()
             mock_response.json.return_value = [{"dense": [0.1] * 768, "sparse": None, "colbert": None}]
             mock_post.return_value = mock_response
-            
+
             texts = ["hello world"]
             await service.embed_multi(texts)
-            
+
             # Verify the request was made correctly
             call_args = mock_post.call_args
             called_url = call_args[0][0]
             called_json = call_args[1]['json']
             called_headers = call_args[1]['headers']
-            
+
             assert "/embed" in called_url
             assert called_json == {"input": texts}
             assert called_headers["Content-Type"] == "application/json"

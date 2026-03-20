@@ -27,12 +27,12 @@ KnowledgeVault enables you to:
 
 ## Architecture
 
+### System Overview
+
 ```
 +------------------+     +------------------+     +------------------+
 |   React Frontend |---->|  FastAPI Backend |---->|   LanceDB Vector |
 |   (Port 5173*)   |     |   (Port 8080)    |     |   Store          |
-
-*Port 5173 is for development only. Production access is via port 8080.
 +------------------+     +------------------+     +------------------+
                                |                           |
                                |                    +------v------+
@@ -42,9 +42,60 @@ KnowledgeVault enables you to:
                                |
                         +------v---------------------------+
                         |  Ollama (External)               |
-                         |  - Embeddings (bge-m3) |
+                        |  - Embeddings (nomic-embed-text) |
                         |  - Chat (your choice of model)   |
                         +----------------------------------+
+
+*Port 5173 is for development only. Production access is via port 8080.
+```
+
+### Backend Structure
+
+```
+backend/app/
+├── main.py                 # FastAPI entry point
+├── lifespan.py             # Application lifecycle management
+├── config.py               # Configuration settings
+├── security.py             # Authentication & authorization
+├── limiter.py              # Rate limiting
+│
+├── api/                    # REST API routes
+│   ├── routes/
+│   │   ├── chat.py         # Chat endpoints
+│   │   ├── documents.py    # Document management
+│   │   ├── search.py       # Search endpoints
+│   │   ├── memories.py     # Memory management
+│   │   ├── vaults.py       # Vault management
+│   │   ├── settings.py     # App settings
+│   │   ├── email.py        # Email ingestion
+│   │   ├── health.py       # Health checks
+│   │   └── admin.py        # Admin endpoints
+│   └── deps.py             # Dependencies (DB, auth)
+│
+├── services/               # Business logic
+│   ├── document_retrieval.py   # Document search & retrieval
+│   ├── prompt_builder.py       # LLM prompt construction
+│   ├── rag_engine.py           # RAG orchestration
+│   ├── vector_store.py         # Vector DB operations
+│   ├── embeddings.py           # Embedding generation
+│   ├── document_processor.py   # File parsing & chunking
+│   ├── memory_store.py         # Memory storage/retrieval
+│   ├── file_watcher.py         # Directory monitoring
+│   ├── llm_client.py           # LLM API client
+│   ├── email_service.py        # IMAP email ingestion
+│   ├── reranking.py            # Result reranking
+│   └── ...                     # Additional services
+│
+├── models/                 # Data models
+│   └── database.py         # Database schemas
+│
+├── middleware/             # FastAPI middleware
+│   ├── logging.py          # Request logging
+│   └── maintenance.py      # Maintenance mode
+│
+└── utils/                  # Utility functions
+    ├── file_utils.py       # File operations
+    └── retry.py            # Retry logic
 ```
 
 ### Technology Stack
@@ -101,7 +152,7 @@ ollama list
 
 ```bash
 # Required: Embedding model
-ollama pull bge-m3
+ollama pull nomic-embed-text
 
 # Required: Chat model (choose one)
 ollama pull qwen2.5:32b    # Recommended for technical content
@@ -129,12 +180,12 @@ Open your browser to: `http://localhost:8080`
 | `DATA_DIR` | /app/data | Container data path |
 | `OLLAMA_EMBEDDING_URL` | http://host.docker.internal:11434 | Ollama embedding endpoint |
 | `OLLAMA_CHAT_URL` | http://host.docker.internal:11434 | Ollama chat endpoint |
-| `EMBEDDING_MODEL` | bge-m3 | Embedding model name |
+| `EMBEDDING_MODEL` | nomic-embed-text | Embedding model name |
 | `CHAT_MODEL` | qwen2.5:32b | Chat model name |
-| `CHUNK_SIZE` | 512 | Document chunk size (tokens) |
-| `CHUNK_OVERLAP` | 50 | Chunk overlap (tokens) |
-| `MAX_CONTEXT_CHUNKS` | 10 | Max chunks in RAG context |
-| `RAG_RELEVANCE_THRESHOLD` | 0.1 | Minimum relevance score (0.0-1.0) |
+| `CHUNK_SIZE_CHARS` | 2000 | Document chunk size in characters (~500 tokens) |
+| `CHUNK_OVERLAP_CHARS` | 200 | Chunk overlap in characters (~50 tokens) |
+| `RETRIEVAL_TOP_K` | 12 | Number of chunks to retrieve for RAG context |
+| `MAX_DISTANCE_THRESHOLD` | 0.5 | Maximum distance threshold for relevance (cosine: 0=identical, 1=orthogonal) |
 | `LOG_LEVEL` | INFO | Logging level |
 | `AUTO_SCAN_ENABLED` | true | Enable auto-scanning |
 | `AUTO_SCAN_INTERVAL_MINUTES` | 60 | Scan interval |
@@ -175,14 +226,14 @@ data/
 
 #### Embedding Model
 
-**bge-m3** (Required)
+**nomic-embed-text** (Required)
 - 768 dimensions
-- 8192 token context
-- ~0.5GB VRAM
+- 2048 token context
+- ~0.2GB VRAM
 - Excellent for technical content
 
 ```bash
-ollama pull bge-m3
+ollama pull nomic-embed-text
 ```
 
 #### Chat Models
@@ -207,7 +258,7 @@ curl http://localhost:11434/api/tags
 
 # Test embedding model
 curl http://localhost:11434/api/embeddings -d '{
-  "model": "bge-m3",
+  "model": "nomic-embed-text",
   "prompt": "test"
 }'
 ```
@@ -258,7 +309,7 @@ docker compose logs knowledgevault
 **Problem:** Container crashes during document processing
 
 **Solutions:**
-1. Reduce `CHUNK_SIZE` in `.env` (e.g., 256)
+1. Reduce `CHUNK_SIZE_CHARS` in `.env` (e.g., 1000)
 2. Process fewer files at once
 3. Increase Docker memory limit
 4. Use smaller chat model
@@ -269,8 +320,8 @@ docker compose logs knowledgevault
 
 **Solutions:**
 1. Use a smaller/faster chat model
-2. Reduce `MAX_CONTEXT_CHUNKS` in `.env`
-3. Increase `RAG_RELEVANCE_THRESHOLD` to filter more chunks
+2. Reduce `RETRIEVAL_TOP_K` in `.env`
+3. Adjust `MAX_DISTANCE_THRESHOLD` to filter results (lower = more strict)
 4. Ensure Ollama has GPU access if available
 
 ## API Endpoints

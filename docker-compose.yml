@@ -7,9 +7,9 @@ services:
     ports:
       - "${PORT:-8080}:8080"
     volumes:
-      - ${HOST_DATA_DIR:-./data}:/data/knowledgevault
+      - ${HOST_DATA_DIR:-./data}:/app/data
     environment:
-      - DATA_DIR=/data/knowledgevault
+      - DATA_DIR=/app/data
       - OLLAMA_EMBEDDING_URL=${OLLAMA_EMBEDDING_URL:-http://flag-embed:18080/v1/embeddings}
       - OLLAMA_CHAT_URL=${OLLAMA_CHAT_URL:-http://host.docker.internal:11434}
       - FLAG_EMBEDDING_URL=${FLAG_EMBEDDING_URL:-http://flag-embed:18080}

@@ -3,7 +3,6 @@ Semantic search API routes for document chunks.
 
 Provides endpoints for searching document chunks using vector similarity.
 """
-import asyncio
 import json
 from typing import Any, Dict, List, Optional
 
@@ -73,12 +72,11 @@ async def search(
         
         # Initialize vector store table
         embedding_dim = len(query_embedding)
-        await asyncio.to_thread(vector_store.init_table, embedding_dim)
+        await vector_store.init_table(embedding_dim)
         
         # Perform semantic search
         vault_id_str = str(request.vault_id) if request.vault_id is not None else None
-        raw_results = await asyncio.to_thread(
-            vector_store.search,
+        raw_results = await vector_store.search(
             embedding=query_embedding,
             limit=request.limit,
             vault_id=vault_id_str
