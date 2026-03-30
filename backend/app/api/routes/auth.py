@@ -13,6 +13,7 @@ from app.services.auth_service import (
     create_access_token,
     create_refresh_token,
     hash_password,
+    password_strength_check,
     verify_password,
 )
 
@@ -50,10 +51,10 @@ async def register(
         raise HTTPException(
             status_code=400, detail="Username must be at least 3 characters"
         )
-    if not body.password or len(body.password) < 8:
-        raise HTTPException(
-            status_code=400, detail="Password must be at least 8 characters"
-        )
+    try:
+        password_strength_check(body.password)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     # Check username uniqueness (case-insensitive)
     cursor = db.execute(
@@ -352,10 +353,10 @@ async def update_me(
 
     # Invalidate sessions when password changes (in same transaction)
     if body.password is not None:
-        if len(body.password) < 8:
-            raise HTTPException(
-                status_code=400, detail="Password must be at least 8 characters"
-            )
+        try:
+            password_strength_check(body.password)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
         hashed_pw = hash_password(body.password)
         updates.append("hashed_password = ?")
         params.append(hashed_pw)

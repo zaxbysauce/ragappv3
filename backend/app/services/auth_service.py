@@ -41,6 +41,22 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         return False
 
 
+def password_strength_check(plain_password: str) -> None:
+    """Validate password strength. Raises ValueError with specific message if invalid."""
+    if not plain_password:
+        raise ValueError("Password cannot be empty")
+    if len(plain_password) > 128:
+        raise ValueError("Password cannot exceed 128 characters")
+    if plain_password != plain_password.strip():
+        raise ValueError("Password cannot be only whitespace")
+    if len(plain_password) < 8:
+        raise ValueError("Password must be at least 8 characters long")
+    if not any(char.isdigit() for char in plain_password):
+        raise ValueError("Password must contain at least one digit")
+    if not any(char.isupper() for char in plain_password):
+        raise ValueError("Password must contain at least one uppercase letter")
+
+
 def create_access_token(user_id: int, username: str, role: str) -> str:
     """Create a JWT access token."""
     secret, algorithm = get_jwt_config()
