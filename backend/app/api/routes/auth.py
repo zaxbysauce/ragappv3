@@ -100,7 +100,7 @@ async def login(
 ):
     """Login and receive access token + refresh cookie."""
     cursor = db.execute(
-        "SELECT id, username, hashed_password, full_name, role, is_active FROM users WHERE username = ? COLLATE NOCASE",
+        "SELECT id, username, hashed_password, full_name, role, is_active, failed_attempts, locked_until FROM users WHERE username = ? COLLATE NOCASE",
         (body.username,),
     )
     row = cursor.fetchone()
@@ -108,12 +108,53 @@ async def login(
     if not row:
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
-    user_id, db_username, hashed_pw, full_name, role, is_active = row
+    (
+        user_id,
+        db_username,
+        hashed_pw,
+        full_name,
+        role,
+        is_active,
+        failed_attempts,
+        locked_until,
+    ) = row
 
     if not is_active:
         raise HTTPException(status_code=403, detail="User account is inactive")
 
+    # Lockout check (before password verify)
+    if locked_until:
+        locked_until_dt = datetime.fromisoformat(locked_until)
+        if locked_until_dt > datetime.now(timezone.utc):
+            retry_after = int(
+                (locked_until_dt - datetime.now(timezone.utc)).total_seconds()
+            )
+            raise HTTPException(
+                status_code=423,
+                detail=f"Account locked. Try again in {retry_after // 60} minutes.",
+                headers={"Retry-After": str(retry_after)},
+            )
+
     if not verify_password(body.password, hashed_pw):
+        # Increment failed attempts
+        db.execute(
+            "UPDATE users SET failed_attempts = failed_attempts + 1 WHERE id = ?",
+            (user_id,),
+        )
+        # Check if we should lock the account
+        if failed_attempts + 1 >= 5:
+            lockout_until = datetime.now(timezone.utc) + timedelta(minutes=15)
+            db.execute(
+                "UPDATE users SET locked_until = ? WHERE id = ?",
+                (lockout_until.isoformat(), user_id),
+            )
+            db.commit()
+            raise HTTPException(
+                status_code=423,
+                detail="Account locked due to too many failed attempts. Try again in 15 minutes.",
+                headers={"Retry-After": "900"},
+            )
+        db.commit()
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
     # Create tokens
@@ -136,8 +177,9 @@ async def login(
                 user_agent,
             ),
         )
+        # On successful login: reset failed_attempts, clear locked_until, update last_login_at
         db.execute(
-            "UPDATE users SET last_login_at = ? WHERE id = ?",
+            "UPDATE users SET failed_attempts = 0, locked_until = NULL, last_login_at = ? WHERE id = ?",
             (datetime.now(timezone.utc).isoformat(), user_id),
         )
         db.commit()

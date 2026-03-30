@@ -1,5 +1,5 @@
 """
-SQLite database initialization and schema for RAGAPPv2.
+SQLite database initialization and schema for RAGAPPv3.
 
 This module provides the database schema and initialization helper for the application.
 """
@@ -45,6 +45,9 @@ CREATE TABLE IF NOT EXISTS files (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     processed_at TIMESTAMP,
     modified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    document_date TEXT,
+    supersedes_file_id INTEGER,
+    ingestion_version INTEGER DEFAULT 1,
     FOREIGN KEY (vault_id) REFERENCES vaults(id)
 );
 
@@ -88,6 +91,7 @@ END;
 CREATE TABLE IF NOT EXISTS chat_sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     vault_id INTEGER NOT NULL DEFAULT 1,
+    user_id INTEGER,
     title TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -171,7 +175,10 @@ CREATE TABLE IF NOT EXISTS users (
     role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('superadmin','admin','member','viewer')),
     is_active INTEGER NOT NULL DEFAULT 1,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    last_login_at TIMESTAMP
+    last_login_at TIMESTAMP,
+    must_change_password INTEGER NOT NULL DEFAULT 0,
+    failed_attempts INTEGER NOT NULL DEFAULT 0,
+    locked_until TIMESTAMP
 );
 
 -- Organizations table: stores organization entities
@@ -276,6 +283,11 @@ CREATE INDEX IF NOT EXISTS idx_vault_members_vault_id ON vault_members(vault_id)
 CREATE INDEX IF NOT EXISTS idx_vault_members_user_id ON vault_members(user_id);
 CREATE INDEX IF NOT EXISTS idx_vault_group_access_vault_id ON vault_group_access(vault_id);
 CREATE INDEX IF NOT EXISTS idx_vault_group_access_group_id ON vault_group_access(group_id);
+CREATE INDEX IF NOT EXISTS idx_users_locked_until ON users(locked_until);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_expires ON user_sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_user_id ON chat_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_memories_vault_id ON memories(vault_id);
+CREATE INDEX IF NOT EXISTS idx_memories_created_at ON memories(created_at);
 """
 
 
