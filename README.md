@@ -20,10 +20,15 @@ KnowledgeVault enables you to:
 | **Vector Search** | LanceDB-powered semantic search with relevance scoring |
 | **Memory System** | SQLite FTS5-backed memory storage with natural language retrieval |
 | **Streaming Chat** | Real-time AI responses with source citations |
+| **Auto-Titling** | LLM-generated session titles from first message |
 | **File Watcher** | Automatic detection and processing of new documents |
 | **Email Ingestion** | Ingest documents via email with IMAP polling and vault routing |
-| **Web UI** | Modern React interface with Material 3 design |
+| **Web UI** | Modern React interface with responsive three-zone chat workspace |
 | **API Access** | Full REST API with OpenAPI documentation |
+| **JWT Authentication** | Login, registration, token refresh with httpOnly cookie sessions |
+| **Role-Based Access** | Superadmin, admin, member, viewer roles with route guards |
+| **Multi-Tenancy** | Organization management with member CRUD |
+| **Setup Wizard** | One-time admin account creation on first launch |
 
 ## Architecture
 
@@ -104,6 +109,7 @@ backend/app/
 |-----------|------------|
 | Frontend | React 18, TypeScript, Vite, shadcn/ui, Tailwind CSS |
 | Backend | Python 3.11, FastAPI, Pydantic |
+| Auth | JWT (access + httpOnly refresh cookies), bcrypt password hashing |
 | Vector DB | LanceDB (embedded) |
 | Memory DB | SQLite with FTS5 |
 | Document Processing | Unstructured.io |
@@ -169,6 +175,10 @@ docker compose up -d
 
 Open your browser to: `http://localhost:8080`
 
+On first launch, you'll be redirected to the **Setup Wizard** (`/setup`) to create the initial superadmin account. After setup, log in with your credentials.
+
+> **Security:** In production, set `JWT_SECRET_KEY` to a random value and change the default admin password immediately.
+
 ## Environment Setup
 
 ### Environment Variables
@@ -196,6 +206,10 @@ Open your browser to: `http://localhost:8080`
 | `IMAP_USERNAME` | - | IMAP account username |
 | `IMAP_PASSWORD` | - | IMAP account password |
 | `IMAP_POLL_INTERVAL` | 60 | Email poll interval (seconds) |
+| `USERS_ENABLED` | true | Enable multi-user JWT authentication |
+| `JWT_SECRET_KEY` | change-me-... | Secret key for JWT signing (generate with `python -c "import secrets; print(secrets.token_urlsafe(48))"`) |
+| `JWT_ALGORITHM` | HS256 | JWT signing algorithm |
+| `ADMIN_SECRET_TOKEN` | "" | Legacy admin token for API key auth mode |
 
 ### Data Directory Structure
 
@@ -332,12 +346,50 @@ docker compose logs knowledgevault
 |--------|----------|-------------|
 | GET | `/health` | Service health status |
 
-### Chat
+### Authentication
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/auth/setup-status` | Check if initial admin setup is needed |
+| POST | `/api/auth/register` | Register a new user (requires setup complete) |
+| POST | `/api/auth/login` | Login with username/password (returns JWT) |
+| POST | `/api/auth/logout` | Logout (clears httpOnly refresh cookie) |
+| POST | `/api/auth/refresh` | Refresh access token using httpOnly cookie |
+| GET | `/api/auth/me` | Get current authenticated user profile |
+| PATCH | `/api/auth/me` | Update current user profile (name, password) |
+
+### Users (Admin)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/users/` | List all users (admin+) |
+| PATCH | `/api/users/{id}` | Update user role or active status (admin+) |
+| DELETE | `/api/users/{id}` | Delete user (superadmin only) |
+
+### Organizations
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/orgs/` | List all organizations |
+| POST | `/api/orgs/` | Create organization |
+| GET | `/api/orgs/{id}` | Get organization details |
+| PUT | `/api/orgs/{id}` | Update organization |
+| DELETE | `/api/orgs/{id}` | Delete organization |
+| POST | `/api/orgs/{id}/members` | Add member to organization |
+| DELETE | `/api/orgs/{id}/members/{user_id}` | Remove member from organization |
+
+### Chat Sessions
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/api/chat` | Non-streaming chat |
 | POST | `/api/chat/stream` | Streaming chat (SSE) |
+| GET | `/api/chat/sessions` | List all sessions (with message count) |
+| GET | `/api/chat/sessions/{id}` | Get session with messages |
+| POST | `/api/chat/sessions` | Create new session |
+| POST | `/api/chat/sessions/{id}/messages` | Add message to session |
+| PUT | `/api/chat/sessions/{id}` | Update session title |
+| DELETE | `/api/chat/sessions/{id}` | Delete session (CASCADE deletes messages) |
 
 ### Documents
 
@@ -379,25 +431,106 @@ Interactive API docs available at: `http://localhost:8080/docs`
 
 OpenAPI schema: `http://localhost:8080/openapi.json`
 
+### Source Citations
+
+Chat responses include source citations in the following format:
+
+```
+The answer is based on [Source: filename.pdf].
+```
+
+Sources are returned in the SSE `done` event and include:
+- `id` - Unique source identifier
+- `filename` - Original document filename
+- `score` - Relevance score (0-1, lower is better for distance)
+- `score_type` - Scoring method: `distance`, `rerank`, or `rrf`
+
+Use `getRelevanceLabel(score, score_type)` to display descriptive relevance labels:
+- `distance`: "Exact" (0-0.2), "High" (0.2-0.4), "Medium" (0.4-0.6), "Low" (0.6+)
+- `rerank`: "Relevant", "Somewhat Relevant", "Marginal"
+- `rrf`: Rank position (1st, 2nd, 3rd, etc.)
+
 ## Frontend Usage
 
 ### Navigation
 
-The web interface uses a navigation rail with five sections:
+The web interface uses a navigation rail with six sections:
 
 1. **Chat** - Ask questions about your documents
 2. **Search** - Find specific content in your knowledge base
 3. **Documents** - Upload and manage documents
 4. **Memory** - View and manage stored memories
-5. **Settings** - Configure application settings
+5. **Vaults** - Manage vault-specific settings and members
+6. **Settings** - Configure application settings
+
+Admin users also have access to:
+- **Admin > Users** (`/admin/users`) - Manage user accounts, roles, and active status
+- **Admin > Organizations** (`/admin/organizations`) - Manage organizations and members
+
+### Authentication
+
+KnowledgeVault supports JWT-based authentication with optional API key fallback.
+
+**First-Time Setup:**
+1. On first launch, the app redirects to `/setup`
+2. Create the initial superadmin account (username, password)
+3. After setup, the system switches to JWT auth mode
+
+**Login:**
+- JWT mode: Enter username and password on the login page
+- API key mode: Enter your API key (legacy support)
+- Sessions persist across browser refreshes via httpOnly refresh cookies
+
+**User Roles:**
+
+| Role | Permissions |
+|------|-------------|
+| **Superadmin** | Full access: manage users, orgs, delete any user |
+| **Admin** | Manage users (role changes, activate/deactivate), orgs |
+| **Member** | Standard access: chat, documents, search, memory |
+| **Viewer** | Read-only access to chat and search |
+
+**Profile Management:**
+- Update display name and change password at `/profile`
+- Password must be at least 8 characters
+
+**Route Protection:**
+- All app routes require authentication via `ProtectedRoute`
+- Admin routes use `AdminGuard` (admin + superadmin)
+- Unauthenticated users are redirected to login with return URL preserved
 
 ### Chat Interface
 
-1. Type your question in the input field
-2. Press Enter or click Send
-3. Watch the AI response stream in real-time
-4. Click "Sources" to see which documents were referenced
-5. Say "Remember that..." to save information to memory
+The chat interface provides a three-zone workspace layout:
+
+1. **Session Rail** (left) - Browse and manage chat sessions
+   - Search sessions by title or content
+   - Pin important sessions for quick access
+   - Grouped by time: Today, Yesterday, This Week, Older
+   - Inline rename, pin/unpin, and delete actions
+
+2. **Transcript Pane** (center) - View and send messages
+   - Real-time streaming AI responses
+   - Inline citation chips linking to source documents
+   - Evidence strip showing cited sources with relevance badges
+   - Hover actions: copy, retry, debug
+
+3. **Right Pane** (right) - View sources and evidence
+   - Relevance-ranked source documents
+   - Relevance scoring using `getRelevanceLabel()` (distance/rerank/rrf)
+   - Workspace tab for session management
+   - Resizable on desktop, bottom sheet on mobile
+
+**Mobile Layout:**
+- Session rail slides in from left as a Sheet
+- Right pane slides up from bottom (75vh, or 95vh for workspace tab)
+- Tap citation chips to open source in evidence panel
+
+**Auto-Titling:**
+- New chat sessions are automatically titled using LLM
+- Generates 3-6 word titles from the first message
+- Runs as background task (non-blocking)
+- Manual rename overwrites auto-generated title permanently
 
 ### Document Upload
 
@@ -451,6 +584,35 @@ cd frontend
 npm install
 npm run dev
 ```
+
+#### Chat Workspace Components
+
+The three-zone chat workspace is built from these key components:
+
+| Component | Path | Description |
+|-----------|------|-------------|
+| `ChatShell` | `src/pages/ChatShell.tsx` | Main layout with responsive sheets |
+| `SessionRail` | `src/components/chat/SessionRail.tsx` | Session list with search/pin/group |
+| `TranscriptPane` | `src/components/chat/TranscriptPane.tsx` | Message list and composer |
+| `AssistantMessage` | `src/components/chat/AssistantMessage.tsx` | Citation chips, evidence strip, actions |
+| `RightPane` | `src/components/chat/RightPane.tsx` | Sources and workspace tabs |
+| `useChatShellStore` | `src/stores/useChatShellStore.ts` | Session rail, right pane state |
+
+#### Auth Components
+
+| Component | Path | Description |
+|-----------|------|-------------|
+| `useAuthStore` | `src/stores/useAuthStore.ts` | Zustand auth store: user, JWT tokens, login/logout/refresh |
+| `ProtectedRoute` | `src/components/auth/ProtectedRoute.tsx` | Route guard — redirects to `/setup` or `/login` |
+| `RoleGuard` | `src/components/auth/RoleGuard.tsx` | Role-based access (accepts `allowedRoles` array) |
+| `AdminGuard` | `src/components/auth/RoleGuard.tsx` | Convenience wrapper for admin + superadmin |
+| `SuperAdminGuard` | `src/components/auth/RoleGuard.tsx` | Convenience wrapper for superadmin only |
+| `SetupPage` | `src/pages/SetupPage.tsx` | First-time admin account creation wizard |
+| `LoginPage` | `src/pages/LoginPage.tsx` | JWT login with API key fallback |
+| `RegisterPage` | `src/pages/RegisterPage.tsx` | User registration form |
+| `ProfilePage` | `src/pages/ProfilePage.tsx` | User profile and password change |
+| `AdminUsersPage` | `src/pages/AdminUsersPage.tsx` | Admin user management (role/active/delete) |
+| `OrgsPage` | `src/pages/OrgsPage.tsx` | Organization management with member CRUD |
 
 ### Building Production Images
 

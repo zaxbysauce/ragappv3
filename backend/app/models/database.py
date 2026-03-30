@@ -4,11 +4,17 @@ SQLite database initialization and schema for RAGAPPv2.
 This module provides the database schema and initialization helper for the application.
 """
 
+import logging
+import shutil
 import sqlite3
 import threading
 from pathlib import Path
 from queue import Queue, Empty, Full
 from contextlib import contextmanager
+
+from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 # Database schema definition
 SCHEMA = """
@@ -155,6 +161,121 @@ CREATE TABLE IF NOT EXISTS settings_kv (
     value TEXT NOT NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Users table: stores user accounts for authentication
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    hashed_password TEXT NOT NULL,
+    full_name TEXT DEFAULT '',
+    role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('superadmin','admin','member','viewer')),
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_login_at TIMESTAMP
+);
+
+-- Organizations table: stores organization entities
+CREATE TABLE IF NOT EXISTS organizations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    description TEXT DEFAULT '',
+    slug TEXT UNIQUE,
+    created_by INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (created_by) REFERENCES users(id)
+);
+
+-- Organization members table: links users to organizations with roles
+CREATE TABLE IF NOT EXISTS org_members (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('owner','admin','member')),
+    joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE(org_id, user_id)
+);
+
+-- Groups table: stores permission groups within organizations
+CREATE TABLE IF NOT EXISTS groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
+    UNIQUE(org_id, name)
+);
+
+-- Group members table: links users to groups
+CREATE TABLE IF NOT EXISTS group_members (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE(group_id, user_id)
+);
+
+-- User sessions table: stores refresh tokens for authentication
+CREATE TABLE IF NOT EXISTS user_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    refresh_token_hash TEXT NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_used_at TIMESTAMP,
+    ip_address TEXT,
+    user_agent TEXT,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- Indexes for auth tables
+CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+CREATE INDEX IF NOT EXISTS idx_org_members_org_id ON org_members(org_id);
+CREATE INDEX IF NOT EXISTS idx_org_members_user_id ON org_members(user_id);
+CREATE INDEX IF NOT EXISTS idx_group_members_group_id ON group_members(group_id);
+CREATE INDEX IF NOT EXISTS idx_group_members_user_id ON group_members(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_refresh_hash ON user_sessions(refresh_token_hash);
+
+-- Vault members table: direct user access to vaults
+CREATE TABLE IF NOT EXISTS vault_members (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    vault_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    permission TEXT NOT NULL DEFAULT 'read' CHECK (permission IN ('read','write','admin')),
+    granted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    granted_by INTEGER,
+    FOREIGN KEY (vault_id) REFERENCES vaults(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (granted_by) REFERENCES users(id) ON DELETE SET NULL,
+    UNIQUE(vault_id, user_id)
+);
+
+-- Vault group access table: group-based access to vaults
+CREATE TABLE IF NOT EXISTS vault_group_access (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    vault_id INTEGER NOT NULL,
+    group_id INTEGER NOT NULL,
+    permission TEXT NOT NULL DEFAULT 'read' CHECK (permission IN ('read','write','admin')),
+    granted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    granted_by INTEGER,
+    FOREIGN KEY (vault_id) REFERENCES vaults(id) ON DELETE CASCADE,
+    FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+    FOREIGN KEY (granted_by) REFERENCES users(id) ON DELETE SET NULL,
+    UNIQUE(vault_id, group_id)
+);
+
+-- Indexes for vault permission tables
+CREATE INDEX IF NOT EXISTS idx_vault_members_vault_id ON vault_members(vault_id);
+CREATE INDEX IF NOT EXISTS idx_vault_members_user_id ON vault_members(user_id);
+CREATE INDEX IF NOT EXISTS idx_vault_group_access_vault_id ON vault_group_access(vault_id);
+CREATE INDEX IF NOT EXISTS idx_vault_group_access_group_id ON vault_group_access(group_id);
 """
 
 
@@ -205,24 +326,28 @@ def run_migrations(sqlite_path: str) -> None:
     init_db(sqlite_path)
     migrate_add_vaults(sqlite_path)
     migrate_add_email_columns(sqlite_path)
+    migrate_add_user_org_tables(sqlite_path)
+    migrate_add_vault_permission_columns(sqlite_path)
+    migrate_vault_paths(sqlite_path)
+    migrate_add_org_slug_column(sqlite_path)
 
 
 def migrate_add_vaults(sqlite_path: str) -> None:
     """
     Migration: Add vaults table and vault_id columns to existing databases.
-    
+
     This migration is idempotent — safe to run multiple times.
     It creates the vaults table, inserts a default vault, adds vault_id
     columns to files/memories/chat_sessions if missing, and backfills
     existing rows with the default vault.
-    
+
     Args:
         sqlite_path: Path to the SQLite database file.
     """
     conn = sqlite3.connect(sqlite_path)
     try:
         conn.execute("PRAGMA foreign_keys = ON;")
-        
+
         # 1. Create vaults table if not exists
         conn.execute("""
             CREATE TABLE IF NOT EXISTS vaults (
@@ -233,34 +358,44 @@ def migrate_add_vaults(sqlite_path: str) -> None:
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        
+
         # 2. Insert default vault
         conn.execute(
             "INSERT OR IGNORE INTO vaults (id, name, description) VALUES (1, 'Default', 'Default vault')"
         )
-        
+
         # 3. Add vault_id columns if missing (SQLite doesn't support IF NOT EXISTS for columns)
         def _column_exists(table: str, column: str) -> bool:
             cursor = conn.execute(f"PRAGMA table_info({table})")
             return any(row[1] == column for row in cursor.fetchall())
-        
+
         if not _column_exists("files", "vault_id"):
-            conn.execute("ALTER TABLE files ADD COLUMN vault_id INTEGER NOT NULL DEFAULT 1")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_files_vault_id ON files(vault_id)")
-        
+            conn.execute(
+                "ALTER TABLE files ADD COLUMN vault_id INTEGER NOT NULL DEFAULT 1"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_files_vault_id ON files(vault_id)"
+            )
+
         if not _column_exists("memories", "vault_id"):
             conn.execute("ALTER TABLE memories ADD COLUMN vault_id INTEGER")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_vault_id ON memories(vault_id)")
-        
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_memories_vault_id ON memories(vault_id)"
+            )
+
         if not _column_exists("chat_sessions", "vault_id"):
-            conn.execute("ALTER TABLE chat_sessions ADD COLUMN vault_id INTEGER NOT NULL DEFAULT 1")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_chat_sessions_vault_id ON chat_sessions(vault_id)")
-        
+            conn.execute(
+                "ALTER TABLE chat_sessions ADD COLUMN vault_id INTEGER NOT NULL DEFAULT 1"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_chat_sessions_vault_id ON chat_sessions(vault_id)"
+            )
+
         # 4. Backfill existing rows with default vault
         conn.execute("UPDATE files SET vault_id = 1 WHERE vault_id IS NULL")
         conn.execute("UPDATE chat_sessions SET vault_id = 1 WHERE vault_id IS NULL")
         # memories: NULL vault_id is intentional (global), no backfill needed
-        
+
         conn.commit()
     finally:
         conn.close()
@@ -286,7 +421,9 @@ def migrate_add_email_columns(sqlite_path: str) -> None:
 
         # Add source column (track upload, scan, email)
         if not _column_exists("files", "source"):
-            conn.execute("ALTER TABLE files ADD COLUMN source TEXT NOT NULL DEFAULT 'upload'")
+            conn.execute(
+                "ALTER TABLE files ADD COLUMN source TEXT NOT NULL DEFAULT 'upload'"
+            )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_files_source ON files(source)")
 
         # Add email_subject column (nullable)
@@ -298,6 +435,152 @@ def migrate_add_email_columns(sqlite_path: str) -> None:
             conn.execute("ALTER TABLE files ADD COLUMN email_sender TEXT")
 
         conn.commit()
+    finally:
+        conn.close()
+
+
+def migrate_add_user_org_tables(sqlite_path: str) -> None:
+    """
+    Migration: Ensure user and organization tables exist.
+
+    Runs the full schema which includes users, organizations,
+    groups, and permission tables. Idempotent via CREATE IF NOT EXISTS.
+
+    Args:
+        sqlite_path: Path to the SQLite database file.
+    """
+    conn = sqlite3.connect(sqlite_path)
+    try:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.executescript(SCHEMA)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def migrate_add_vault_permission_columns(sqlite_path: str) -> None:
+    """
+    Migration: Add permission columns to vaults table.
+
+    Adds owner_id, org_id, and visibility columns to support
+    the new RBAC permission system.
+
+    Args:
+        sqlite_path: Path to the SQLite database file.
+    """
+    conn = sqlite3.connect(sqlite_path)
+    try:
+        conn.execute("PRAGMA foreign_keys = ON")
+
+        cursor = conn.execute("PRAGMA table_info(vaults)")
+        columns = [row[1] for row in cursor.fetchall()]
+
+        # Add owner_id column
+        if "owner_id" not in columns:
+            conn.execute("ALTER TABLE vaults ADD COLUMN owner_id INTEGER")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_vaults_owner_id ON vaults(owner_id)"
+            )
+
+        # Add org_id column
+        if "org_id" not in columns:
+            conn.execute("ALTER TABLE vaults ADD COLUMN org_id INTEGER")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_vaults_org_id ON vaults(org_id)"
+            )
+
+        # Add visibility column
+        if "visibility" not in columns:
+            conn.execute(
+                "ALTER TABLE vaults ADD COLUMN visibility TEXT DEFAULT 'private' "
+                "CHECK (visibility IN ('private', 'org', 'public'))"
+            )
+            # Set default visibility for existing vaults
+            conn.execute(
+                "UPDATE vaults SET visibility = 'private' WHERE visibility IS NULL"
+            )
+
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def migrate_add_org_slug_column(sqlite_path: str) -> None:
+    """Migration: Add slug column to organizations table and add 'owner' to org_members role CHECK."""
+    import re
+
+    conn = sqlite3.connect(sqlite_path)
+    try:
+        conn.execute("PRAGMA foreign_keys = ON")
+
+        # Add slug column to organizations if missing
+        cursor = conn.execute("PRAGMA table_info(organizations)")
+        columns = [row[1] for row in cursor.fetchall()]
+
+        if "slug" not in columns:
+            conn.execute("ALTER TABLE organizations ADD COLUMN slug TEXT")
+            # Generate slugs for existing orgs
+            cursor = conn.execute("SELECT id, name FROM organizations")
+            for row in cursor.fetchall():
+                slug = row[1].lower().strip()
+                slug = re.sub(r"[^a-z0-9]+", "-", slug)
+                slug = slug.strip("-")
+                slug = re.sub(r"-+", "-", slug)[:50]
+                conn.execute(
+                    "UPDATE organizations SET slug = ? WHERE id = ?", (slug, row[0])
+                )
+
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def migrate_vault_paths(sqlite_path: str) -> None:
+    """
+    Migration: Rename vault directories from sanitized_name to numeric ID.
+
+    Reads all vaults from the database, and for each vault, checks if:
+    - vaults/{sanitized_name}/ exists but vaults/{id}/ does NOT exist → rename
+    - Both exist → merge contents (copy from name-dir to id-dir, then remove name-dir)
+    - Only vaults/{id}/ exists → skip (already migrated)
+
+    Uses pathlib.Path for cross-platform compatibility. Idempotent.
+    """
+    vaults_dir = settings.vaults_dir
+    if not vaults_dir.exists():
+        return
+
+    conn = sqlite3.connect(sqlite_path)
+    try:
+        cursor = conn.execute("SELECT id, name FROM vaults")
+        vaults = cursor.fetchall()
+
+        for vault_id, name in vaults:
+            safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
+            old_path = vaults_dir / safe_name
+            new_path = vaults_dir / str(vault_id)
+
+            try:
+                if not old_path.exists() and not new_path.exists():
+                    # Neither exists - nothing to do for this vault
+                    continue
+                elif not old_path.exists() and new_path.exists():
+                    # Already migrated - skip
+                    continue
+                elif old_path.exists() and not new_path.exists():
+                    # Rename old to new
+                    old_path.rename(new_path)
+                    logger.info(f"Migrated vault directory: {safe_name} → {vault_id}")
+                elif old_path.exists() and new_path.exists():
+                    # Both exist - merge contents
+                    shutil.copytree(old_path, new_path, dirs_exist_ok=True)
+                    shutil.rmtree(old_path)
+                    logger.info(
+                        f"Merged vault directory contents: {safe_name} → {vault_id}"
+                    )
+            except (OSError, shutil.Error) as e:
+                logger.warning(f"Failed to migrate vault '{name}' (ID {vault_id}): {e}")
+                # Continue with other vaults, don't raise
     finally:
         conn.close()
 
@@ -378,6 +661,7 @@ class SQLiteConnectionPool:
         """
         try:
             conn.execute("SELECT 1")
+            conn.execute("PRAGMA foreign_keys = ON")
             return True
         except (sqlite3.DatabaseError, sqlite3.OperationalError):
             # Rollback any failed transaction state
@@ -460,7 +744,9 @@ class SQLiteConnectionPool:
                 continue
 
         # Max attempts exhausted
-        raise RuntimeError(f"Could not obtain a connection from the pool after {max_wait_attempts} attempts")
+        raise RuntimeError(
+            f"Could not obtain a connection from the pool after {max_wait_attempts} attempts"
+        )
 
     def release_connection(self, conn: sqlite3.Connection) -> None:
         """

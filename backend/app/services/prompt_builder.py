@@ -9,6 +9,14 @@ from app.config import settings
 from app.services.memory_store import MemoryRecord
 from app.services.document_retrieval import RAGSource
 
+CITATION_INSTRUCTION = (
+    "\n\nWhen answering questions based on the provided context:\n"
+    "- Cite your sources inline using the format [Source: filename] when referencing specific documents\n"
+    "- If the provided context does not contain enough information to answer the question, "
+    "clearly state that the information is not available in the retrieved documents\n"
+    "- Do not fabricate or hallucinate information not present in the context"
+)
+
 
 class PromptBuilderService:
     """Service for building prompts and messages for the LLM."""
@@ -32,6 +40,7 @@ class PromptBuilderService:
         return (
             "You are KnowledgeVault, a highly accurate assistant that references sources when "
             "answering questions. Cite the relevant documents or memories by name."
+            + CITATION_INSTRUCTION
         )
 
     def build_messages(
@@ -91,7 +100,11 @@ class PromptBuilderService:
         Returns:
             Formatted string with source and text
         """
-        source_title = chunk.metadata.get("source_file") or chunk.metadata.get("section_title") or "document"
+        source_title = (
+            chunk.metadata.get("source_file")
+            or chunk.metadata.get("section_title")
+            or "document"
+        )
         return f"Source {source_title} (score: {chunk.score:.2f}):\n{chunk.text}"
 
     def build_system_prompt(self) -> str:

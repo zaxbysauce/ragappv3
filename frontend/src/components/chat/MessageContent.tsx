@@ -5,6 +5,7 @@ import rehypeSanitize from "rehype-sanitize";
 import { Copy, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { Source } from "@/lib/api";
+import { getRelevanceLabel } from "@/lib/relevance";
 
 interface MessageContentProps {
   content: string;
@@ -43,7 +44,7 @@ export function MessageContent({ content, sources, isStreaming }: MessageContent
         <div className="mt-4 pt-4 border-t border-border">
           <p className="text-sm font-semibold mb-2 text-muted-foreground">Sources</p>
           <div className="space-y-2">
-            {sources.map((source) => (
+            {sources.map((source, index) => (
               <div
                 key={source.id}
                 className="text-xs p-2 rounded-md bg-muted/50 border border-border"
@@ -52,7 +53,7 @@ export function MessageContent({ content, sources, isStreaming }: MessageContent
                   <span className="font-medium">{source.filename}</span>
                   {source.score !== undefined && (
                     <span className="text-xs text-muted-foreground">
-                      {Math.round(source.score * 100)}% match
+                      #{index + 1} · {getRelevanceLabel(source.score, source.score_type).text}
                     </span>
                   )}
                 </div>

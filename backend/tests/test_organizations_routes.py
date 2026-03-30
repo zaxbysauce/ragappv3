@@ -1,0 +1,610 @@
+"""Tests for organizations API routes."""
+
+import os
+import sqlite3
+import tempfile
+from pathlib import Path
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from app.api.routes.organizations import router as organizations_router
+from app.api.routes.auth import router as auth_router
+from app.services.auth_service import create_access_token, hash_password
+
+
+# Valid SQLite schema (avoiding UNIQUE NOCASE syntax issue in source)
+TEST_SCHEMA = """
+-- Users table
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    hashed_password TEXT NOT NULL,
+    full_name TEXT DEFAULT '',
+    role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('superadmin','admin','member','viewer')),
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_login_at TIMESTAMP
+);
+
+-- Organizations table
+CREATE TABLE IF NOT EXISTS organizations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    description TEXT DEFAULT '',
+    slug TEXT UNIQUE,
+    created_by INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (created_by) REFERENCES users(id)
+);
+
+-- Organization members
+CREATE TABLE IF NOT EXISTS org_members (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('owner','admin','member')),
+    joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE(org_id, user_id)
+);
+
+-- Groups table
+CREATE TABLE IF NOT EXISTS groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
+    UNIQUE(org_id, name)
+);
+
+-- Group members
+CREATE TABLE IF NOT EXISTS group_members (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE(group_id, user_id)
+);
+
+-- Vaults table
+CREATE TABLE IF NOT EXISTS vaults (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT DEFAULT '',
+    owner_id INTEGER,
+    org_id INTEGER,
+    visibility TEXT DEFAULT 'private' CHECK (visibility IN ('private', 'org', 'public')),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (owner_id) REFERENCES users(id),
+    FOREIGN KEY (org_id) REFERENCES organizations(id)
+);
+
+-- Vault members table
+CREATE TABLE IF NOT EXISTS vault_members (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    vault_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    permission TEXT NOT NULL DEFAULT 'read' CHECK (permission IN ('read','write','admin')),
+    granted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    granted_by INTEGER,
+    FOREIGN KEY (vault_id) REFERENCES vaults(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (granted_by) REFERENCES users(id) ON DELETE SET NULL,
+    UNIQUE(vault_id, user_id)
+);
+
+-- Vault group access
+CREATE TABLE IF NOT EXISTS vault_group_access (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    vault_id INTEGER NOT NULL,
+    group_id INTEGER NOT NULL,
+    permission TEXT NOT NULL DEFAULT 'read' CHECK (permission IN ('read','write','admin')),
+    granted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    granted_by INTEGER,
+    FOREIGN KEY (vault_id) REFERENCES vaults(id) ON DELETE CASCADE,
+    FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
+    FOREIGN KEY (granted_by) REFERENCES users(id) ON DELETE SET NULL,
+    UNIQUE(vault_id, group_id)
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+CREATE INDEX IF NOT EXISTS idx_vault_members_vault_id ON vault_members(vault_id);
+CREATE INDEX IF NOT EXISTS idx_vault_members_user_id ON vault_members(user_id);
+CREATE INDEX IF NOT EXISTS idx_org_members_org_id ON org_members(org_id);
+CREATE INDEX IF NOT EXISTS idx_org_members_user_id ON org_members(user_id);
+CREATE INDEX IF NOT EXISTS idx_groups_org_id ON groups(org_id);
+CREATE INDEX IF NOT EXISTS idx_group_members_group_id ON group_members(group_id);
+CREATE INDEX IF NOT EXISTS idx_group_members_user_id ON group_members(user_id);
+CREATE INDEX IF NOT EXISTS idx_vault_group_access_vault_id ON vault_group_access(vault_id);
+CREATE INDEX IF NOT EXISTS idx_vault_group_access_group_id ON vault_group_access(group_id);
+"""
+
+
+@pytest.fixture(autouse=True)
+def setup_db(monkeypatch):
+    """Set up test database with schema and seed data."""
+    temp_dir = tempfile.mkdtemp()
+    db_path = str(Path(temp_dir) / "app.db")
+
+    # Clear pool cache BEFORE setting up new database
+    from app.models.database import _pool_cache, _pool_cache_lock
+
+    with _pool_cache_lock:
+        for path, pool in list(_pool_cache.items()):
+            pool.close_all()
+        _pool_cache.clear()
+
+    # Initialize schema manually with valid SQL
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA foreign_keys = ON;")
+    conn.executescript(TEST_SCHEMA)
+    conn.commit()
+    conn.close()
+
+    # Patch settings
+    monkeypatch.setattr("app.config.settings.data_dir", Path(temp_dir))
+    monkeypatch.setattr(
+        "app.config.settings.jwt_secret_key",
+        "test-secret-key-for-testing-only-min-32-chars!!",
+    )
+    monkeypatch.setattr("app.config.settings.users_enabled", True)
+
+    # Seed test users
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA foreign_keys = ON")
+    pw = hash_password("testpass")
+    conn.execute(
+        "INSERT INTO users (id, username, hashed_password, full_name, role, is_active) VALUES (?, ?, ?, ?, ?, 1)",
+        (1, "superadmin", pw, "Super Admin", "superadmin"),
+    )
+    conn.execute(
+        "INSERT INTO users (id, username, hashed_password, full_name, role, is_active) VALUES (?, ?, ?, ?, ?, 1)",
+        (2, "admin1", pw, "Admin One", "admin"),
+    )
+    conn.execute(
+        "INSERT INTO users (id, username, hashed_password, full_name, role, is_active) VALUES (?, ?, ?, ?, ?, 1)",
+        (3, "member1", pw, "Member One", "member"),
+    )
+    conn.execute(
+        "INSERT INTO users (id, username, hashed_password, full_name, role, is_active) VALUES (?, ?, ?, ?, ?, 1)",
+        (4, "member2", pw, "Member Two", "member"),
+    )
+    conn.commit()
+    conn.close()
+
+    yield db_path
+
+    # Cleanup
+    with _pool_cache_lock:
+        if db_path in _pool_cache:
+            _pool_cache[db_path].close_all()
+            del _pool_cache[db_path]
+
+    import shutil
+
+    shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def _get_db_conn():
+    """Get a direct connection to the test database for setup."""
+    from app.config import settings
+
+    return sqlite3.connect(str(settings.sqlite_path))
+
+
+def _create_org(name: str, owner_user_id: int, description: str = "Desc"):
+    """Create an organization and add owner as owner."""
+    conn = _get_db_conn()
+    conn.execute("PRAGMA foreign_keys = ON")
+    cursor = conn.execute(
+        "INSERT INTO organizations (name, description, slug, created_by) VALUES (?, ?, ?, ?)",
+        (name, description, name.lower().replace(" ", "-"), owner_user_id),
+    )
+    org_id = cursor.lastrowid
+    conn.execute(
+        "INSERT INTO org_members (org_id, user_id, role) VALUES (?, ?, 'owner')",
+        (org_id, owner_user_id),
+    )
+    conn.commit()
+    conn.close()
+    return org_id
+
+
+def _add_org_member(org_id: int, user_id: int, role: str):
+    """Add a member to an organization."""
+    conn = _get_db_conn()
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute(
+        "INSERT OR IGNORE INTO org_members (org_id, user_id, role) VALUES (?, ?, ?)",
+        (org_id, user_id, role),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _remove_org_member(org_id: int, user_id: int):
+    """Remove a member from an organization."""
+    conn = _get_db_conn()
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute(
+        "DELETE FROM org_members WHERE org_id = ? AND user_id = ?",
+        (org_id, user_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def superadmin_token():
+    return create_access_token(1, "superadmin", "superadmin")
+
+
+def admin_token():
+    return create_access_token(2, "admin1", "admin")
+
+
+def member_token():
+    return create_access_token(3, "member1", "member")
+
+
+def member2_token():
+    return create_access_token(4, "member2", "member")
+
+
+def auth_headers(token_fn):
+    return {"Authorization": f"Bearer {token_fn()}"}
+
+
+@pytest.fixture
+def client():
+    """Create test client with routers."""
+    from app.config import settings
+
+    app = FastAPI()
+    app.include_router(auth_router, prefix="/api")
+    app.include_router(organizations_router, prefix="/api")
+    return TestClient(app)
+
+
+class TestCreateOrganization:
+    """Tests for POST /organizations endpoint."""
+
+    def test_admin_creates_org(self, client):
+        """Admin creates organization (200)."""
+        response = client.post(
+            "/api/organizations",
+            json={"name": "Test Org", "description": "A test organization"},
+            headers=auth_headers(admin_token),
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["name"] == "Test Org"
+        assert data["slug"] == "test-org"
+        assert data["member_count"] == 1
+        assert data["vault_count"] == 0
+
+    def test_creator_auto_added_as_owner(self, client):
+        """Creator is auto-added as owner."""
+        response = client.post(
+            "/api/organizations",
+            json={"name": "My Org", "description": "Test"},
+            headers=auth_headers(admin_token),
+        )
+        assert response.status_code == 200
+        data = response.json()
+
+        # Check member is in org as owner
+        conn = _get_db_conn()
+        cursor = conn.execute(
+            "SELECT role FROM org_members WHERE org_id = ? AND user_id = ?",
+            (data["id"], 2),  # admin1 is user_id 2
+        )
+        row = cursor.fetchone()
+        conn.close()
+        assert row is not None
+        assert row[0] == "owner"
+
+    def test_duplicate_name_rejected(self, client):
+        """Duplicate organization name is rejected (409)."""
+        client.post(
+            "/api/organizations",
+            json={"name": "Duplicate Org"},
+            headers=auth_headers(admin_token),
+        )
+        response = client.post(
+            "/api/organizations",
+            json={"name": "Duplicate Org"},
+            headers=auth_headers(admin_token),
+        )
+        assert response.status_code == 409
+
+    def test_member_cannot_create(self, client):
+        """Member cannot create organization (403)."""
+        response = client.post(
+            "/api/organizations",
+            json={"name": "Should Fail", "description": "Test"},
+            headers=auth_headers(member_token),
+        )
+        assert response.status_code == 403
+
+
+class TestListOrganizations:
+    """Tests for GET /organizations endpoint."""
+
+    def test_member_sees_their_orgs(self, client):
+        """Member sees only their organizations (200)."""
+        # Create org with admin1 as owner, add member1
+        org_id = _create_org("Test Org", 2)  # admin1 (user_id 2)
+        _add_org_member(org_id, 3, "member")  # Add member1
+
+        response = client.get("/api/organizations", headers=auth_headers(member_token))
+        assert response.status_code == 200
+        data = response.json()
+        assert "organizations" in data
+        assert "total" in data
+        assert data["total"] == 1
+        assert data["organizations"][0]["id"] == org_id
+
+    def test_empty_list_for_new_user(self, client):
+        """New user with no orgs gets empty list (200)."""
+        response = client.get("/api/organizations", headers=auth_headers(member2_token))
+        assert response.status_code == 200
+        data = response.json()
+        assert data["organizations"] == []
+        assert data["total"] == 0
+
+
+class TestGetOrganization:
+    """Tests for GET /organizations/{org_id} endpoint."""
+
+    def test_member_can_get_org_detail(self, client):
+        """Member can get organization detail (200)."""
+        org_id = _create_org("Detail Org", 2)  # admin1 as owner
+        _add_org_member(org_id, 3, "member")  # member1 as member
+
+        response = client.get(
+            f"/api/organizations/{org_id}", headers=auth_headers(member_token)
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["name"] == "Detail Org"
+        assert "members" in data
+        assert len(data["members"]) == 2
+
+    def test_non_member_rejected(self, client):
+        """Non-member is rejected (403)."""
+        org_id = _create_org("Private Org", 2)  # admin1 as owner
+        # member1 is NOT added
+        _add_org_member(org_id, 3, "member")  # Actually add them first
+        _remove_org_member(org_id, 3)  # Then remove to make them non-member
+
+        response = client.get(
+            f"/api/organizations/{org_id}", headers=auth_headers(member_token)
+        )
+        assert response.status_code == 403
+
+
+class TestUpdateOrganization:
+    """Tests for PATCH /organizations/{org_id} endpoint."""
+
+    def test_admin_owner_can_update(self, client):
+        """Admin/owner can update organization (200)."""
+        org_id = _create_org("Update Org", 2)  # admin1 as owner
+
+        response = client.patch(
+            f"/api/organizations/{org_id}",
+            json={"name": "Updated Org", "description": "New Description"},
+            headers=auth_headers(admin_token),
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["name"] == "Updated Org"
+        assert data["description"] == "New Description"
+
+    def test_non_admin_member_cannot_update(self, client):
+        """Non-admin member cannot update organization (403)."""
+        org_id = _create_org("Member Org", 2)  # admin1 as owner
+        _add_org_member(org_id, 3, "member")  # member1 as member (not admin)
+
+        response = client.patch(
+            f"/api/organizations/{org_id}",
+            json={"description": "Should Fail"},
+            headers=auth_headers(member_token),
+        )
+        assert response.status_code == 403
+
+    def test_nonexistent_org_returns_404(self, client):
+        """Non-existent organization returns 404."""
+        response = client.patch(
+            "/api/organizations/999",
+            json={"description": "Test"},
+            headers=auth_headers(admin_token),
+        )
+        assert response.status_code == 404
+
+
+class TestAddOrgMember:
+    """Tests for POST /organizations/{org_id}/members endpoint."""
+
+    def test_admin_adds_member(self, client):
+        """Admin adds member to organization (200)."""
+        org_id = _create_org("Add Member Org", 2)  # admin1 as owner
+
+        response = client.post(
+            f"/api/organizations/{org_id}/members",
+            json={"user_id": 3, "role": "member"},
+            headers=auth_headers(admin_token),
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["id"] == 3
+        assert data["role"] == "member"
+
+    def test_non_admin_rejected(self, client):
+        """Non-admin cannot add members (403)."""
+        org_id = _create_org("Non Admin Org", 2)  # admin1 as owner
+        _add_org_member(org_id, 3, "member")  # member1 as regular member
+
+        response = client.post(
+            f"/api/organizations/{org_id}/members",
+            json={"user_id": 4, "role": "member"},
+            headers=auth_headers(member_token),
+        )
+        assert response.status_code == 403
+
+    def test_admin_cannot_assign_owner_role(self, client):
+        """Admin cannot assign owner role (403).
+
+        Note: When admin1 creates org, they become owner automatically.
+        So this test uses superadmin to create org (no auto-owner),
+        then admin1 tries to assign owner role.
+        """
+        # superadmin creates org - they are NOT added as member automatically
+        conn = _get_db_conn()
+        conn.execute("PRAGMA foreign_keys = ON")
+        cursor = conn.execute(
+            "INSERT INTO organizations (name, description, slug, created_by) VALUES (?, ?, ?, ?)",
+            ("Owner Test Org", "Desc", "owner-test-org", 1),
+        )
+        org_id = cursor.lastrowid
+        # Add admin1 as admin (not owner)
+        conn.execute(
+            "INSERT INTO org_members (org_id, user_id, role) VALUES (?, ?, 'admin')",
+            (org_id, 2),
+        )
+        conn.commit()
+        conn.close()
+
+        response = client.post(
+            f"/api/organizations/{org_id}/members",
+            json={"user_id": 3, "role": "owner"},
+            headers=auth_headers(admin_token),
+        )
+        assert response.status_code == 403
+
+    def test_owner_can_assign_owner_role(self, client):
+        """Owner CAN assign owner role (200)."""
+        org_id = _create_org("Owner Assign Org", 2)  # admin1 is owner
+
+        # admin1 is the owner, so they can add another owner
+        response = client.post(
+            f"/api/organizations/{org_id}/members",
+            json={"user_id": 3, "role": "owner"},
+            headers=auth_headers(admin_token),
+        )
+        assert response.status_code == 200
+
+
+class TestUpdateOrgMemberRole:
+    """Tests for PATCH /organizations/{org_id}/members/{member_user_id} endpoint."""
+
+    def test_admin_changes_member_to_admin(self, client):
+        """Admin changes member role to admin (200)."""
+        org_id = _create_org("Role Update Org", 2)  # admin1 as owner
+        _add_org_member(org_id, 3, "member")  # member1 as member
+
+        response = client.patch(
+            f"/api/organizations/{org_id}/members/3",
+            json={"role": "admin"},
+            headers=auth_headers(admin_token),
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["role"] == "admin"
+
+    def test_cannot_change_owner_role(self, client):
+        """Cannot change owner's role (403)."""
+        org_id = _create_org("Owner Role Org", 2)  # admin1 as owner
+
+        response = client.patch(
+            f"/api/organizations/{org_id}/members/2",
+            json={"role": "member"},
+            headers=auth_headers(admin_token),
+        )
+        assert response.status_code == 403
+
+
+class TestRemoveOrgMember:
+    """Tests for DELETE /organizations/{org_id}/members/{member_user_id} endpoint."""
+
+    def test_admin_removes_member(self, client):
+        """Admin removes member (200)."""
+        org_id = _create_org("Remove Member Org", 2)  # admin1 as owner
+        _add_org_member(org_id, 3, "member")  # member1 as member
+
+        response = client.delete(
+            f"/api/organizations/{org_id}/members/3",
+            headers=auth_headers(admin_token),
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["message"] == "Member removed"
+
+    def test_cannot_remove_owner(self, client):
+        """Cannot remove owner (403)."""
+        org_id = _create_org("Remove Owner Org", 2)  # admin1 as owner
+
+        response = client.delete(
+            f"/api/organizations/{org_id}/members/2",
+            headers=auth_headers(admin_token),
+        )
+        assert response.status_code == 403
+
+    def test_self_removal_rejected(self, client):
+        """Self-removal is rejected (403).
+
+        If you're the owner, you can't remove yourself (403 - cannot remove owner).
+        If you're an admin/member, you can't remove yourself (403 - not admin/owner).
+        """
+        # Create org where member1 is a regular member (not owner)
+        org_id = _create_org("Self Remove Org", 2)  # admin1 as owner first
+        _add_org_member(org_id, 3, "member")  # member1 as member (not owner)
+
+        # member1 tries to remove themselves - they get 403 because they're not admin/owner
+        response = client.delete(
+            f"/api/organizations/{org_id}/members/3",
+            headers=auth_headers(member_token),
+        )
+        assert response.status_code == 403
+
+
+class TestDeleteOrganization:
+    """Tests for DELETE /organizations/{org_id} endpoint."""
+
+    def test_superadmin_deletes_org(self, client):
+        """Superadmin deletes organization (200)."""
+        org_id = _create_org("Delete Me Org", 2)  # admin1 as owner
+
+        response = client.delete(
+            f"/api/organizations/{org_id}", headers=auth_headers(superadmin_token)
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["message"] == "Organization deleted"
+
+    def test_admin_cannot_delete(self, client):
+        """Admin cannot delete organization (403)."""
+        org_id = _create_org("No Delete Org", 2)  # admin1 as owner
+
+        response = client.delete(
+            f"/api/organizations/{org_id}", headers=auth_headers(admin_token)
+        )
+        assert response.status_code == 403
+
+    def test_nonexistent_returns_404(self, client):
+        """Non-existent organization returns 404."""
+        response = client.delete(
+            "/api/organizations/999", headers=auth_headers(superadmin_token)
+        )
+        assert response.status_code == 404

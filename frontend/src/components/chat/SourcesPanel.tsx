@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/accordion";
 import { FileText, ChevronDown, ChevronRight, BookOpen } from "lucide-react";
 import type { Source } from "@/lib/api";
+import { getRelevanceLabel } from "@/lib/relevance";
 
 interface SourcesPanelProps {
   sources: Source[] | undefined;
@@ -77,10 +78,11 @@ function DesktopSourcesContent({
         {hasSources ? (
           <ScrollArea className="h-[400px] pr-4">
             <div className="space-y-3" role="list" aria-label="Document sources">
-              {sources!.map((source: Source) => (
+              {sources!.map((source: Source, index: number) => (
                 <SourceCard
                   key={source.id}
                   source={source}
+                  index={index}
                   isExpanded={expandedSources.has(source.id)}
                   onToggle={() => onToggleSource(source.id)}
                 />
@@ -120,10 +122,11 @@ function MobileSourcesAccordion({
         </AccordionTrigger>
         <AccordionContent className="px-4 pb-4">
           <div className="space-y-3" role="list" aria-label="Document sources">
-            {sources!.map((source: Source) => (
+            {sources!.map((source: Source, index: number) => (
               <SourceCard
                 key={source.id}
                 source={source}
+                index={index}
                 isExpanded={expandedSources.has(source.id)}
                 onToggle={() => onToggleSource(source.id)}
               />
@@ -140,9 +143,10 @@ interface SourceCardProps {
   source: Source;
   isExpanded: boolean;
   onToggle: () => void;
+  index?: number;
 }
 
-function SourceCard({ source, isExpanded, onToggle }: SourceCardProps) {
+function SourceCard({ source, isExpanded, onToggle, index }: SourceCardProps) {
   return (
     <Card className="border-border/50">
       <div
@@ -159,9 +163,12 @@ function SourceCard({ source, isExpanded, onToggle }: SourceCardProps) {
             </span>
           </div>
           <div className="flex items-center gap-2">
-            {source.score && (
-              <Badge variant="secondary" className="text-xs">
-                {(source.score * 100).toFixed(0)}%
+            {source.score !== undefined && (
+              <Badge
+                variant="secondary"
+                className={`text-xs ${getRelevanceLabel(source.score, source.score_type).color}`}
+              >
+                #{index !== undefined ? index + 1 : "?"} {getRelevanceLabel(source.score, source.score_type).text}
               </Badge>
             )}
             {isExpanded ? (

@@ -3,6 +3,7 @@ Application configuration using Pydantic Settings.
 """
 
 import logging
+import warnings
 from pathlib import Path
 from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -106,7 +107,7 @@ class Settings(BaseSettings):
     """Enable CRAG-style retrieval evaluation (CONFIDENT/AMBIGUOUS/NO_MATCH classification)."""
 
     # ── Context distillation configuration ────────────────────────────
-    context_distillation_enabled: bool = False
+    context_distillation_enabled: bool = True
     """Enable context distillation: deduplicate sentences and optionally synthesize context."""
 
     context_distillation_dedup_threshold: float = 0.92
@@ -124,7 +125,7 @@ class Settings(BaseSettings):
     """Chunking strategy: 'title' for fixed-size, 'embedding' for cosine-similarity breakpoints."""
 
     # ── HyDE (Hypothetical Document Embeddings) configuration ──
-    hyde_enabled: bool = False
+    hyde_enabled: bool = True
     """Enable HyDE: generate a hypothetical answer passage and embed it as additional query vector."""
 
     # ── Sparse search configuration ──────────────────────────────────
@@ -172,11 +173,24 @@ class Settings(BaseSettings):
 
     # Feature flags
     enable_model_validation: bool = False
+    eval_enabled: bool = False
+    """Enable RAGAS evaluation endpoint. Disabled by default for production safety."""
 
     # Admin security
     admin_secret_token: str = (
         ""  # Must be set via environment variable - no default for security
     )
+
+    # User authentication
+    users_enabled: bool = True
+    """Enable multi-user JWT authentication. When False, only admin_secret_token auth is used."""
+
+    jwt_secret_key: str = "change-me-to-a-random-64-char-string"
+    """Secret key for JWT signing. MUST be changed in production. Generate with: python -c \"import secrets; print(secrets.token_urlsafe(48))\""""
+
+    jwt_algorithm: str = "HS256"
+    """JWT signing algorithm."""
+
     audit_hmac_key_version: str = "v1"
 
     # Security settings
@@ -305,6 +319,19 @@ class Settings(BaseSettings):
             )
             return legacy_vector_top_k
         return 12
+
+    @field_validator("max_context_chunks", mode="after")
+    @classmethod
+    def deprecate_max_context_chunks(cls, v: int) -> int:
+        """Emit deprecation warning if max_context_chunks is set to non-default value."""
+        if v != 10:
+            warnings.warn(
+                "MAX_CONTEXT_CHUNKS is deprecated. Use RETRIEVAL_TOP_K instead. "
+                "This setting will be removed in a future version.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        return v
 
     # Consolidated range validators using helper functions
     @field_validator("embedding_batch_max_retries", mode="after")

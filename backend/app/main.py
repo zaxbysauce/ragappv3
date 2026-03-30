@@ -20,6 +20,13 @@ from app.api.routes.memories import router as memories_router
 from app.api.routes.search import router as search_router
 from app.api.routes.settings import router as settings_router
 from app.api.routes.vaults import router as vaults_router
+from app.api.routes.auth import router as auth_router
+from app.api.routes.users import router as users_router
+from app.api.routes.vault_members import router as vault_members_router
+from app.api.routes.vault_members import (
+    group_access_router as vault_group_access_router,
+)
+from app.api.routes.organizations import router as organizations_router
 from app.config import settings
 from app.lifespan import lifespan
 from app.limiter import limiter
@@ -37,6 +44,23 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Security check: warn if admin_secret_token is not set or using default value
+if settings.admin_secret_token in ("", "admin-secret-token"):
+    logger.critical(
+        "SECURITY WARNING: admin_secret_token is not set or is using the default value. "
+        "All API routes are effectively unauthenticated."
+    )
+
+# Security check: warn if JWT secret key is using the default value
+if (
+    settings.users_enabled
+    and settings.jwt_secret_key == "change-me-to-a-random-64-char-string"
+):
+    logger.warning(
+        "SECURITY WARNING: jwt_secret_key is using the default value. "
+        'Generate a secure key with: python -c "import secrets; print(secrets.token_urlsafe(48))"'
+    )
+
 # Configure CORS
 app.add_middleware(LoggingMiddleware)
 app.add_middleware(
@@ -46,6 +70,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Security: warn if CORS origins contain wildcard when credentials are enabled
+if "*" in settings.backend_cors_origins:
+    logger.warning(
+        "SECURITY WARNING: CORS origins contain wildcard ('*') with allow_credentials=True. "
+        "This configuration is insecure and will be rejected by browsers. "
+        "Set BACKEND_CORS_ORIGINS to specific origins (e.g., http://localhost:5173)."
+    )
 
 # Set up rate limiting
 app.state.limiter = limiter
@@ -69,6 +101,11 @@ app.include_router(vaults_router, prefix="/api")
 app.include_router(admin_router, prefix="/api")
 app.include_router(email_router, prefix="/api")
 app.include_router(eval_router, prefix="/api")
+app.include_router(auth_router, prefix="/api")
+app.include_router(users_router, prefix="/api")
+app.include_router(vault_members_router, prefix="/api")
+app.include_router(vault_group_access_router, prefix="/api")
+app.include_router(organizations_router, prefix="/api")
 
 # Register exception handler for validation errors (empty filename)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)

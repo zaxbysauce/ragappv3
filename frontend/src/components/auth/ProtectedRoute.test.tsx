@@ -1,0 +1,284 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+import { ProtectedRoute, RoleGuard, AdminGuard, SuperAdminGuard } from "./ProtectedRoute";
+import * as AuthContext from "@/contexts/AuthContext";
+import * as useAuthStoreModule from "@/stores/useAuthStore";
+
+// Mock the dependencies
+vi.mock("@/stores/useAuthStore", () => ({
+  useAuthStore: vi.fn(),
+}));
+
+vi.mock("@/contexts/AuthContext", () => ({
+  useAuth: vi.fn(),
+}));
+
+// Helper to render with router
+const renderWithRouter = (ui: React.ReactElement, initialEntry = "/") => {
+  return render(
+    <MemoryRouter initialEntries={[initialEntry]}>
+      {ui}
+    </MemoryRouter>
+  );
+};
+
+describe("ProtectedRoute", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("shows loading spinner when loading", () => {
+    // Set up return values for both mocks
+    vi.mocked(AuthContext.useAuth).mockReturnValue({
+      isAuthenticated: false,
+      isLoading: true,
+      user: null,
+    } as any);
+    vi.mocked(useAuthStoreModule.useAuthStore).mockReturnValue({
+      isAuthenticated: false,
+      isLoading: true,
+      needsSetup: false,
+    } as any);
+
+    renderWithRouter(<ProtectedRoute><div>Protected Content</div></ProtectedRoute>);
+
+    expect(screen.getByRole("status")).toBeInTheDocument();
+    expect(screen.queryByText("Protected Content")).not.toBeInTheDocument();
+  });
+
+  it("redirects to /login when not authenticated", () => {
+    vi.mocked(AuthContext.useAuth).mockReturnValue({
+      isAuthenticated: false,
+      isLoading: false,
+      user: null,
+    } as any);
+    vi.mocked(useAuthStoreModule.useAuthStore).mockReturnValue({
+      isAuthenticated: false,
+      isLoading: false,
+      needsSetup: false,
+    } as any);
+
+    renderWithRouter(<ProtectedRoute><div>Protected Content</div></ProtectedRoute>);
+
+    expect(screen.queryByText("Protected Content")).not.toBeInTheDocument();
+  });
+
+  it("redirects to /setup when needsSetup is true", () => {
+    vi.mocked(AuthContext.useAuth).mockReturnValue({
+      isAuthenticated: false,
+      isLoading: false,
+      user: null,
+    } as any);
+    vi.mocked(useAuthStoreModule.useAuthStore).mockReturnValue({
+      isAuthenticated: false,
+      isLoading: false,
+      needsSetup: true,
+    } as any);
+
+    renderWithRouter(<ProtectedRoute><div>Protected Content</div></ProtectedRoute>);
+
+    expect(screen.queryByText("Protected Content")).not.toBeInTheDocument();
+  });
+
+  it("renders children when authenticated via context", () => {
+    vi.mocked(AuthContext.useAuth).mockReturnValue({
+      isAuthenticated: true,
+      isLoading: false,
+      user: { id: "1", username: "testuser" },
+    } as any);
+    vi.mocked(useAuthStoreModule.useAuthStore).mockReturnValue({
+      isAuthenticated: false,
+      isLoading: false,
+      needsSetup: false,
+    } as any);
+
+    renderWithRouter(<ProtectedRoute><div>Protected Content</div></ProtectedRoute>);
+
+    expect(screen.getByText("Protected Content")).toBeInTheDocument();
+  });
+
+  it("renders children when authenticated via store (JWT)", () => {
+    vi.mocked(AuthContext.useAuth).mockReturnValue({
+      isAuthenticated: false,
+      isLoading: false,
+      user: null,
+    } as any);
+    vi.mocked(useAuthStoreModule.useAuthStore).mockReturnValue({
+      isAuthenticated: true,
+      isLoading: false,
+      needsSetup: false,
+    } as any);
+
+    renderWithRouter(<ProtectedRoute><div>Protected Content</div></ProtectedRoute>);
+
+    expect(screen.getByText("Protected Content")).toBeInTheDocument();
+  });
+});
+
+describe("RoleGuard", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("renders children when user has sufficient role", () => {
+    vi.mocked(useAuthStoreModule.useAuthStore).mockReturnValue({
+      isAuthenticated: true,
+      isLoading: false,
+      user: { id: "1", username: "admin", role: "admin" },
+    } as any);
+
+    renderWithRouter(
+      <RoleGuard allowedRoles={["admin", "superadmin"]}>
+        <div>Admin Content</div>
+      </RoleGuard>
+    );
+
+    expect(screen.getByText("Admin Content")).toBeInTheDocument();
+  });
+
+  it("redirects to / when role insufficient", () => {
+    vi.mocked(useAuthStoreModule.useAuthStore).mockReturnValue({
+      isAuthenticated: true,
+      isLoading: false,
+      user: { id: "1", username: "member", role: "member" },
+    } as any);
+
+    renderWithRouter(
+      <RoleGuard allowedRoles={["admin", "superadmin"]}>
+        <div>Admin Content</div>
+      </RoleGuard>
+    );
+
+    expect(screen.queryByText("Admin Content")).not.toBeInTheDocument();
+  });
+
+  it("shows fallback when provided and role insufficient", () => {
+    vi.mocked(useAuthStoreModule.useAuthStore).mockReturnValue({
+      isAuthenticated: true,
+      isLoading: false,
+      user: { id: "1", username: "member", role: "member" },
+    } as any);
+
+    renderWithRouter(
+      <RoleGuard allowedRoles={["admin", "superadmin"]} fallback={<div>Access Denied</div>}>
+        <div>Admin Content</div>
+      </RoleGuard>
+    );
+
+    expect(screen.getByText("Access Denied")).toBeInTheDocument();
+    expect(screen.queryByText("Admin Content")).not.toBeInTheDocument();
+  });
+
+  it("shows loading spinner when store is loading", () => {
+    vi.mocked(useAuthStoreModule.useAuthStore).mockReturnValue({
+      isAuthenticated: false,
+      isLoading: true,
+      user: null,
+    } as any);
+
+    renderWithRouter(
+      <RoleGuard allowedRoles={["admin"]}>
+        <div>Content</div>
+      </RoleGuard>
+    );
+
+    expect(screen.getByRole("status")).toBeInTheDocument();
+  });
+
+  it("redirects to /login when not authenticated (no fallback)", () => {
+    vi.mocked(useAuthStoreModule.useAuthStore).mockReturnValue({
+      isAuthenticated: false,
+      isLoading: false,
+      user: null,
+    } as any);
+
+    renderWithRouter(
+      <RoleGuard allowedRoles={["admin"]}>
+        <div>Content</div>
+      </RoleGuard>
+    );
+
+    expect(screen.queryByText("Content")).not.toBeInTheDocument();
+  });
+
+  it("shows fallback when not authenticated and fallback provided", () => {
+    vi.mocked(useAuthStoreModule.useAuthStore).mockReturnValue({
+      isAuthenticated: false,
+      isLoading: false,
+      user: null,
+    } as any);
+
+    renderWithRouter(
+      <RoleGuard allowedRoles={["admin"]} fallback={<div>Please Login</div>}>
+        <div>Content</div>
+      </RoleGuard>
+    );
+
+    expect(screen.getByText("Please Login")).toBeInTheDocument();
+  });
+
+  it("handles invalid role string gracefully", () => {
+    vi.mocked(useAuthStoreModule.useAuthStore).mockReturnValue({
+      isAuthenticated: true,
+      isLoading: false,
+      user: { id: "1", username: "unknown", role: "unknown_role" },
+    } as any);
+
+    renderWithRouter(
+      <RoleGuard allowedRoles={["admin"]} fallback={<div>Invalid Role</div>}>
+        <div>Content</div>
+      </RoleGuard>
+    );
+
+    expect(screen.getByText("Invalid Role")).toBeInTheDocument();
+  });
+
+  it("handles undefined user role gracefully", () => {
+    vi.mocked(useAuthStoreModule.useAuthStore).mockReturnValue({
+      isAuthenticated: true,
+      isLoading: false,
+      user: { id: "1", username: "norole" },
+    } as any);
+
+    renderWithRouter(
+      <RoleGuard allowedRoles={["admin"]} fallback={<div>No Role</div>}>
+        <div>Content</div>
+      </RoleGuard>
+    );
+
+    expect(screen.getByText("No Role")).toBeInTheDocument();
+  });
+
+  it("AdminGuard allows admin role", () => {
+    vi.mocked(useAuthStoreModule.useAuthStore).mockReturnValue({
+      isAuthenticated: true,
+      isLoading: false,
+      user: { id: "1", username: "admin", role: "admin" },
+    } as any);
+
+    renderWithRouter(
+      <AdminGuard>
+        <div>Admin Only Content</div>
+      </AdminGuard>
+    );
+
+    expect(screen.getByText("Admin Only Content")).toBeInTheDocument();
+  });
+
+  it("SuperAdminGuard only allows superadmin", () => {
+    vi.mocked(useAuthStoreModule.useAuthStore).mockReturnValue({
+      isAuthenticated: true,
+      isLoading: false,
+      user: { id: "1", username: "superadmin", role: "superadmin" },
+    } as any);
+
+    renderWithRouter(
+      <SuperAdminGuard>
+        <div>Superadmin Content</div>
+      </SuperAdminGuard>
+    );
+
+    expect(screen.getByText("Superadmin Content")).toBeInTheDocument();
+  });
+});

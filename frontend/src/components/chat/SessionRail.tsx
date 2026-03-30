@@ -1,0 +1,1015 @@
+// frontend/src/components/chat/SessionRail.tsx
+// SessionRail component with full business logic for chat session management
+
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { useNavigate } from "react-router-dom";
+import {
+  MessageSquare,
+  Search,
+  Pin,
+  PinOff,
+  Pencil,
+  Trash2,
+  MoreHorizontal,
+  Plus,
+  X,
+  Check,
+  ChevronDown,
+  ChevronRight,
+} from "lucide-react";
+import { useChatShellStore } from "@/stores/useChatShellStore";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  listChatSessions,
+  deleteChatSession,
+  updateChatSession,
+  getChatSession,
+  type ChatSession,
+  type ChatSessionDetail,
+} from "@/lib/api";
+
+// =============================================================================
+// TYPES & INTERFACES
+// =============================================================================
+
+interface ChatSearchInputProps {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  className?: string;
+}
+
+interface SessionGroupProps {
+  label: string;
+  sessions: ChatSession[];
+  isOpen?: boolean;
+  onToggle?: () => void;
+  activeSessionId: string | null;
+  onSessionClick: (session: ChatSession) => void;
+  onSessionRename: (session: ChatSession, newTitle: string) => void;
+  onSessionPinToggle: (sessionId: number) => void;
+  onSessionDelete: (session: ChatSession) => void;
+  isSessionPinned: (sessionId: number) => boolean;
+  className?: string;
+}
+
+interface SessionItemProps {
+  session: ChatSession;
+  isActive: boolean;
+  isPinned: boolean;
+  onClick: () => void;
+  onRename: (newTitle: string) => void;
+  onPinToggle: () => void;
+  onDelete: () => void;
+}
+
+// Time-based group keys
+type TimeGroupKey = "pinned" | "today" | "yesterday" | "thisWeek" | "older";
+
+// =============================================================================
+// UTILITY FUNCTIONS
+// =============================================================================
+
+/**
+ * Get time group for a date string
+ */
+function getTimeGroup(dateStr: string): "Today" | "Yesterday" | "This Week" | "Older" {
+  const date = new Date(dateStr);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const weekAgo = new Date(today);
+  weekAgo.setDate(weekAgo.getDate() - 7);
+
+  if (date >= today) return "Today";
+  if (date >= yesterday) return "Yesterday";
+  if (date >= weekAgo) return "This Week";
+  return "Older";
+}
+
+/**
+ * Format relative timestamp for display
+ */
+function formatRelativeTime(dateString: string): string {
+  const date = new Date(dateString);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  if (diffMins < 1) return "just now";
+  if (diffMins < 60) return `${diffMins}m ago`;
+  const diffHours = Math.floor(diffMins / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays === 1) return "Yesterday";
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return date.toLocaleDateString();
+}
+
+/**
+ * Group sessions by time period
+ */
+function groupSessionsByTime(
+  sessions: ChatSession[],
+  pinnedIds: number[]
+): Record<TimeGroupKey, ChatSession[]> {
+  const groups: Record<TimeGroupKey, ChatSession[]> = {
+    pinned: [],
+    today: [],
+    yesterday: [],
+    thisWeek: [],
+    older: [],
+  };
+
+  sessions.forEach((session) => {
+    if (pinnedIds.includes(session.id)) {
+      groups.pinned.push(session);
+    } else {
+      const timeGroup = getTimeGroup(session.updated_at);
+      const timeKey: TimeGroupKey =
+        timeGroup === "Today"
+          ? "today"
+          : timeGroup === "Yesterday"
+          ? "yesterday"
+          : timeGroup === "This Week"
+          ? "thisWeek"
+          : "older";
+      groups[timeKey].push(session);
+    }
+  });
+
+  // Sort each group by updated_at descending
+  (Object.keys(groups) as TimeGroupKey[]).forEach((key) => {
+    groups[key].sort(
+      (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+    );
+  });
+
+  return groups;
+}
+
+// =============================================================================
+// COMPONENT: ChatSearchInput
+// =============================================================================
+
+export function ChatSearchInput({
+  value,
+  onChange,
+  placeholder = "Search sessions...",
+  className,
+}: ChatSearchInputProps) {
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Ctrl+K keyboard shortcut to focus search
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "k") {
+        e.preventDefault();
+        inputRef.current?.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  const handleClear = useCallback(() => {
+    onChange("");
+    inputRef.current?.focus();
+  }, [onChange]);
+
+  return (
+    <div className={className}>
+      <div className="relative">
+        <Search
+          className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+          aria-hidden="true"
+        />
+        <Input
+          ref={inputRef}
+          type="text"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          className="h-9 pl-9 pr-16 text-sm"
+          aria-label="Search chat sessions"
+        />
+        <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+          {value && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-5 w-5"
+              onClick={handleClear}
+              aria-label="Clear search"
+            >
+              <X className="h-3 w-3" aria-hidden="true" />
+            </Button>
+          )}
+          <kbd className="hidden sm:inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground">
+            <span className="text-xs">Ctrl</span>K
+          </kbd>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// =============================================================================
+// COMPONENT: SessionItem
+// =============================================================================
+
+export function SessionItem({
+  session,
+  isActive,
+  isPinned,
+  onClick,
+  onRename,
+  onPinToggle,
+  onDelete,
+}: SessionItemProps) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState(session.title || "");
+  const [isHovered, setIsHovered] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const displayTitle = session.title || "Untitled";
+  const truncatedTitle =
+    displayTitle.length > 40 ? displayTitle.slice(0, 40) + "..." : displayTitle;
+
+  const handleStartEdit = useCallback(() => {
+    setEditTitle(session.title || "");
+    setIsEditing(true);
+  }, [session.title]);
+
+  const handleSaveEdit = useCallback(() => {
+    const trimmed = editTitle.trim();
+    // Don't close edit mode if trimmed is empty - let user try again
+    if (!trimmed) return;
+    if (trimmed !== session.title) {
+      onRename(trimmed);
+    }
+    setIsEditing(false);
+  }, [editTitle, session.title, onRename]);
+
+  const handleCancelEdit = useCallback(() => {
+    setEditTitle(session.title || "");
+    setIsEditing(false);
+  }, [session.title]);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "Enter") {
+        handleSaveEdit();
+      } else if (e.key === "Escape") {
+        handleCancelEdit();
+      }
+    },
+    [handleSaveEdit, handleCancelEdit]
+  );
+
+  const handleDeleteConfirm = useCallback(() => {
+    onDelete();
+    setShowDeleteDialog(false);
+  }, [onDelete]);
+
+  // Focus input when editing starts
+  useEffect(() => {
+    if (isEditing) {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
+  }, [isEditing]);
+
+  return (
+    <>
+      <div
+        className={`
+          group relative flex items-center gap-2 rounded-md px-2 py-2 text-sm
+          cursor-pointer transition-colors
+          ${isActive ? "bg-accent/50" : "hover:bg-muted"}
+        `}
+        onClick={() => !isEditing && onClick()}
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+        role={isEditing ? "listitem" : "button"}
+        tabIndex={isEditing ? undefined : 0}
+        aria-label={isEditing ? undefined : `Chat session: ${displayTitle}`}
+        onKeyDown={isEditing ? undefined : (e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onClick();
+          }
+        }}
+      >
+        <MessageSquare
+          className={`h-4 w-4 flex-shrink-0 ${
+            isActive ? "text-accent-foreground" : "text-muted-foreground"
+          }`}
+          aria-hidden="true"
+        />
+
+        <div className="flex-1 min-w-0">
+          {isEditing ? (
+            <div className="flex items-center gap-1">
+              <Input
+                ref={inputRef}
+                type="text"
+                value={editTitle}
+                onChange={(e) => setEditTitle(e.target.value)}
+                onKeyDown={handleKeyDown}
+                onClick={(e) => e.stopPropagation()}
+                className="flex-1 h-6 px-1 text-sm"
+                aria-label="Edit session title"
+              />
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-5 w-5"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleSaveEdit();
+                }}
+                aria-label="Save title"
+              >
+                <Check className="h-3 w-3" aria-hidden="true" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-5 w-5"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleCancelEdit();
+                }}
+                aria-label="Cancel editing"
+              >
+                <X className="h-3 w-3" aria-hidden="true" />
+              </Button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <span className="truncate font-medium">{truncatedTitle}</span>
+              {isPinned && (
+                <Pin className="h-3 w-3 text-muted-foreground flex-shrink-0" aria-hidden="true" />
+              )}
+            </div>
+          )}
+
+          {!isEditing && (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span>{formatRelativeTime(session.updated_at)}</span>
+              {session.message_count !== undefined && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span>{session.message_count} messages</span>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Hover Actions */}
+        {!isEditing && (
+          <TooltipProvider delayDuration={300}>
+            <div
+              className={`
+                flex items-center gap-0.5
+                ${isHovered ? "opacity-100" : "opacity-0"}
+                transition-opacity
+              `}
+            >
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onPinToggle();
+                    }}
+                    aria-label={isPinned ? "Unpin session" : "Pin session"}
+                  >
+                    {isPinned ? (
+                      <PinOff className="h-3.5 w-3.5" aria-hidden="true" />
+                    ) : (
+                      <Pin className="h-3.5 w-3.5" aria-hidden="true" />
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  <p>{isPinned ? "Unpin" : "Pin"}</p>
+                </TooltipContent>
+              </Tooltip>
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleStartEdit();
+                    }}
+                    aria-label="Rename session"
+                  >
+                    <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  <p>Rename</p>
+                </TooltipContent>
+              </Tooltip>
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 text-destructive hover:text-destructive"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowDeleteDialog(true);
+                    }}
+                    aria-label="Delete session"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  <p>Delete</p>
+                </TooltipContent>
+              </Tooltip>
+
+              {/* Context Menu */}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    onClick={(e) => e.stopPropagation()}
+                    aria-label="More options"
+                  >
+                    <MoreHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-48">
+                  <DropdownMenuItem
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onPinToggle();
+                    }}
+                  >
+                    {isPinned ? (
+                      <>
+                        <PinOff className="mr-2 h-4 w-4" aria-hidden="true" />
+                        Unpin
+                      </>
+                    ) : (
+                      <>
+                        <Pin className="mr-2 h-4 w-4" aria-hidden="true" />
+                        Pin
+                      </>
+                    )}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleStartEdit();
+                    }}
+                  >
+                    <Pencil className="mr-2 h-4 w-4" aria-hidden="true" />
+                    Rename
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowDeleteDialog(true);
+                    }}
+                    className="text-destructive focus:text-destructive"
+                  >
+                    <Trash2 className="mr-2 h-4 w-4" aria-hidden="true" />
+                    Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          </TooltipProvider>
+        )}
+      </div>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Session</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete &quot;{displayTitle}&quot;? This action cannot
+              be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowDeleteDialog(false)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleDeleteConfirm}>
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+// =============================================================================
+// COMPONENT: SessionGroup
+// =============================================================================
+
+const GROUP_LABELS: Record<TimeGroupKey, string> = {
+  pinned: "Pinned",
+  today: "Today",
+  yesterday: "Yesterday",
+  thisWeek: "This Week",
+  older: "Older",
+};
+
+export function SessionGroup({
+  label,
+  sessions,
+  isOpen: controlledIsOpen,
+  onToggle,
+  activeSessionId,
+  onSessionClick,
+  onSessionRename,
+  onSessionPinToggle,
+  onSessionDelete,
+  isSessionPinned,
+  className,
+}: SessionGroupProps) {
+  const [internalIsOpen, setInternalIsOpen] = useState(true);
+  const isOpen = controlledIsOpen ?? internalIsOpen;
+
+  const handleToggle = useCallback(() => {
+    if (onToggle) {
+      onToggle();
+    } else {
+      setInternalIsOpen((prev) => !prev);
+    }
+  }, [onToggle]);
+
+  if (sessions.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className={className}>
+      <button
+        type="button"
+        onClick={handleToggle}
+        className="flex w-full items-center justify-between px-2 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide hover:text-foreground transition-colors"
+        aria-expanded={isOpen}
+        aria-label={`${label} section, ${sessions.length} sessions`}
+      >
+        <div className="flex items-center gap-2">
+          {isOpen ? (
+            <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+          )}
+          <span>{label}</span>
+        </div>
+        <Badge variant="secondary" className="text-[10px] h-4 px-1.5">
+          {sessions.length}
+        </Badge>
+      </button>
+
+      {isOpen && (
+        <div className="mt-1 space-y-0.5" role="list" aria-label={`${label} sessions`}>
+          {sessions.map((session) => (
+            <SessionItem
+              key={session.id}
+              session={session}
+              isActive={String(session.id) === activeSessionId}
+              isPinned={isSessionPinned(session.id)}
+              onClick={() => onSessionClick(session)}
+              onRename={(newTitle) => onSessionRename(session, newTitle)}
+              onPinToggle={() => onSessionPinToggle(session.id)}
+              onDelete={() => onSessionDelete(session)}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// =============================================================================
+// COMPONENT: SessionRail (Main)
+// =============================================================================
+
+interface SessionRailProps {
+  vaultId?: number;
+  className?: string;
+}
+
+export function SessionRail({ vaultId, className }: SessionRailProps) {
+  const navigate = useNavigate();
+  const {
+    activeSessionId,
+    sessionSearchQuery,
+    pinnedSessionIds,
+    setSessionSearchQuery,
+    togglePinSession,
+    isSessionPinned,
+    setActiveSessionId,
+  } = useChatShellStore();
+
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [sessionDetails, setSessionDetails] = useState<Map<number, ChatSessionDetail>>(new Map());
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Fetch sessions on mount and when vaultId changes
+  useEffect(() => {
+    const fetchSessions = async () => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        const data = await listChatSessions(vaultId);
+        setSessions(Array.isArray(data.sessions) ? data.sessions : []);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Failed to load sessions";
+        setError(message);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchSessions();
+  }, [vaultId]);
+
+  // Track which session IDs have been fetched to avoid duplicate fetches
+  const fetchedIdsRef = useRef<Set<number>>(new Set());
+
+  // Fetch session details for first message content when needed for search
+  useEffect(() => {
+    const fetchSessionDetails = async () => {
+      if (!sessionSearchQuery.trim()) {
+        setSessionDetails(new Map());
+        fetchedIdsRef.current.clear();
+        return;
+      }
+
+      // Clear fetched IDs when search query changes to refetch as needed
+      // Only fetch details for sessions we don't already have
+      const sessionsNeedingDetails = sessions.filter((s) => !fetchedIdsRef.current.has(s.id));
+      
+      if (sessionsNeedingDetails.length === 0) return;
+
+      const newDetails = new Map(sessionDetails);
+      
+      await Promise.all(
+        sessionsNeedingDetails.slice(0, 10).map(async (session) => {
+          try {
+            const detail = await getChatSession(session.id);
+            newDetails.set(session.id, detail);
+            fetchedIdsRef.current.add(session.id);
+          } catch {
+            // Silently fail for individual session fetch errors
+          }
+        })
+      );
+
+      setSessionDetails(newDetails);
+    };
+
+    fetchSessionDetails();
+  }, [sessionSearchQuery, sessions]);
+
+  // Filter sessions based on search query (title + first message content)
+  const filteredSessions = useMemo(() => {
+    if (!sessionSearchQuery.trim()) return sessions;
+
+    const query = sessionSearchQuery.toLowerCase();
+    return sessions.filter((session) => {
+      // Search title
+      const titleMatch = (session.title || "Untitled").toLowerCase().includes(query);
+      
+      // Search first message content if available
+      const detail = sessionDetails.get(session.id);
+      const firstMessageContent = detail?.messages?.[0]?.content || "";
+      const contentMatch = firstMessageContent.toLowerCase().includes(query);
+      
+      return titleMatch || contentMatch;
+    });
+  }, [sessions, sessionSearchQuery, sessionDetails]);
+
+  // Group sessions by time
+  const groupedSessions = useMemo(
+    () => groupSessionsByTime(filteredSessions, pinnedSessionIds),
+    [filteredSessions, pinnedSessionIds]
+  );
+
+  // Handle new chat
+  const handleNewChat = useCallback(() => {
+    setActiveSessionId(null);
+    navigate("/chat");
+  }, [navigate, setActiveSessionId]);
+
+  // Handle session click
+  const handleSessionClick = useCallback(
+    (session: ChatSession) => {
+      setActiveSessionId(String(session.id));
+      navigate(`/chat/${session.id}`);
+    },
+    [navigate, setActiveSessionId]
+  );
+
+  // Handle rename with API call (optimistic update with revert on failure)
+  const handleSessionRename = useCallback(
+    async (_session: ChatSession, newTitle: string) => {
+      const originalTitle = _session.title;
+      
+      // Optimistic update: update local state immediately
+      setSessions((prev) =>
+        prev.map((s) =>
+          s.id === _session.id ? { ...s, title: newTitle } : s
+        )
+      );
+      
+      try {
+        await updateChatSession(_session.id, newTitle);
+      } catch (err) {
+        // Revert on failure — do NOT call setError() here because rename
+        // failure is non-blocking; the reverted title is visible to the user.
+        setSessions((prev) =>
+          prev.map((s) =>
+            s.id === _session.id ? { ...s, title: originalTitle } : s
+          )
+        );
+        const message = err instanceof Error ? err.message : "Failed to rename session";
+        console.warn("Rename failed, reverted:", message);
+      }
+    },
+    []
+  );
+
+  // Handle delete with API call
+  const handleSessionDelete = useCallback(
+    async (session: ChatSession) => {
+      try {
+        await deleteChatSession(session.id);
+        // Remove from local list
+        setSessions((prev) => prev.filter((s) => s.id !== session.id));
+        // Unpin if it was pinned
+        if (isSessionPinned(session.id)) {
+          togglePinSession(session.id);
+        }
+        // Navigate away if it was the active session
+        if (String(session.id) === activeSessionId) {
+          setActiveSessionId(null);
+          navigate("/chat");
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Failed to delete session";
+        setError(message);
+      }
+    },
+    [activeSessionId, isSessionPinned, navigate, setActiveSessionId, togglePinSession]
+  );
+
+  // Retry loading sessions
+  const handleRetry = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const data = await listChatSessions(vaultId);
+      setSessions(data.sessions);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to load sessions";
+      setError(message);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [vaultId]);
+
+  // Loading skeleton
+  if (isLoading) {
+    return (
+      <div className={`flex h-full flex-col ${className || ""}`}>
+        <div className="flex items-center justify-between mb-4">
+          <Skeleton className="h-4 w-20" />
+          <Skeleton className="h-8 w-24" />
+        </div>
+        <Skeleton className="h-9 w-full mb-4" />
+        <div className="space-y-4 flex-1">
+          {[...Array(5)].map((_, i) => (
+            <div key={i} className="flex items-center gap-3 px-2">
+              <Skeleton className="h-4 w-4 flex-shrink-0" />
+              <div className="flex-1 space-y-2">
+                <Skeleton className="h-4 w-[150px]" />
+                <Skeleton className="h-3 w-[100px]" />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // Error state
+  if (error) {
+    return (
+      <div className={`flex h-full flex-col ${className || ""}`}>
+        <div className="flex flex-col items-center justify-center py-8 text-center flex-1">
+          <MessageSquare className="w-10 h-10 text-muted-foreground mb-3" aria-hidden="true" />
+          <p className="text-sm text-muted-foreground">Failed to load sessions</p>
+          <p className="text-xs text-muted-foreground/70 mt-1">{error}</p>
+          <Button variant="outline" size="sm" className="mt-4" onClick={handleRetry}>
+            Retry
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  // Empty state (no sessions at all)
+  if (sessions.length === 0) {
+    return (
+      <div className={`flex h-full flex-col ${className || ""}`}>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+            Sessions
+          </h2>
+          <Button size="sm" onClick={handleNewChat}>
+            <Plus className="mr-1.5 h-4 w-4" aria-hidden="true" />
+            New Chat
+          </Button>
+        </div>
+        <div className="flex flex-col items-center justify-center py-12 text-center flex-1">
+          <MessageSquare className="w-12 h-12 text-muted-foreground mb-4" aria-hidden="true" />
+          <p className="text-sm text-muted-foreground">No sessions yet</p>
+          <p className="text-xs text-muted-foreground/70 mt-1">
+            Start a new chat to begin a conversation
+          </p>
+          <Button variant="outline" className="mt-4" onClick={handleNewChat}>
+            <Plus className="mr-1.5 h-4 w-4" aria-hidden="true" />
+            New Chat
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  // Empty search results
+  const hasSearchResults = Object.values(groupedSessions).some(
+    (group) => group.length > 0
+  );
+
+  return (
+    <div className={`flex h-full flex-col ${className || ""}`}>
+      {/* Header */}
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+          Sessions
+        </h2>
+        <Button size="sm" onClick={handleNewChat} aria-label="Start new chat">
+          <Plus className="mr-1.5 h-4 w-4" aria-hidden="true" />
+          New Chat
+        </Button>
+      </div>
+
+      {/* Search */}
+      <ChatSearchInput
+        value={sessionSearchQuery}
+        onChange={setSessionSearchQuery}
+        className="mb-4"
+      />
+
+      {/* Sessions List */}
+      <ScrollArea className="flex-1 -mx-2 px-2">
+        {!hasSearchResults ? (
+          <div className="flex flex-col items-center justify-center py-8 text-center">
+            <Search className="w-10 h-10 text-muted-foreground mb-3" aria-hidden="true" />
+            <p className="text-sm text-muted-foreground">No sessions found</p>
+            <p className="text-xs text-muted-foreground/70 mt-1">
+              Try adjusting your search
+            </p>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="mt-2"
+              onClick={() => setSessionSearchQuery("")}
+            >
+              Clear search
+            </Button>
+          </div>
+        ) : (
+          <div className="space-y-4 pb-4">
+            {/* Pinned Section */}
+            {groupedSessions.pinned.length > 0 && (
+              <SessionGroup
+                label={GROUP_LABELS.pinned}
+                sessions={groupedSessions.pinned}
+                activeSessionId={activeSessionId}
+                onSessionClick={handleSessionClick}
+                onSessionRename={handleSessionRename}
+                onSessionPinToggle={togglePinSession}
+                onSessionDelete={handleSessionDelete}
+                isSessionPinned={isSessionPinned}
+              />
+            )}
+
+            {/* Today Section */}
+            {groupedSessions.today.length > 0 && (
+              <SessionGroup
+                label={GROUP_LABELS.today}
+                sessions={groupedSessions.today}
+                activeSessionId={activeSessionId}
+                onSessionClick={handleSessionClick}
+                onSessionRename={handleSessionRename}
+                onSessionPinToggle={togglePinSession}
+                onSessionDelete={handleSessionDelete}
+                isSessionPinned={isSessionPinned}
+              />
+            )}
+
+            {/* Yesterday Section */}
+            {groupedSessions.yesterday.length > 0 && (
+              <SessionGroup
+                label={GROUP_LABELS.yesterday}
+                sessions={groupedSessions.yesterday}
+                activeSessionId={activeSessionId}
+                onSessionClick={handleSessionClick}
+                onSessionRename={handleSessionRename}
+                onSessionPinToggle={togglePinSession}
+                onSessionDelete={handleSessionDelete}
+                isSessionPinned={isSessionPinned}
+              />
+            )}
+
+            {/* This Week Section */}
+            {groupedSessions.thisWeek.length > 0 && (
+              <SessionGroup
+                label={GROUP_LABELS.thisWeek}
+                sessions={groupedSessions.thisWeek}
+                activeSessionId={activeSessionId}
+                onSessionClick={handleSessionClick}
+                onSessionRename={handleSessionRename}
+                onSessionPinToggle={togglePinSession}
+                onSessionDelete={handleSessionDelete}
+                isSessionPinned={isSessionPinned}
+              />
+            )}
+
+            {/* Older Section */}
+            {groupedSessions.older.length > 0 && (
+              <SessionGroup
+                label={GROUP_LABELS.older}
+                sessions={groupedSessions.older}
+                activeSessionId={activeSessionId}
+                onSessionClick={handleSessionClick}
+                onSessionRename={handleSessionRename}
+                onSessionPinToggle={togglePinSession}
+                onSessionDelete={handleSessionDelete}
+                isSessionPinned={isSessionPinned}
+              />
+            )}
+          </div>
+        )}
+      </ScrollArea>
+    </div>
+  );
+}
+
+export default SessionRail;

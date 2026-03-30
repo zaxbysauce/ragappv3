@@ -204,6 +204,9 @@ class RAGEngine:
                 )
                 query_sparse = None
 
+        # Per-request alpha: if sparse embedding failed, use pure dense (alpha=1.0)
+        effective_alpha = 1.0 if query_sparse is None else self.hybrid_alpha
+
         # Execute retrieval and evaluation
         fallback_reason: Optional[str] = None
         vector_results: List[Dict[str, Any]] = []
@@ -222,7 +225,11 @@ class RAGEngine:
         else:
             try:
                 vector_results, relevance_hint = await self._execute_retrieval(
-                    query_embeddings, user_input, vault_id, query_sparse
+                    query_embeddings,
+                    user_input,
+                    vault_id,
+                    query_sparse,
+                    effective_alpha=effective_alpha,
                 )
             except Exception as exc:
                 fallback_reason = str(exc)
@@ -230,6 +237,12 @@ class RAGEngine:
 
         # Filter relevant chunks using document retrieval service
         relevant_chunks = self.document_retrieval.filter_relevant(vector_results)
+
+        # Check if distance filtering removed all results (no_match)
+        if not relevant_chunks and self.document_retrieval.no_match:
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("Distance filtering: NO_MATCH for query '%s'", user_input)
+            relevance_hint = "Note: The retrieved documents may not be directly relevant to your query. The system found no chunks within the relevance threshold."
 
         # Supersession check: warn if retrieved files have newer versions
         if relevant_chunks:
@@ -255,7 +268,7 @@ class RAGEngine:
             memories = await asyncio.to_thread(
                 self.memory_store.search_memories,
                 user_input,
-                settings.max_context_chunks,
+                settings.retrieval_top_k,
                 vault_id=vault_id,
             )
         except Exception as exc:
@@ -284,6 +297,7 @@ class RAGEngine:
         user_input: str,
         vault_id: Optional[int],
         query_sparse: Optional[dict] = None,
+        effective_alpha: float = 0.6,
     ) -> tuple[List[Dict[str, Any]], Optional[str]]:
         """Execute vector search and retrieval evaluation.
 
@@ -312,7 +326,7 @@ class RAGEngine:
                 vault_id=str(vault_id) if vault_id is not None else None,
                 query_text=user_input if i == 0 else "",
                 hybrid=self.hybrid_search_enabled and i == 0,
-                hybrid_alpha=self.hybrid_alpha,
+                hybrid_alpha=effective_alpha,
             )
             all_results.append(results)
 
@@ -500,6 +514,8 @@ class RAGEngine:
             "retrieval_top_k": self.retrieval_top_k,
         }
 
+        score_type = "rerank" if self.reranking_enabled else "distance"
+
         return {
             "type": "done",
             "sources": [
@@ -507,6 +523,7 @@ class RAGEngine:
             ],
             "memories_used": [mem.content for mem in memories],
             "retrieval_debug": retrieval_debug,
+            "score_type": score_type,
         }
 
     def _ensure_services(self) -> None:

@@ -13,9 +13,41 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
+def _normalize_uid_for_dedup(uid: str) -> str:
+    """Strip scale suffix from multi-scale chunk UIDs for deduplication.
+
+    Multi-scale UIDs have format: {file_id}_{scale}_{index}
+    Default UIDs have format: {file_id}_{index}
+
+    This function strips the scale component so that "doc1_512_3" and "doc1_3"
+    are treated as the same chunk for deduplication purposes.
+    """
+    # Try to parse as multi-scale: {file_id}_{scale}_{index}
+    # The last segment should be a number (chunk_index)
+    parts = uid.rsplit("_", 2)
+    if len(parts) == 3:
+        # Check if last part is a number (chunk_index)
+        try:
+            int(parts[2])
+            # If last part is numeric, this could be multi-scale OR default with 3-part file_id
+            # Check if middle part is a known scale pattern (numeric like "512", "1024", etc.)
+            try:
+                int(parts[1])
+                # Middle part is also numeric → likely multi-scale: file_id_scale_index
+                return f"{parts[0]}_{parts[2]}"
+            except ValueError:
+                # Middle part is not numeric → default UID with 3-part file_id
+                return uid
+        except ValueError:
+            # Last part is not numeric → not a standard chunk UID
+            return uid
+    return uid
+
+
 @dataclass
 class RAGSource:
     """Represents a retrieved document source."""
+
     text: str
     file_id: str
     score: float
@@ -41,10 +73,15 @@ class DocumentRetrievalService:
             retrieval_window: Window size for expanding results with adjacent chunks
         """
         self.vector_store = vector_store
-        self.max_distance_threshold = max_distance_threshold or settings.max_distance_threshold
+        self.max_distance_threshold = (
+            max_distance_threshold or settings.max_distance_threshold
+        )
         self.retrieval_top_k = retrieval_top_k or settings.retrieval_top_k
         self.retrieval_window = retrieval_window or settings.retrieval_window
         self.relevance_threshold = settings.rag_relevance_threshold  # Legacy support
+        self.no_match: bool = (
+            False  # Flag set when all results exceed distance threshold
+        )
 
     def filter_relevant(
         self,
@@ -63,9 +100,15 @@ class DocumentRetrievalService:
 
         Returns:
             List of filtered RAGSource objects
+
+        Sets self.no_match = True when all results exceed the distance threshold
+        and an empty list is returned.
         """
         if top_k is None:
             top_k = self.retrieval_top_k
+
+        # Reset no_match flag at start of filtering
+        self.no_match = False
 
         sources: List[RAGSource] = []
         distances: List[float] = []
@@ -74,7 +117,7 @@ class DocumentRetrievalService:
         logger.debug(
             "Filtering: input_results=%d, max_distance_threshold=%s",
             input_count,
-            self.max_distance_threshold
+            self.max_distance_threshold,
         )
         if results:
             first_distances = [r.get("_distance", r.get("score")) for r in results[:5]]
@@ -123,53 +166,27 @@ class DocumentRetrievalService:
 
             logger.info(
                 "Vector search: initial=%d, filtered=%d, min=%.3f, max=%.3f, mean=%.3f, threshold=%.3f",
-                initial_count, filtered_count, min_dist, max_dist, mean_dist, self.max_distance_threshold
+                initial_count,
+                filtered_count,
+                min_dist,
+                max_dist,
+                mean_dist,
+                self.max_distance_threshold,
             )
 
         # Apply window expansion if enabled
         if self.retrieval_window > 0:
             sources = self.expand_window(sources)
 
-        # Fallback if all results were filtered
+        # When all results exceed threshold, signal no_match instead of returning top-k
         if input_count > 0 and len(sources) == 0:
-            safe_threshold = self.max_distance_threshold
-            if safe_threshold is None:
-                safe_threshold = self.relevance_threshold
-
-            if safe_threshold is None:
-                logger.warning(
-                    "Threshold filtering removed all %d results (max_distance_threshold=%s). "
-                    "Applying fallback: returning top %d results without threshold filtering.",
-                    input_count,
-                    safe_threshold,
-                    min(top_k, len(results))
-                )
-            else:
-                logger.warning(
-                    "Threshold filtering removed all %d results (max_distance_threshold=%.3f). "
-                    "Applying fallback: returning top %d results without threshold filtering.",
-                    input_count,
-                    safe_threshold,
-                    min(top_k, len(results))
-                )
-
-            fallback_limit = min(top_k, len(results))
-            sources = []
-            for record in results[:fallback_limit]:
-                distance = record.get("_distance")
-                if distance is None:
-                    score = record.get("score")
-                    if score is None:
-                        score = 1.0
-                    distance = score
-                sources.append(
-                    RAGSource(
-                        text=record.get("text", ""),
-                        file_id=record.get("file_id", ""),
-                        score=distance,
-                        metadata=self._normalize_metadata(record.get("metadata")),
-                    )
-                )
+            logger.info(
+                "All %d results exceeded max_distance_threshold=%.3f. "
+                "Returning empty list with no_match flag.",
+                input_count,
+                self.max_distance_threshold,
+            )
+            self.no_match = True
 
         logger.debug("Filtering complete: %d results returned", len(sources))
         return sources
@@ -249,13 +266,13 @@ class DocumentRetrievalService:
                     uid = f"{source.file_id}_{chunk_scale}_{chunk_index}"
                 else:
                     uid = f"{source.file_id}_{chunk_index}"
-                if uid not in seen_uids:
+                if _normalize_uid_for_dedup(uid) not in seen_uids:
                     expanded_sources.append(source)
-                    seen_uids.add(uid)
+                    seen_uids.add(_normalize_uid_for_dedup(uid))
 
             # Then, add adjacent chunks that aren't already in the results
             for chunk_uid in chunk_uids_to_fetch:
-                if chunk_uid in seen_uids:
+                if _normalize_uid_for_dedup(chunk_uid) in seen_uids:
                     continue
 
                 parts = chunk_uid.rsplit("_", 2)
@@ -295,7 +312,7 @@ class DocumentRetrievalService:
                         metadata=metadata,
                     )
                     expanded_sources.append(expanded_source)
-                    seen_uids.add(chunk_uid)
+                    seen_uids.add(_normalize_uid_for_dedup(chunk_uid))
 
             # Sort by (file_id, chunk_index)
             def sort_key(source: RAGSource) -> tuple:
@@ -310,7 +327,7 @@ class DocumentRetrievalService:
 
             # Cap to retrieval_top_k total
             if len(expanded_sources) > self.retrieval_top_k:
-                expanded_sources = expanded_sources[:self.retrieval_top_k]
+                expanded_sources = expanded_sources[: self.retrieval_top_k]
 
             return expanded_sources
 
@@ -369,5 +386,9 @@ class DocumentRetrievalService:
         Returns:
             Formatted string with source and text
         """
-        source_title = chunk.metadata.get("source_file") or chunk.metadata.get("section_title") or "document"
+        source_title = (
+            chunk.metadata.get("source_file")
+            or chunk.metadata.get("section_title")
+            or "document"
+        )
         return f"Source {source_title} (score: {chunk.score:.2f}):\n{chunk.text}"

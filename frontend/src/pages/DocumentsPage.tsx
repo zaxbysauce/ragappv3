@@ -318,8 +318,8 @@ export default function DocumentsPage() {
           </Card>
           <Card>
             <CardHeader className="pb-2">
-              <CardDescription>Processed</CardDescription>
-              <CardTitle className="text-3xl">{stats.documents_by_status?.processed || 0}</CardTitle>
+              <CardDescription>Indexed</CardDescription>
+              <CardTitle className="text-3xl">{stats.documents_by_status?.indexed || 0}</CardTitle>
             </CardHeader>
           </Card>
         </div>

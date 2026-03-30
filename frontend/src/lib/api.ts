@@ -3,6 +3,33 @@ import { setChatHistory as storageSetChatHistory, getChatHistory as storageGetCh
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || "/api";
 
+// Module-level JWT token holder - persisted via useAuthStore persist middleware
+let _jwtAccessToken: string | null = null;
+
+export function setJwtAccessToken(token: string | null): void {
+  _jwtAccessToken = token;
+}
+
+export function getJwtAccessToken(): string | null {
+  return _jwtAccessToken;
+}
+
+// Standalone refresh function to avoid circular dependencies
+async function refreshAccessToken(): Promise<string | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/auth/refresh`, {
+      method: "POST",
+      credentials: "include", // Send httpOnly cookie with refresh token
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    _jwtAccessToken = data.access_token;
+    return data.access_token;
+  } catch {
+    return null;
+  }
+}
+
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
   headers: {
@@ -10,8 +37,13 @@ const apiClient = axios.create({
   },
 });
 
-// Attach API key from localStorage if configured
+// Attach authentication token (JWT takes precedence over API key)
 apiClient.interceptors.request.use((config) => {
+  // JWT takes precedence over API key
+  if (_jwtAccessToken) {
+    config.headers.Authorization = `Bearer ${_jwtAccessToken}`;
+    return config;
+  }
   const apiKey = localStorage.getItem("kv_api_key");
   if (apiKey) {
     config.headers.Authorization = `Bearer ${apiKey}`;
@@ -22,20 +54,44 @@ apiClient.interceptors.request.use((config) => {
 // Normalize error responses
 apiClient.interceptors.response.use(
   (response) => response,
-  (error) => {
+  async (error) => {
     // Preserve AbortError for cancellation handling
     if (error.name === "AbortError" || error.code === "ERR_CANCELED") {
       return Promise.reject(error);
     }
 
-    // Handle 401 Unauthorized - clear auth and redirect
+    // Handle 401 Unauthorized - attempt silent refresh for JWT, or clear API key
     if (error.response?.status === 401) {
-      localStorage.removeItem("kv_api_key");
-      // Dispatch custom event that AuthProvider can listen to
-      window.dispatchEvent(new CustomEvent("auth:unauthorized"));
-      // Also try to redirect using router if available
-      if (window.history && window.location.pathname !== "/login") {
-        window.location.href = "/login";
+      // JWT auth: attempt silent token refresh before redirecting
+      if (_jwtAccessToken) {
+        // Use a flag to prevent infinite refresh loops
+        if (!error.config._retry) {
+          error.config._retry = true;
+          try {
+            const newToken = await refreshAccessToken();
+            if (newToken) {
+              error.config.headers.Authorization = `Bearer ${newToken}`;
+              return apiClient(error.config);
+            }
+          } catch {
+            // Refresh failed, fall through to logout
+          }
+        }
+        // Clear JWT auth
+        _jwtAccessToken = null;
+        window.dispatchEvent(new CustomEvent("auth:unauthorized"));
+        if (window.location.pathname !== "/login") {
+          window.location.href = "/login";
+        }
+      } else {
+        // API key auth: clear the key and redirect
+        localStorage.removeItem("kv_api_key");
+        // Dispatch custom event that AuthProvider can listen to
+        window.dispatchEvent(new CustomEvent("auth:unauthorized"));
+        // Also try to redirect using router if available
+        if (window.history && window.location.pathname !== "/login") {
+          window.location.href = "/login";
+        }
       }
     }
 
@@ -236,6 +292,7 @@ export interface Source {
   filename: string;
   snippet?: string;
   score?: number;
+  score_type?: "distance" | "rerank" | "rrf";
 }
 
 export interface ChatStreamCallbacks {
@@ -468,6 +525,9 @@ export function chatStream(
   callbacks: ChatStreamCallbacks,
   vaultId?: number
 ): () => void {
+  // TODO: Chat streaming doesn't support silent JWT refresh.
+  // Long-lived sessions (>15min) may fail mid-stream. Consider
+  // adding a pre-stream token refresh check.
   const abortController = new AbortController();
 
   const startStream = async () => {
@@ -475,9 +535,14 @@ export function chatStream(
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
       };
-      const apiKey = localStorage.getItem("kv_api_key");
-      if (apiKey) {
-        headers["Authorization"] = `Bearer ${apiKey}`;
+      // JWT takes precedence over API key
+      if (_jwtAccessToken) {
+        headers["Authorization"] = `Bearer ${_jwtAccessToken}`;
+      } else {
+        const apiKey = localStorage.getItem("kv_api_key");
+        if (apiKey) {
+          headers["Authorization"] = `Bearer ${apiKey}`;
+        }
       }
 
       const response = await fetch(`${API_BASE_URL}/chat/stream`, {
@@ -525,7 +590,12 @@ export function chatStream(
                 callbacks.onMessage(parsed.content);
               }
               if (parsed.sources) {
-                callbacks.onSources?.(parsed.sources);
+                // Inject score_type from done event into each source
+                const scoreType = (parsed as any).score_type as Source["score_type"];
+                const enrichedSources = scoreType
+                  ? parsed.sources.map((s: Source) => ({ ...s, score_type: scoreType }))
+                  : parsed.sources;
+                callbacks.onSources?.(enrichedSources);
               }
             } catch {
               callbacks.onMessage(data);

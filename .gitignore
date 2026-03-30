@@ -66,3 +66,8 @@ test_analysis.txt
 
 # Swarm local files
 .swarm/
+opencodeRAGAPPv2-remote/
+opencodeRAGAPPv3-remote/
+opencodeRAGAPPv2-remote/
+.swarm/
+opencodeRAGAPPv2-remote/

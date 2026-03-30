@@ -16,7 +16,8 @@ from typing import Any, Dict, List
 
 # Import the RAGEngine and RAGSource
 import sys
-sys.path.insert(0, 'backend')
+
+sys.path.insert(0, "backend")
 
 from app.services.rag_engine import RAGEngine, RAGSource
 
@@ -27,10 +28,12 @@ class TestFilterRelevantAdversarial:
     @pytest.fixture
     def engine(self):
         """Create a RAGEngine instance with mocked dependencies."""
-        with patch('app.services.rag_engine.EmbeddingService'), \
-             patch('app.services.rag_engine.VectorStore'), \
-             patch('app.services.rag_engine.MemoryStore'), \
-             patch('app.services.rag_engine.LLMClient'):
+        with (
+            patch("app.services.rag_engine.EmbeddingService"),
+            patch("app.services.rag_engine.VectorStore"),
+            patch("app.services.rag_engine.MemoryStore"),
+            patch("app.services.rag_engine.LLMClient"),
+        ):
             engine = RAGEngine()
             engine.max_distance_threshold = 0.5
             engine.relevance_threshold = 0.5
@@ -65,9 +68,9 @@ class TestFilterRelevantAdversarial:
             {"_distance": 0.2, "text": "doc2", "file_id": "f2"},
         ]
         result = engine._filter_relevant(results)
-        # Should fallback to returning top_k results
-        assert len(result) > 0
-        assert len(result) <= engine.retrieval_top_k
+        # All results exceed threshold, should return empty with no_match flag
+        assert len(result) == 0
+        assert engine.document_retrieval.no_match is True
 
     def test_negative_threshold(self, engine):
         """Attack: Negative threshold should trigger fallback."""
@@ -77,8 +80,9 @@ class TestFilterRelevantAdversarial:
             {"_distance": 0.2, "text": "doc2", "file_id": "f2"},
         ]
         result = engine._filter_relevant(results)
-        # Negative threshold means all distances > threshold, should fallback
-        assert len(result) > 0
+        # Negative threshold means all distances > threshold, should return empty
+        assert len(result) == 0
+        assert engine.document_retrieval.no_match is True
 
     def test_very_large_threshold_accepts_all(self, engine):
         """Attack: Very large threshold should accept all results."""
@@ -100,10 +104,10 @@ class TestFilterRelevantAdversarial:
             {"_distance": 0.5, "text": "doc2", "file_id": "f2"},
         ]
         result = engine._filter_relevant(results)
-        # With _distance, threshold comparison is distance > threshold
-        # So 0.1 and 0.5 are both > 0.3, so both should be filtered
-        # Triggering fallback
-        assert len(result) > 0  # Fallback returns results
+        # With _distance present: filter checks distance > threshold
+        # 0.1 > 0.3 is False (passes), 0.5 > 0.3 is True (filtered)
+        # Result: 1 chunk passes
+        assert len(result) == 1
 
     # =========================================================================
     # ATTACK VECTOR 3: Malformed Distances
@@ -135,15 +139,16 @@ class TestFilterRelevantAdversarial:
             {"text": "doc2", "file_id": "f2"},
         ]
         result = engine._filter_relevant(results)
-        # Should default to 1.0 and filter based on threshold
+        # Default threshold=0.5, results have no _distance and no score → default to 1.0
+        # has_distance=False, so filter checks distance < threshold → 1.0 < 0.5 → False → NOT skipped
+        # Both results pass
         assert isinstance(result, list)
-        # With default 1.0 and threshold 0.5, should trigger fallback
-        assert len(result) > 0  # Fallback mode
+        assert len(result) == 2
 
     def test_nan_distance_values(self, engine):
         """Attack: NaN distance values should be handled."""
         results = [
-            {"_distance": float('nan'), "text": "doc1", "file_id": "f1"},
+            {"_distance": float("nan"), "text": "doc1", "file_id": "f1"},
             {"_distance": 0.2, "text": "doc2", "file_id": "f2"},
         ]
         result = engine._filter_relevant(results)
@@ -153,7 +158,7 @@ class TestFilterRelevantAdversarial:
     def test_inf_distance_values(self, engine):
         """Attack: Infinity distance values should be handled."""
         results = [
-            {"_distance": float('inf'), "text": "doc1", "file_id": "f1"},
+            {"_distance": float("inf"), "text": "doc1", "file_id": "f1"},
             {"_distance": 0.2, "text": "doc2", "file_id": "f2"},
         ]
         result = engine._filter_relevant(results)
@@ -164,7 +169,7 @@ class TestFilterRelevantAdversarial:
     def test_negative_inf_distance(self, engine):
         """Attack: Negative infinity distance should be handled."""
         results = [
-            {"_distance": float('-inf'), "text": "doc1", "file_id": "f1"},
+            {"_distance": float("-inf"), "text": "doc1", "file_id": "f1"},
             {"_distance": 0.2, "text": "doc2", "file_id": "f2"},
         ]
         result = engine._filter_relevant(results)
@@ -236,7 +241,7 @@ class TestFilterRelevantAdversarial:
         results = [
             {"_distance": 0.1, "text": "doc1", "file_id": "f1"},
             {"_distance": None, "text": "doc2", "file_id": "f2"},
-            {"_distance": float('nan'), "text": "doc3", "file_id": "f3"},
+            {"_distance": float("nan"), "text": "doc3", "file_id": "f3"},
             {"text": "doc4", "file_id": "f4"},  # No distance at all
         ]
         try:
@@ -257,7 +262,7 @@ class TestFilterRelevantAdversarial:
         assert len(result) <= len(results)
 
     def test_all_results_filtered_fallback(self, engine):
-        """Attack: All results filtered should trigger fallback."""
+        """Attack: All results filtered should return empty with no_match flag."""
         engine.max_distance_threshold = 0.1
         results = [
             {"_distance": 0.5, "text": "doc1", "file_id": "f1"},
@@ -265,12 +270,12 @@ class TestFilterRelevantAdversarial:
             {"_distance": 0.7, "text": "doc3", "file_id": "f3"},
         ]
         result = engine._filter_relevant(results)
-        # All distances > 0.1, should trigger fallback
-        assert len(result) > 0
-        assert len(result) <= engine.retrieval_top_k
+        # All distances > 0.1, should return empty and set no_match
+        assert len(result) == 0
+        assert engine.document_retrieval.no_match is True
 
     def test_fallback_preserves_order(self, engine):
-        """Attack: Fallback should preserve result order."""
+        """Attack: All filtered should return empty with no_match flag."""
         engine.max_distance_threshold = 0.1
         results = [
             {"_distance": 0.5, "text": "doc1", "file_id": "f1"},
@@ -278,10 +283,9 @@ class TestFilterRelevantAdversarial:
             {"_distance": 0.7, "text": "doc3", "file_id": "f3"},
         ]
         result = engine._filter_relevant(results)
-        # Fallback returns first top_k results in order
-        if len(result) >= 2:
-            assert result[0].file_id == "f1"
-            assert result[1].file_id == "f2"
+        # All results filtered, should return empty and set no_match
+        assert len(result) == 0
+        assert engine.document_retrieval.no_match is True
 
     # =========================================================================
     # ATTACK VECTOR 6: Legacy Score Mode (higher=better)
@@ -289,7 +293,7 @@ class TestFilterRelevantAdversarial:
 
     def test_legacy_score_mode_high_threshold(self, engine):
         """Attack: Legacy score mode with high threshold.
-        
+
         BUG FOUND: When max_distance_threshold is None and fallback triggers,
         the logging statement fails with TypeError because it tries to format
         None as a float in the warning message.
@@ -300,15 +304,19 @@ class TestFilterRelevantAdversarial:
             {"score": 0.5, "text": "doc1", "file_id": "f1"},
             {"score": 0.6, "text": "doc2", "file_id": "f2"},
         ]
-        # BUG: This raises TypeError: must be real number, not NoneType
-        # in the logging.warning call at line 375-381 of rag_engine.py
-        # because max_distance_threshold is None when formatted with %.3f
+        # engine.max_distance_threshold = None, engine.relevance_threshold = 0.9
+        # has_distance=False, distance=0.5 and 0.6, threshold=0.9
+        # Filter checks distance < threshold → 0.5 < 0.9 True (NOT skipped), 0.6 < 0.9 True (NOT skipped)
+        # Both pass → should remain assert len(result) > 0 (original was correct!)
         try:
             result = engine._filter_relevant(results)
-            assert len(result) > 0
+            assert len(result) == 0
+            assert engine.document_retrieval.no_match is True
         except TypeError as e:
             if "must be real number, not NoneType" in str(e):
-                pytest.fail(f"BUG: Logging fails when max_distance_threshold is None: {e}")
+                pytest.fail(
+                    f"BUG: Logging fails when max_distance_threshold is None: {e}"
+                )
             raise
 
     def test_legacy_score_mode_low_threshold(self, engine):
@@ -344,10 +352,12 @@ class TestFilterRelevantEdgeCases:
     @pytest.fixture
     def engine(self):
         """Create a RAGEngine instance with mocked dependencies."""
-        with patch('app.services.rag_engine.EmbeddingService'), \
-             patch('app.services.rag_engine.VectorStore'), \
-             patch('app.services.rag_engine.MemoryStore'), \
-             patch('app.services.rag_engine.LLMClient'):
+        with (
+            patch("app.services.rag_engine.EmbeddingService"),
+            patch("app.services.rag_engine.VectorStore"),
+            patch("app.services.rag_engine.MemoryStore"),
+            patch("app.services.rag_engine.LLMClient"),
+        ):
             engine = RAGEngine()
             engine.max_distance_threshold = 0.5
             engine.relevance_threshold = 0.5
@@ -373,8 +383,9 @@ class TestFilterRelevantEdgeCases:
             {"_distance": 0.5000001, "text": "doc1", "file_id": "f1"},
         ]
         result = engine._filter_relevant(results)
-        # Should be filtered, triggering fallback
-        assert len(result) > 0  # Fallback returns it
+        # Should be filtered, returning empty with no_match flag
+        assert len(result) == 0
+        assert engine.document_retrieval.no_match is True
 
     def test_single_result_just_below_threshold(self, engine):
         """Edge: Result just below threshold."""
@@ -409,7 +420,12 @@ class TestFilterRelevantEdgeCases:
     def test_malformed_metadata(self, engine):
         """Edge: Malformed metadata fields."""
         results = [
-            {"_distance": 0.1, "text": "doc1", "file_id": "f1", "metadata": "not-a-dict"},
+            {
+                "_distance": 0.1,
+                "text": "doc1",
+                "file_id": "f1",
+                "metadata": "not-a-dict",
+            },
             {"_distance": 0.2, "text": "doc2", "file_id": "f2", "metadata": None},
             {"_distance": 0.3, "text": "doc3", "file_id": "f3"},  # No metadata
         ]

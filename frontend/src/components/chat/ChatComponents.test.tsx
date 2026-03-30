@@ -59,11 +59,20 @@ vi.mock('@/components/ui/textarea', () => ({
 }));
 
 // Mock stores - MUST be before component imports
-const mockUseChatStore = vi.fn();
-const mockUseChatStoreRedesign = vi.fn();
-const mockUseVaultStore = vi.fn();
-const mockUseSendMessage = vi.fn();
-const mockUseChatHistory = vi.fn();
+// Use vi.hoisted to ensure mock functions are available at hoisting time
+const {
+  mockUseChatStore,
+  mockUseChatStoreRedesign,
+  mockUseVaultStore,
+  mockUseSendMessage,
+  mockUseChatHistory,
+} = vi.hoisted(() => ({
+  mockUseChatStore: vi.fn(),
+  mockUseChatStoreRedesign: vi.fn(),
+  mockUseVaultStore: vi.fn(),
+  mockUseSendMessage: vi.fn(),
+  mockUseChatHistory: vi.fn(),
+}));
 
 vi.mock('@/stores/useChatStore', () => ({
   useChatStore: mockUseChatStore,

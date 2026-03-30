@@ -418,6 +418,22 @@ async def ragas_evaluation(
     Raises:
         HTTPException: 400 if request validation fails, 500 on evaluation error
     """
+    from app.config import settings
+
+    if not settings.eval_enabled:
+        raise HTTPException(
+            status_code=501,
+            detail="RAGAS evaluation endpoint is disabled. Set EVAL_ENABLED=true to enable.",
+        )
+
+    try:
+        import ragas  # noqa: F401
+    except ImportError:
+        raise HTTPException(
+            status_code=501,
+            detail="RAGAS evaluation endpoint requires the 'ragas' library. Install with: pip install ragas",
+        )
+
     import time
 
     start_time = time.time()

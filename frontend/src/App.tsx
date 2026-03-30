@@ -3,20 +3,25 @@ import { AuthProvider } from "@/contexts/AuthContext";
 import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { PageShell } from "@/components/layout/PageShell";
-import ChatPage from "@/pages/ChatPage";
 import ChatPageRedesigned from "@/pages/ChatPageRedesigned";
+import ChatShell from "@/pages/ChatShell";
 import DocumentsPage from "@/pages/DocumentsPage";
 import MemoryPage from "@/pages/MemoryPage";
 import VaultsPage from "@/pages/VaultsPage";
 import SettingsPage from "@/pages/SettingsPage";
 import LoginPage from "@/pages/LoginPage";
+import SetupPage from "@/pages/SetupPage";
+import RegisterPage from "@/pages/RegisterPage";
+import AdminUsersPage from "@/pages/AdminUsersPage";
+import OrgsPage from "@/pages/OrgsPage";
+import ProfilePage from "@/pages/ProfilePage";
 import { useHealthCheck } from "@/hooks/useHealthCheck";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useAuthStore } from "@/stores/useAuthStore";
 
-type PageId = "chat" | "documents" | "memory" | "vaults" | "settings";
+type PageId = "documents" | "memory" | "vaults" | "settings";
 
 const pages: Record<PageId, React.ComponentType> = {
-  chat: ChatPage,
   documents: DocumentsPage,
   memory: MemoryPage,
   vaults: VaultsPage,
@@ -24,7 +29,7 @@ const pages: Record<PageId, React.ComponentType> = {
 };
 
 function MainApp() {
-  const [activePage, setActivePage] = useState<PageId>("chat");
+  const [activePage, setActivePage] = useState<PageId>("documents");
   const health = useHealthCheck({ pollInterval: 30000 });
 
   const CurrentPage = pages[activePage];
@@ -41,12 +46,25 @@ function MainApp() {
 }
 
 function App() {
+  const initAuth = useAuthStore((state) => state.init);
+
+  useEffect(() => {
+    initAuth();
+  }, [initAuth]);
+
   return (
     <ErrorBoundary>
       <BrowserRouter>
         <AuthProvider>
           <Routes>
+            <Route path="/setup" element={<SetupPage />} />
+            <Route path="/register" element={<RegisterPage />} />
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/chat" element={<ProtectedRoute><ChatShell /></ProtectedRoute>} />
+            <Route path="/chat/:sessionId" element={<ProtectedRoute><ChatShell /></ProtectedRoute>} />
+            <Route path="/admin/users" element={<ProtectedRoute><AdminUsersPage /></ProtectedRoute>} />
+            <Route path="/admin/organizations" element={<ProtectedRoute><OrgsPage /></ProtectedRoute>} />
+            <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
             <Route
               path="/chat/redesign"
               element={

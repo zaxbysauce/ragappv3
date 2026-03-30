@@ -17,8 +17,6 @@ from lancedb.index import IvfPq, FTS
 
 logger = logging.getLogger(__name__)
 
-logger = logging.getLogger(__name__)
-
 # Multi-scale search concurrency limit
 _MULTI_SCALE_CONCURRENCY = 4
 
@@ -93,6 +91,7 @@ class VectorStore:
             raise VectorStoreConnectionError("Database connection is not available.")
 
         self._embedding_dim = embedding_dim
+        table_just_created = False
 
         # Define schema for chunks table
         schema = pa.schema(
@@ -130,17 +129,21 @@ class VectorStore:
                     self.table = await self.db.create_table(
                         "chunks", schema=schema, mode="overwrite"
                     )
+                    table_just_created = True
             else:
                 self.table = await self.db.create_table("chunks", schema=schema)
+                table_just_created = True
         except (OSError, RuntimeError, ValueError) as e:
             raise VectorStoreConnectionError(
                 f"Failed to initialize 'chunks' table: {e}"
             ) from e
 
         # Defer vector index creation until sufficient rows (FR-013)
-        logger.info(
-            "Table created; vector index deferred until ≥%d rows", VECTOR_INDEX_MIN_ROWS
-        )
+        if table_just_created:
+            logger.info(
+                "Table created; vector index deferred until ≥%d rows",
+                VECTOR_INDEX_MIN_ROWS,
+            )
 
         # Create FTS index only if missing (FR-014)
         fts_index_exists = False
@@ -155,7 +158,7 @@ class VectorStore:
                 await self.table.create_index(
                     column="text",
                     config=FTS(),
-                    replace=True,
+                    replace=False,
                 )
                 logger.info("Full-text search index created on 'text' column")
             except (OSError, RuntimeError, ValueError) as e:
