@@ -60,14 +60,15 @@ def password_strength_check(plain_password: str) -> None:
 def create_access_token(user_id: int, username: str, role: str) -> str:
     """Create a JWT access token."""
     secret, algorithm = get_jwt_config()
-    expires = datetime.now(timezone.utc) + timedelta(
-        minutes=ACCESS_TOKEN_EXPIRE_MINUTES
-    )
+    now = datetime.now(timezone.utc)
+    expires = now + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     payload = {
         "sub": str(user_id),
         "username": username,
         "role": role,
         "exp": expires,
+        "type": "access",
+        "iat": now,
     }
     return jwt.encode(payload, secret, algorithm=algorithm)
 

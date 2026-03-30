@@ -2,10 +2,12 @@
 Tests for backend/app/api/deps.py — user auth and RBAC functions.
 
 Tests cover:
-- get_current_active_user: admin token auth, JWT auth, edge cases
+- get_current_active_user: admin token auth, JWT auth, cookie fallback, token type enforcement, must_change_password
 - evaluate_policy: superadmin, admin, vault member, public vault RBAC
 - require_vault_permission: dependency factory
 - require_role: dependency factory
+- require_admin_role: standalone admin role check
+- get_user_accessible_vault_ids: vault access enumeration for regular users
 """
 
 import pytest
@@ -69,13 +71,14 @@ class TestGetCurrentUserAdminToken:
     async def test_get_current_user_with_admin_token(
         self, mock_settings_admin_mode, mock_db
     ):
-        """users_enabled=False, valid admin token → returns superadmin dict."""
+        """users_enabled=False, valid admin token → returns superadmin dict with must_change_password=False."""
         from app.api.deps import get_current_active_user
 
         mock_conn, mock_cursor = mock_db
 
         result = await get_current_active_user(
             authorization="Bearer test-token",
+            access_token=None,
             db=mock_conn,
         )
 
@@ -85,6 +88,7 @@ class TestGetCurrentUserAdminToken:
             "full_name": "Admin",
             "role": "superadmin",
             "is_active": True,
+            "must_change_password": False,
         }
 
     @pytest.mark.asyncio
@@ -103,6 +107,7 @@ class TestGetCurrentUserAdminToken:
             with pytest.raises(HTTPException) as exc_info:
                 await get_current_active_user(
                     authorization="Bearer admin-secret-token",
+                    access_token=None,
                     db=mock_conn,
                 )
 
@@ -124,6 +129,7 @@ class TestGetCurrentUserAdminToken:
         with patch("app.api.deps.settings", mock, create=True):
             result = await get_current_active_user(
                 authorization="Bearer admin-secret-token",
+                access_token=None,
                 db=mock_conn,
             )
 
@@ -133,35 +139,23 @@ class TestGetCurrentUserAdminToken:
                 "full_name": "Admin",
                 "role": "superadmin",
                 "is_active": True,
+                "must_change_password": False,
             }
 
     @pytest.mark.asyncio
     async def test_get_current_user_missing_header(self, mock_settings_admin_mode):
-        """No Authorization header → 401."""
+        """No Authorization header and no cookie → 401."""
         from app.api.deps import get_current_active_user
 
         with pytest.raises(HTTPException) as exc_info:
             await get_current_active_user(
                 authorization=None,
+                access_token=None,
                 db=MagicMock(),
             )
 
         assert exc_info.value.status_code == 401
-        assert "required" in exc_info.value.detail.lower()
-
-    @pytest.mark.asyncio
-    async def test_get_current_user_invalid_scheme(self, mock_settings_admin_mode):
-        """'Basic xxx' → 401."""
-        from app.api.deps import get_current_active_user
-
-        with pytest.raises(HTTPException) as exc_info:
-            await get_current_active_user(
-                authorization="Basic dXNlcjpwYXNz",
-                db=MagicMock(),
-            )
-
-        assert exc_info.value.status_code == 401
-        assert "invalid authorization scheme" in exc_info.value.detail.lower()
+        assert "not authenticated" in exc_info.value.detail.lower()
 
     @pytest.mark.asyncio
     async def test_get_current_user_invalid_token(self, mock_settings_admin_mode):
@@ -171,11 +165,556 @@ class TestGetCurrentUserAdminToken:
         with pytest.raises(HTTPException) as exc_info:
             await get_current_active_user(
                 authorization="Bearer wrong-token",
+                access_token=None,
                 db=MagicMock(),
             )
 
         assert exc_info.value.status_code == 403
         assert "invalid" in exc_info.value.detail.lower()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Test get_current_active_user — Cookie Fallback
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestGetCurrentUserCookieFallback:
+    """Tests for get_current_active_user cookie fallback authentication."""
+
+    @pytest.mark.asyncio
+    async def test_auth_via_authorization_header_returns_user(
+        self, mock_settings_jwt_mode, mock_db
+    ):
+        """Auth via Authorization header → returns user dict."""
+        import jwt
+        from datetime import datetime, timedelta, timezone
+        from app.api.deps import get_current_active_user
+
+        secret, algorithm = "test-secret-key", "HS256"
+        payload = {
+            "sub": "42",
+            "username": "testuser",
+            "role": "member",
+            "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+            "type": "access",
+        }
+        token = jwt.encode(payload, secret, algorithm=algorithm)
+
+        mock_conn, mock_cursor = mock_db
+        mock_cursor.fetchone.return_value = (
+            42,
+            "testuser",
+            "Test User",
+            "member",
+            1,
+            0,
+        )
+
+        result = await get_current_active_user(
+            authorization=f"Bearer {token}",
+            access_token=None,
+            db=mock_conn,
+        )
+
+        assert result["id"] == 42
+        assert result["username"] == "testuser"
+        assert result["role"] == "member"
+
+    @pytest.mark.asyncio
+    async def test_auth_via_cookie_returns_user(self, mock_settings_jwt_mode, mock_db):
+        """Auth via cookie (access_token) → returns user dict."""
+        import jwt
+        from datetime import datetime, timedelta, timezone
+        from app.api.deps import get_current_active_user
+
+        secret, algorithm = "test-secret-key", "HS256"
+        payload = {
+            "sub": "42",
+            "username": "testuser",
+            "role": "member",
+            "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+            "type": "access",
+        }
+        token = jwt.encode(payload, secret, algorithm=algorithm)
+
+        mock_conn, mock_cursor = mock_db
+        mock_cursor.fetchone.return_value = (
+            42,
+            "testuser",
+            "Test User",
+            "member",
+            1,
+            0,
+        )
+
+        result = await get_current_active_user(
+            authorization=None,
+            access_token=token,
+            db=mock_conn,
+        )
+
+        assert result["id"] == 42
+        assert result["username"] == "testuser"
+        assert result["role"] == "member"
+
+    @pytest.mark.asyncio
+    async def test_no_header_no_cookie_returns_401(self, mock_settings_jwt_mode):
+        """No header, no cookie → 401."""
+        from app.api.deps import get_current_active_user
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_active_user(
+                authorization=None,
+                access_token=None,
+                db=MagicMock(),
+            )
+
+        assert exc_info.value.status_code == 401
+        assert "not authenticated" in exc_info.value.detail.lower()
+
+    @pytest.mark.asyncio
+    async def test_invalid_token_in_header_returns_403(self, mock_settings_jwt_mode):
+        """Invalid token in header → 403."""
+        from app.api.deps import get_current_active_user
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_active_user(
+                authorization="Bearer invalid-token",
+                access_token=None,
+                db=MagicMock(),
+            )
+
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_invalid_token_in_cookie_returns_403(self, mock_settings_jwt_mode):
+        """Invalid token in cookie → 403."""
+        from app.api.deps import get_current_active_user
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_active_user(
+                authorization=None,
+                access_token="invalid-token",
+                db=MagicMock(),
+            )
+
+        assert exc_info.value.status_code == 403
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Test JWT Type Enforcement
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestJWTTypeEnforcement:
+    """Tests for JWT token type enforcement in get_current_active_user."""
+
+    @pytest.mark.asyncio
+    async def test_access_token_with_type_access_accepted(
+        self, mock_settings_jwt_mode, mock_db
+    ):
+        """Access token with type='access' → accepted."""
+        import jwt
+        from datetime import datetime, timedelta, timezone
+        from app.api.deps import get_current_active_user
+
+        secret, algorithm = "test-secret-key", "HS256"
+        payload = {
+            "sub": "42",
+            "username": "testuser",
+            "role": "member",
+            "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+            "type": "access",
+        }
+        token = jwt.encode(payload, secret, algorithm=algorithm)
+
+        mock_conn, mock_cursor = mock_db
+        mock_cursor.fetchone.return_value = (
+            42,
+            "testuser",
+            "Test User",
+            "member",
+            1,
+            0,
+        )
+
+        result = await get_current_active_user(
+            authorization=f"Bearer {token}",
+            access_token=None,
+            db=mock_conn,
+        )
+
+        assert result["id"] == 42
+
+    @pytest.mark.asyncio
+    async def test_token_without_type_field_returns_403(
+        self, mock_settings_jwt_mode, mock_db
+    ):
+        """Token without type field → 403 'Invalid token type'."""
+        import jwt
+        from datetime import datetime, timedelta, timezone
+        from app.api.deps import get_current_active_user
+
+        secret, algorithm = "test-secret-key", "HS256"
+        payload = {
+            "sub": "42",
+            "username": "testuser",
+            "role": "member",
+            "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+            # No 'type' field
+        }
+        token = jwt.encode(payload, secret, algorithm=algorithm)
+
+        mock_conn, mock_cursor = mock_db
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_active_user(
+                authorization=f"Bearer {token}",
+                access_token=None,
+                db=mock_conn,
+            )
+
+        assert exc_info.value.status_code == 403
+        assert "invalid token type" in exc_info.value.detail.lower()
+
+    @pytest.mark.asyncio
+    async def test_token_with_type_refresh_returns_403(
+        self, mock_settings_jwt_mode, mock_db
+    ):
+        """Token with type='refresh' → 403 'Invalid token type'."""
+        import jwt
+        from datetime import datetime, timedelta, timezone
+        from app.api.deps import get_current_active_user
+
+        secret, algorithm = "test-secret-key", "HS256"
+        payload = {
+            "sub": "42",
+            "username": "testuser",
+            "role": "member",
+            "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+            "type": "refresh",
+        }
+        token = jwt.encode(payload, secret, algorithm=algorithm)
+
+        mock_conn, mock_cursor = mock_db
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_active_user(
+                authorization=f"Bearer {token}",
+                access_token=None,
+                db=mock_conn,
+            )
+
+        assert exc_info.value.status_code == 403
+        assert "invalid token type" in exc_info.value.detail.lower()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Test must_change_password Field
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestMustChangePassword:
+    """Tests for must_change_password field in user dict."""
+
+    @pytest.mark.asyncio
+    async def test_user_with_must_change_password_true(
+        self, mock_settings_jwt_mode, mock_db
+    ):
+        """User with must_change_password=True in DB → user dict has must_change_password=True."""
+        import jwt
+        from datetime import datetime, timedelta, timezone
+        from app.api.deps import get_current_active_user
+
+        secret, algorithm = "test-secret-key", "HS256"
+        payload = {
+            "sub": "42",
+            "username": "testuser",
+            "role": "member",
+            "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+            "type": "access",
+        }
+        token = jwt.encode(payload, secret, algorithm=algorithm)
+
+        mock_conn, mock_cursor = mock_db
+        # DB returns must_change_password=1 (True)
+        mock_cursor.fetchone.return_value = (
+            42,
+            "testuser",
+            "Test User",
+            "member",
+            1,
+            1,
+        )
+
+        result = await get_current_active_user(
+            authorization=f"Bearer {token}",
+            access_token=None,
+            db=mock_conn,
+        )
+
+        assert result["must_change_password"] is True
+
+    @pytest.mark.asyncio
+    async def test_user_with_must_change_password_false(
+        self, mock_settings_jwt_mode, mock_db
+    ):
+        """User with must_change_password=False in DB → user dict has must_change_password=False."""
+        import jwt
+        from datetime import datetime, timedelta, timezone
+        from app.api.deps import get_current_active_user
+
+        secret, algorithm = "test-secret-key", "HS256"
+        payload = {
+            "sub": "42",
+            "username": "testuser",
+            "role": "member",
+            "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+            "type": "access",
+        }
+        token = jwt.encode(payload, secret, algorithm=algorithm)
+
+        mock_conn, mock_cursor = mock_db
+        # DB returns must_change_password=0 (False)
+        mock_cursor.fetchone.return_value = (
+            42,
+            "testuser",
+            "Test User",
+            "member",
+            1,
+            0,
+        )
+
+        result = await get_current_active_user(
+            authorization=f"Bearer {token}",
+            access_token=None,
+            db=mock_conn,
+        )
+
+        assert result["must_change_password"] is False
+
+    @pytest.mark.asyncio
+    async def test_user_with_must_change_password_null(
+        self, mock_settings_jwt_mode, mock_db
+    ):
+        """User with must_change_password=NULL in DB → user dict has must_change_password=False."""
+        import jwt
+        from datetime import datetime, timedelta, timezone
+        from app.api.deps import get_current_active_user
+
+        secret, algorithm = "test-secret-key", "HS256"
+        payload = {
+            "sub": "42",
+            "username": "testuser",
+            "role": "member",
+            "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+            "type": "access",
+        }
+        token = jwt.encode(payload, secret, algorithm=algorithm)
+
+        mock_conn, mock_cursor = mock_db
+        # DB returns must_change_password=None (column not populated)
+        mock_cursor.fetchone.return_value = (
+            42,
+            "testuser",
+            "Test User",
+            "member",
+            1,
+            None,
+        )
+
+        result = await get_current_active_user(
+            authorization=f"Bearer {token}",
+            access_token=None,
+            db=mock_conn,
+        )
+
+        assert result["must_change_password"] is False
+
+    @pytest.mark.asyncio
+    async def test_admin_token_fallback_must_change_password_false(
+        self, mock_settings_admin_mode, mock_db
+    ):
+        """Admin token fallback → user dict has must_change_password=False."""
+        from app.api.deps import get_current_active_user
+
+        mock_conn, mock_cursor = mock_db
+
+        result = await get_current_active_user(
+            authorization="Bearer test-token",
+            access_token=None,
+            db=mock_conn,
+        )
+
+        assert result["must_change_password"] is False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Test require_admin_role
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestRequireAdminRole:
+    """Tests for require_admin_role dependency function."""
+
+    @pytest.mark.asyncio
+    async def test_superadmin_user_passes(self):
+        """Superadmin user → passes."""
+        from app.api.deps import require_admin_role
+
+        user = {"id": 1, "username": "super", "role": "superadmin", "is_active": True}
+        result = await require_admin_role(user)
+
+        assert result == user
+
+    @pytest.mark.asyncio
+    async def test_admin_user_passes(self):
+        """Admin user → passes."""
+        from app.api.deps import require_admin_role
+
+        user = {"id": 2, "username": "admin", "role": "admin", "is_active": True}
+        result = await require_admin_role(user)
+
+        assert result == user
+
+    @pytest.mark.asyncio
+    async def test_member_user_returns_403(self):
+        """Member user → 403."""
+        from app.api.deps import require_admin_role
+
+        user = {"id": 3, "username": "member", "role": "member", "is_active": True}
+
+        with pytest.raises(HTTPException) as exc_info:
+            await require_admin_role(user)
+
+        assert exc_info.value.status_code == 403
+        assert "admin access required" in exc_info.value.detail.lower()
+
+    @pytest.mark.asyncio
+    async def test_viewer_user_returns_403(self):
+        """Viewer user → 403."""
+        from app.api.deps import require_admin_role
+
+        user = {"id": 4, "username": "viewer", "role": "viewer", "is_active": True}
+
+        with pytest.raises(HTTPException) as exc_info:
+            await require_admin_role(user)
+
+        assert exc_info.value.status_code == 403
+        assert "admin access required" in exc_info.value.detail.lower()
+
+    @pytest.mark.asyncio
+    async def test_unauthenticated_user_raises_from_get_current_user(self):
+        """Unauthenticated user → 401 (from get_current_active_user dependency)."""
+        from app.api.deps import get_current_active_user, require_admin_role
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_active_user(
+                authorization=None,
+                access_token=None,
+                db=MagicMock(),
+            )
+
+        assert exc_info.value.status_code == 401
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Test get_user_accessible_vault_ids
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestGetUserAccessibleVaultIds:
+    """Tests for get_user_accessible_vault_ids helper function."""
+
+    @pytest.mark.asyncio
+    async def test_superadmin_returns_empty_list(self, mock_db):
+        """Superadmin user → returns [] (means 'all vaults')."""
+        from app.api.deps import get_user_accessible_vault_ids
+
+        user = {"id": 1, "role": "superadmin"}
+        mock_conn, mock_cursor = mock_db
+
+        result = get_user_accessible_vault_ids(user, mock_conn)
+
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_admin_returns_empty_list(self, mock_db):
+        """Admin user → returns [] (means 'all vaults')."""
+        from app.api.deps import get_user_accessible_vault_ids
+
+        user = {"id": 2, "role": "admin"}
+        mock_conn, mock_cursor = mock_db
+
+        result = get_user_accessible_vault_ids(user, mock_conn)
+
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_regular_user_with_direct_membership(self, mock_db):
+        """Regular user with direct vault membership → returns vault IDs."""
+        from app.api.deps import get_user_accessible_vault_ids
+
+        user = {"id": 3, "role": "member"}
+        mock_conn, mock_cursor = mock_db
+
+        # Direct membership query returns vault IDs 10, 20
+        mock_cursor.fetchall.side_effect = [
+            [(10,), (20,)],
+            [],
+        ]  # First for members, second for groups
+
+        result = get_user_accessible_vault_ids(user, mock_conn)
+
+        assert sorted(result) == [10, 20]
+
+    @pytest.mark.asyncio
+    async def test_regular_user_with_group_access(self, mock_db):
+        """Regular user with group-based vault access → returns vault IDs."""
+        from app.api.deps import get_user_accessible_vault_ids
+
+        user = {"id": 3, "role": "member"}
+        mock_conn, mock_cursor = mock_db
+
+        # Direct membership returns empty, group access returns vault IDs 30, 40
+        mock_cursor.fetchall.side_effect = [[], [(30,), (40,)]]
+
+        result = get_user_accessible_vault_ids(user, mock_conn)
+
+        assert sorted(result) == [30, 40]
+
+    @pytest.mark.asyncio
+    async def test_regular_user_with_direct_and_group_access_deduplicated(
+        self, mock_db
+    ):
+        """Regular user with both direct and group access → deduplicated list."""
+        from app.api.deps import get_user_accessible_vault_ids
+
+        user = {"id": 3, "role": "member"}
+        mock_conn, mock_cursor = mock_db
+
+        # Direct membership returns 10, 20; group access returns 20, 30 (overlap: 20)
+        mock_cursor.fetchall.side_effect = [[(10,), (20,)], [(20,), (30,)]]
+
+        result = get_user_accessible_vault_ids(user, mock_conn)
+
+        # Should be deduplicated and sorted
+        assert sorted(result) == [10, 20, 30]
+
+    @pytest.mark.asyncio
+    async def test_regular_user_with_no_access(self, mock_db):
+        """Regular user with no vault access → returns empty list."""
+        from app.api.deps import get_user_accessible_vault_ids
+
+        user = {"id": 3, "role": "member"}
+        mock_conn, mock_cursor = mock_db
+
+        # Both queries return empty
+        mock_cursor.fetchall.side_effect = [[], []]
+
+        result = get_user_accessible_vault_ids(user, mock_conn)
+
+        assert result == []
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -200,15 +739,24 @@ class TestGetCurrentUserJWT:
             "username": "testuser",
             "role": "member",
             "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+            "type": "access",
         }
         token = jwt.encode(payload, secret, algorithm=algorithm)
 
         mock_conn, mock_cursor = mock_db
-        # Simulate DB returning user row: (id, username, full_name, role, is_active)
-        mock_cursor.fetchone.return_value = (42, "testuser", "Test User", "member", 1)
+        # Simulate DB returning user row: (id, username, full_name, role, is_active, must_change_password)
+        mock_cursor.fetchone.return_value = (
+            42,
+            "testuser",
+            "Test User",
+            "member",
+            1,
+            0,
+        )
 
         result = await get_current_active_user(
             authorization=f"Bearer {token}",
+            access_token=None,
             db=mock_conn,
         )
 
@@ -218,6 +766,7 @@ class TestGetCurrentUserJWT:
             "full_name": "Test User",
             "role": "member",
             "is_active": True,
+            "must_change_password": False,
         }
 
     @pytest.mark.asyncio
@@ -235,6 +784,7 @@ class TestGetCurrentUserJWT:
             "username": "inactiveuser",
             "role": "member",
             "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+            "type": "access",
         }
         token = jwt.encode(payload, secret, algorithm=algorithm)
 
@@ -246,11 +796,13 @@ class TestGetCurrentUserJWT:
             "Inactive User",
             "member",
             0,
+            0,
         )
 
         with pytest.raises(HTTPException) as exc_info:
             await get_current_active_user(
                 authorization=f"Bearer {token}",
+                access_token=None,
                 db=mock_conn,
             )
 
@@ -270,6 +822,7 @@ class TestGetCurrentUserJWT:
             "username": "ghost",
             "role": "member",
             "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+            "type": "access",
         }
         token = jwt.encode(payload, secret, algorithm=algorithm)
 
@@ -279,6 +832,7 @@ class TestGetCurrentUserJWT:
         with pytest.raises(HTTPException) as exc_info:
             await get_current_active_user(
                 authorization=f"Bearer {token}",
+                access_token=None,
                 db=mock_conn,
             )
 
@@ -298,12 +852,14 @@ class TestGetCurrentUserJWT:
             "username": "testuser",
             "role": "member",
             "exp": datetime.now(timezone.utc) - timedelta(hours=1),  # Expired
+            "type": "access",
         }
         expired_token = jwt.encode(expired_payload, secret, algorithm=algorithm)
 
         with pytest.raises(HTTPException) as exc_info:
             await get_current_active_user(
                 authorization=f"Bearer {expired_token}",
+                access_token=None,
                 db=MagicMock(),
             )
 

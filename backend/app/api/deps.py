@@ -4,7 +4,7 @@ import secrets
 import sqlite3
 from contextlib import contextmanager
 
-from fastapi import Request, Depends, Header, HTTPException
+from fastapi import Request, Depends, Header, HTTPException, Cookie
 
 from app.config import Settings, settings
 from app.services.auth_service import decode_access_token
@@ -112,6 +112,7 @@ def get_email_service(request: Request) -> EmailIngestionService:
 
 async def get_current_active_user(
     authorization: str = Header(None),
+    access_token: str | None = Cookie(None),
     db: sqlite3.Connection = Depends(get_db),
 ) -> dict:
     """
@@ -120,17 +121,18 @@ async def get_current_active_user(
     When users_enabled=False: Validates against admin_secret_token
     When users_enabled=True: Validates JWT token and fetches user from database
     """
-    if not authorization:
-        raise HTTPException(status_code=401, detail="Authorization header required")
+    # Extract token from Authorization header or fall back to cookie
+    if authorization and authorization.lower().startswith("bearer "):
+        parts = authorization.split(" ", 1)
+        if len(parts) >= 2 and parts[1].strip():
+            token = parts[1].strip()
+        else:
+            token = access_token
+    else:
+        token = access_token
 
-    if not authorization.lower().startswith("bearer "):
-        raise HTTPException(status_code=401, detail="Invalid authorization scheme")
-
-    parts = authorization.split(" ", 1)
-    if len(parts) < 2 or not parts[1].strip():
-        raise HTTPException(status_code=401, detail="Token missing")
-
-    token = parts[1].strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
 
     # When users are disabled, fall back to admin token authentication
     if not settings.users_enabled:
@@ -153,6 +155,7 @@ async def get_current_active_user(
             "full_name": "Admin",
             "role": "superadmin",
             "is_active": True,
+            "must_change_password": False,
         }
 
     # User authentication enabled - validate JWT token
@@ -161,12 +164,16 @@ async def get_current_active_user(
     if not payload:
         raise HTTPException(status_code=403, detail="Invalid or expired token")
 
+    # Enforce token type — reject refresh tokens used as access tokens
+    if payload.get("type") != "access":
+        raise HTTPException(status_code=403, detail="Invalid token type")
+
     user_id = int(payload.get("sub", 0))
     if not user_id:
         raise HTTPException(status_code=403, detail="Invalid token payload")
 
     cursor = db.execute(
-        "SELECT id, username, full_name, role, is_active FROM users WHERE id = ?",
+        "SELECT id, username, full_name, role, is_active, must_change_password FROM users WHERE id = ?",
         (user_id,),
     )
     row = cursor.fetchone()
@@ -180,6 +187,9 @@ async def get_current_active_user(
         "full_name": row[2] or "",
         "role": row[3],
         "is_active": bool(row[4]),
+        "must_change_password": bool(row[5])
+        if len(row) > 5 and row[5] is not None
+        else False,
     }
 
     if not user["is_active"]:
@@ -332,3 +342,57 @@ def require_role(role: str):
         return user
 
     return _check_role
+
+
+async def require_admin_role(user: dict = Depends(get_current_active_user)) -> dict:
+    """
+    Dependency that requires the user to have admin role.
+    Validates that the user's role is 'superadmin' or 'admin'.
+    Raises 403 if not authorized.
+    Returns the user dict if authorized.
+    """
+    user_role = user.get("role", "")
+    if user_role not in ("superadmin", "admin"):
+        raise HTTPException(
+            status_code=403,
+            detail="Admin access required",
+        )
+    return user
+
+
+def get_user_accessible_vault_ids(user: dict, db) -> list:
+    """
+    Get all vault IDs that a user has access to.
+
+    Returns list of vault IDs based on:
+    - Direct vault_members permissions
+    - vault_group_access via group membership
+    - For superadmin/admin: returns empty list (means "all vaults")
+    """
+    user_id = user["id"]
+    user_role = user.get("role", "")
+
+    # superadmin/admin can access all vaults
+    if user_role in ("superadmin", "admin"):
+        return []  # Empty list means "all vaults"
+
+    vault_ids = set()
+
+    # Direct vault_members access
+    cursor = db.execute(
+        "SELECT vault_id FROM vault_members WHERE user_id = ?", (user_id,)
+    )
+    for row in cursor.fetchall():
+        vault_ids.add(row[0])
+
+    # Group-based access
+    cursor = db.execute(
+        """SELECT DISTINCT vga.vault_id FROM vault_group_access vga
+           JOIN group_members gm ON vga.group_id = gm.group_id
+           WHERE gm.user_id = ?""",
+        (user_id,),
+    )
+    for row in cursor.fetchall():
+        vault_ids.add(row[0])
+
+    return list(vault_ids)
