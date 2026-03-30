@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from app.api.deps import get_current_active_user, get_db
 from app.limiter import limiter
+from app.security import csrf_protect, get_csrf_manager, issue_csrf_token
 from app.services.auth_service import (
     create_access_token,
     create_refresh_token,
@@ -45,6 +46,7 @@ async def register(
     request: Request,
     body: RegisterRequest,
     db=Depends(get_db),
+    _csrf_token: str = Depends(csrf_protect),
 ):
     """Register a new user. First user becomes superadmin."""
     if not body.username or len(body.username) < 3:
@@ -98,6 +100,7 @@ async def login(
     response: Response,
     body: LoginRequest,
     db=Depends(get_db),
+    _csrf_token: str = Depends(csrf_protect),
 ):
     """Login and receive access token + refresh cookie."""
     cursor = db.execute(
@@ -201,6 +204,9 @@ async def login(
         path="/api/auth/refresh",
     )
 
+    csrf_manager = get_csrf_manager(request)
+    issue_csrf_token(response, csrf_manager)
+
     return {
         "access_token": access_token,
         "token_type": "bearer",
@@ -221,6 +227,7 @@ async def refresh(
     response: Response,
     refresh_token: Optional[str] = Cookie(None, alias=REFRESH_TOKEN_COOKIE_NAME),
     db=Depends(get_db),
+    _csrf_token: str = Depends(csrf_protect),
 ):
     """Refresh access token using httpOnly refresh cookie. Rotates refresh token."""
     if not refresh_token:
@@ -288,6 +295,9 @@ async def refresh(
         path="/api/auth/refresh",
     )
 
+    csrf_manager = get_csrf_manager(request)
+    issue_csrf_token(response, csrf_manager)
+
     return {
         "access_token": access_token,
         "token_type": "bearer",
@@ -300,6 +310,7 @@ async def logout(
     response: Response,
     refresh_token: Optional[str] = Cookie(None, alias=REFRESH_TOKEN_COOKIE_NAME),
     db=Depends(get_db),
+    _csrf_token: str = Depends(csrf_protect),
 ):
     """Logout and revoke refresh token."""
     if refresh_token:
@@ -341,6 +352,7 @@ async def update_me(
     body: UpdateProfileRequest,
     user: dict = Depends(get_current_active_user),
     db=Depends(get_db),
+    _csrf_token: str = Depends(csrf_protect),
 ):
     """Update current user profile (full_name and/or password)."""
     user_id = user["id"]
