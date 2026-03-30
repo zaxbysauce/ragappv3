@@ -392,6 +392,28 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def reject_insecure_defaults(self) -> "Settings":
+        """Refuse startup if admin_secret_token equals the default empty string."""
+        if self.users_enabled and not self.admin_secret_token:
+            raise ValueError(
+                "ADMIN_SECRET_TOKEN must be set when USERS_ENABLED=True. "
+                'Generate one with: python -c "import secrets; print(secrets.token_urlsafe(48))"'
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_hyde_config(self) -> "Settings":
+        """Warn when HyDE is enabled without query transformation."""
+        if self.hyde_enabled and not self.query_transformation_enabled:
+            warnings.warn(
+                "HyDE is enabled but query_transformation_enabled is False. "
+                "HyDE works best when query transformation is also enabled.",
+                UserWarning,
+                stacklevel=2,
+            )
+        return self
+
     @property
     def documents_dir(self) -> Path:
         return self.data_dir / "documents"
