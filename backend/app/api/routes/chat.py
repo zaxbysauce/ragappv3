@@ -15,10 +15,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.api.deps import get_db, get_rag_engine
+from app.api.deps import (
+    get_db,
+    get_rag_engine,
+    get_current_active_user,
+    evaluate_policy,
+    get_user_accessible_vault_ids,
+)
 from app.models.database import get_pool
 from app.config import settings
-from app.security import require_auth
 from app.services.rag_engine import RAGEngine, RAGEngineError
 
 # Track background tasks to prevent garbage collection
@@ -190,7 +195,7 @@ async def non_stream_chat_response(
 async def chat(
     request: ChatRequest,
     rag_engine: RAGEngine = Depends(get_rag_engine),
-    auth: dict = Depends(require_auth),
+    user: dict = Depends(get_current_active_user),
 ):
     """
     Chat endpoint for RAG-based conversational interface.
@@ -209,6 +214,8 @@ async def chat(
             status_code=400,
             detail="Streaming is not supported on this endpoint. Use /chat/stream for streaming responses.",
         )
+    if not await evaluate_policy(user, "vault", request.vault_id, "read"):
+        raise HTTPException(status_code=403, detail="No read access to this vault")
     return await non_stream_chat_response(
         request.message, request.history, rag_engine, vault_id=request.vault_id
     )
@@ -218,7 +225,7 @@ async def chat(
 async def chat_stream(
     request: ChatStreamRequest,
     rag_engine: RAGEngine = Depends(get_rag_engine),
-    auth: dict = Depends(require_auth),
+    user: dict = Depends(get_current_active_user),
 ):
     """Streaming chat endpoint that accepts a sequence of chat messages."""
     if not request.messages:
@@ -229,6 +236,9 @@ async def chat_stream(
         raise HTTPException(
             status_code=400, detail="The last message must be from the user"
         )
+
+    if not await evaluate_policy(user, "vault", request.vault_id, "read"):
+        raise HTTPException(status_code=403, detail="No read access to this vault")
 
     history = [msg.model_dump(exclude_none=True) for msg in request.messages[:-1]]
     return stream_chat_response(
@@ -245,7 +255,7 @@ async def chat_stream(
 async def list_sessions(
     vault_id: Optional[int] = Query(None),
     conn: sqlite3.Connection = Depends(get_db),
-    auth: dict = Depends(require_auth),
+    user: dict = Depends(get_current_active_user),
 ):
     """
     List all chat sessions, optionally filtered by vault_id.
@@ -290,6 +300,16 @@ async def list_sessions(
             }
         )
 
+    # Filter sessions for non-admin users
+    if user.get("role") not in ("superadmin", "admin"):
+        accessible_ids = get_user_accessible_vault_ids(user, conn)
+        if accessible_ids:
+            sessions_with_count = [
+                r for r in sessions_with_count if r.get("vault_id") in accessible_ids
+            ]
+        else:
+            sessions_with_count = []
+
     return {"sessions": sessions_with_count}
 
 
@@ -297,7 +317,7 @@ async def list_sessions(
 async def get_session(
     session_id: int,
     conn: sqlite3.Connection = Depends(get_db),
-    auth: dict = Depends(require_auth),
+    user: dict = Depends(get_current_active_user),
 ):
     """
     Get a specific chat session with all its messages.
@@ -312,6 +332,9 @@ async def get_session(
 
     if session_row is None:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    if not await evaluate_policy(user, "vault", session_row[1], "read"):
+        raise HTTPException(status_code=403, detail="No read access to this vault")
 
     # Get messages
     messages_query = "SELECT id, role, content, sources, created_at FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC"
@@ -354,13 +377,16 @@ async def get_session(
 async def create_session(
     request: CreateSessionRequest,
     conn: sqlite3.Connection = Depends(get_db),
-    auth: dict = Depends(require_auth),
+    user: dict = Depends(get_current_active_user),
 ):
     """
     Create a new chat session.
 
     Returns the created session with its ID.
     """
+    if not await evaluate_policy(user, "vault", request.vault_id, "write"):
+        raise HTTPException(status_code=403, detail="No write access to this vault")
+
     query = "INSERT INTO chat_sessions (vault_id, title, created_at, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
     cursor = await asyncio.to_thread(
         conn.execute, query, (request.vault_id, request.title)
@@ -502,7 +528,7 @@ async def add_message(
     session_id: int,
     request: AddMessageRequest,
     conn: sqlite3.Connection = Depends(get_db),
-    auth: dict = Depends(require_auth),
+    user: dict = Depends(get_current_active_user),
     rag_engine: Optional[RAGEngine] = Depends(get_rag_engine),
 ):
     """
@@ -520,6 +546,9 @@ async def add_message(
 
     if session_row is None:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    if not await evaluate_policy(user, "vault", session_row[2], "read"):
+        raise HTTPException(status_code=403, detail="No read access to this vault")
 
     # Check if this is the first message
     count_query = "SELECT COUNT(*) FROM chat_messages WHERE session_id = ?"
@@ -599,20 +628,23 @@ async def update_session(
     session_id: int,
     request: UpdateSessionRequest,
     conn: sqlite3.Connection = Depends(get_db),
-    auth: dict = Depends(require_auth),
+    user: dict = Depends(get_current_active_user),
 ):
     """
     Update a chat session's title.
 
     Updates the session's title and updated_at timestamp.
     """
-    # Verify session exists
-    check_query = "SELECT id FROM chat_sessions WHERE id = ?"
-    check_result = await asyncio.to_thread(conn.execute, check_query, (session_id,))
-    check_row = await asyncio.to_thread(check_result.fetchone)
+    # Verify session exists and get vault_id
+    select_query = "SELECT id, vault_id FROM chat_sessions WHERE id = ?"
+    select_result = await asyncio.to_thread(conn.execute, select_query, (session_id,))
+    select_row = await asyncio.to_thread(select_result.fetchone)
 
-    if check_row is None:
+    if select_row is None:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    if not await evaluate_policy(user, "vault", select_row[1], "write"):
+        raise HTTPException(status_code=403, detail="No write access to this vault")
 
     # Update session
     update_query = "UPDATE chat_sessions SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
@@ -620,7 +652,6 @@ async def update_session(
     await asyncio.to_thread(conn.commit)
 
     # Get updated session
-    select_query = "SELECT id, vault_id, title, created_at, updated_at FROM chat_sessions WHERE id = ?"
     result = await asyncio.to_thread(conn.execute, select_query, (session_id,))
     row = await asyncio.to_thread(result.fetchone)
 
@@ -637,7 +668,7 @@ async def update_session(
 async def delete_session(
     session_id: int,
     conn: sqlite3.Connection = Depends(get_db),
-    auth: dict = Depends(require_auth),
+    user: dict = Depends(get_current_active_user),
 ):
     """
     Delete a chat session.
@@ -645,13 +676,16 @@ async def delete_session(
     The CASCADE constraint will automatically delete all messages
     associated with the session.
     """
-    # Verify session exists
-    check_query = "SELECT id FROM chat_sessions WHERE id = ?"
-    check_result = await asyncio.to_thread(conn.execute, check_query, (session_id,))
-    check_row = await asyncio.to_thread(check_result.fetchone)
+    # Verify session exists and get vault_id
+    select_query = "SELECT id, vault_id FROM chat_sessions WHERE id = ?"
+    select_result = await asyncio.to_thread(conn.execute, select_query, (session_id,))
+    select_row = await asyncio.to_thread(select_result.fetchone)
 
-    if check_row is None:
+    if select_row is None:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    if not await evaluate_policy(user, "vault", select_row[1], "write"):
+        raise HTTPException(status_code=403, detail="No write access to this vault")
 
     # Delete session (CASCADE will delete messages)
     delete_query = "DELETE FROM chat_sessions WHERE id = ?"
