@@ -2,6 +2,7 @@
 
 import secrets
 import sqlite3
+from collections.abc import Callable
 from contextlib import contextmanager
 
 from fastapi import Request, Depends, Header, HTTPException, Cookie
@@ -198,23 +199,14 @@ async def get_current_active_user(
     return user
 
 
-async def evaluate_policy(
+async def _evaluate_policy(
+    db: sqlite3.Connection,
     principal: dict,
     resource_type: str,
     resource_id: int | None,
     action: str,
 ) -> bool:
-    """
-    Centralized policy evaluation for RBAC.
-
-    Resolution order (vault resources):
-    1. superadmin -> True for all actions
-    2. admin -> True for read/write, False for vault delete
-    3. vault_members row -> use permission column
-    4. vault_group_access (user in group) -> highest permission wins
-    5. vault.visibility == 'public' AND action == 'read' -> True
-    6. Otherwise -> False
-    """
+    """Core policy evaluation logic with injected database connection."""
     user_id = principal.get("id")
     user_role = principal.get("role", "")
 
@@ -235,60 +227,100 @@ async def evaluate_policy(
             return True
         return False
 
-    pool = get_pool(str(settings.sqlite_path))
-    conn = pool.get_connection()
+    # Use injected db connection instead of creating new pool
+    cursor = db.execute(
+        "SELECT permission FROM vault_members WHERE vault_id = ? AND user_id = ?",
+        (resource_id, user_id),
+    )
+    row = cursor.fetchone()
 
-    try:
-        # Check vault_members for direct user permission
-        cursor = conn.execute(
-            "SELECT permission FROM vault_members WHERE vault_id = ? AND user_id = ?",
-            (resource_id, user_id),
+    if row:
+        permission_levels = {"read": 1, "write": 2, "admin": 3}
+        action_levels = {"read": 1, "write": 2, "delete": 3, "admin": 3}
+
+        required_level = action_levels.get(action, 1)
+        user_level = permission_levels.get(row[0], 0)
+
+        if user_level >= required_level:
+            return True
+
+    # Check vault_group_access for group-based permissions
+    cursor = db.execute(
+        """SELECT vga.permission FROM vault_group_access vga
+           JOIN group_members gm ON vga.group_id = gm.group_id
+           WHERE vga.vault_id = ? AND gm.user_id = ?""",
+        (resource_id, user_id),
+    )
+    group_permissions = cursor.fetchall()
+
+    if group_permissions:
+        permission_levels = {"read": 1, "write": 2, "admin": 3}
+        action_levels = {"read": 1, "write": 2, "delete": 3, "admin": 3}
+
+        highest_level = max(permission_levels.get(p[0], 0) for p in group_permissions)
+        required_level = action_levels.get(action, 1)
+
+        if highest_level >= required_level:
+            return True
+
+    # Check vault visibility for public read access
+    if action == "read":
+        cursor = db.execute(
+            "SELECT visibility FROM vaults WHERE id = ?", (resource_id,)
         )
         row = cursor.fetchone()
 
-        if row:
-            permission_levels = {"read": 1, "write": 2, "admin": 3}
-            action_levels = {"read": 1, "write": 2, "delete": 3, "admin": 3}
+        if row and row[0] == "public":
+            return True
 
-            required_level = action_levels.get(action, 1)
-            user_level = permission_levels.get(row[0], 0)
+    return False
 
-            if user_level >= required_level:
-                return True
 
-        # Check vault_group_access for group-based permissions
-        cursor = conn.execute(
-            """SELECT vga.permission FROM vault_group_access vga
-               JOIN group_members gm ON vga.group_id = gm.group_id
-               WHERE vga.vault_id = ? AND gm.user_id = ?""",
-            (resource_id, user_id),
+def get_evaluate_policy(
+    db: sqlite3.Connection = Depends(get_db),
+) -> Callable:
+    """FastAPI dependency that returns an evaluate function with injected database.
+
+    Usage:
+        evaluate = Depends(get_evaluate_policy)
+        if await evaluate(user, "vault", vault_id, "read"):
+            # permission granted
+    """
+
+    async def _evaluate(
+        principal: dict,
+        resource_type: str,
+        resource_id: int | None,
+        action: str,
+    ) -> bool:
+        return await _evaluate_policy(db, principal, resource_type, resource_id, action)
+
+    return _evaluate
+
+
+async def evaluate_policy(
+    principal: dict,
+    resource_type: str,
+    resource_id: int | None,
+    action: str,
+) -> bool:
+    """
+    Original evaluate_policy - creates pool for backward compatibility.
+
+    Resolution order (vault resources):
+    1. superadmin -> True for all actions
+    2. admin -> True for read/write, False for vault delete
+    3. vault_members row -> use permission column
+    4. vault_group_access (user in group) -> highest permission wins
+    5. vault.visibility == 'public' AND action == 'read' -> True
+    6. Otherwise -> False
+    """
+    pool = get_pool(str(settings.sqlite_path))
+    conn = pool.get_connection()
+    try:
+        return await _evaluate_policy(
+            conn, principal, resource_type, resource_id, action
         )
-        group_permissions = cursor.fetchall()
-
-        if group_permissions:
-            permission_levels = {"read": 1, "write": 2, "admin": 3}
-            action_levels = {"read": 1, "write": 2, "delete": 3, "admin": 3}
-
-            highest_level = max(
-                permission_levels.get(p[0], 0) for p in group_permissions
-            )
-            required_level = action_levels.get(action, 1)
-
-            if highest_level >= required_level:
-                return True
-
-        # Check vault visibility for public read access
-        if action == "read":
-            cursor = conn.execute(
-                "SELECT visibility FROM vaults WHERE id = ?", (resource_id,)
-            )
-            row = cursor.fetchone()
-
-            if row and row[0] == "public":
-                return True
-
-        return False
-
     finally:
         pool.release_connection(conn)
 
