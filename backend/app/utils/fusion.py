@@ -8,7 +8,8 @@ def rrf_fuse(
     k: int = 60,
     limit: Optional[int] = None,
     recency_scores: Optional[Dict[str, float]] = None,
-    recency_weight: float = 0.0,
+    recency_weight: float = 0.1,
+    weights: Optional[List[float]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Reciprocal Rank Fusion (RRF) for combining multiple result lists.
@@ -20,8 +21,11 @@ def rrf_fuse(
         recency_scores: Optional dict mapping record id → normalized recency score (0.0-1.0,
             where 1.0 = most recent). When provided, recency is blended into the final score.
             Records missing from recency_scores receive a neutral score of 0.5.
-        recency_weight: Weight for recency blending (0.0 = disabled, default 0.0).
+        recency_weight: Weight for recency blending (0.0 = disabled, default 0.1).
             Final score = rrf_score * (1 - recency_weight) + recency_score * recency_weight.
+        weights: Optional list of weights, one per result list. If provided, each result list
+            is weighted by the corresponding value. If None, all lists have equal weight (1.0).
+            Length should match len(result_lists).
 
     Returns:
         Deduplicated, scored results sorted by final score descending.
@@ -30,11 +34,16 @@ def rrf_fuse(
     rrf_scores: Dict[str, float] = {}
     id_to_record: Dict[str, Dict[str, Any]] = {}
 
-    for results in result_lists:
+    for i, results in enumerate(result_lists):
+        if weights is not None and i >= len(weights):
+            raise ValueError(
+                f"weights list has {len(weights)} items but {len(result_lists)} result lists were provided"
+            )
+        weight = weights[i] if weights else 1.0
         for rank, record in enumerate(results):
             uid = record.get("id", f"rank_{rank}")
-            # RRF formula: 1 / (k + rank + 1)
-            score = 1.0 / (k + rank + 1)
+            # RRF formula: weight * 1 / (k + rank + 1)
+            score = weight * 1.0 / (k + rank + 1)
             rrf_scores[uid] = rrf_scores.get(uid, 0.0) + score
             if uid not in id_to_record:
                 id_to_record[uid] = record

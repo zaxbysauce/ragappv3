@@ -16,13 +16,43 @@ from app.services.llm_client import LLMClient, LLMError
 logger = logging.getLogger(__name__)
 
 
+def _sanitize_filename(filename: str) -> str:
+    """
+    Sanitize a filename by removing non-printable characters and path separators.
+
+    Removes:
+    - Control characters (ASCII 0-31 except tab, newline, carriage return)
+    - Path separators (/ and \\)
+    - Colon (:) which is reserved on Windows
+    - Other non-printable characters
+
+    Args:
+        filename: The raw filename string.
+
+    Returns:
+        A sanitized filename safe for use in prompts and logs.
+    """
+    import re
+
+    # Remove control characters except tab, newline, CR
+    sanitized = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", filename)
+    # Remove path separators and drive colons
+    sanitized = re.sub(r"[/\\:]", "", sanitized)
+    # Strip leading/trailing whitespace
+    sanitized = sanitized.strip()
+    # Collapse multiple spaces
+    sanitized = re.sub(r" +", " ", sanitized)
+    # Return empty string if nothing left
+    return sanitized if sanitized else "unknown_file"
+
+
 class ContextualChunker:
     """
     Service for adding LLM-generated context to document chunks.
-    
+
     Generates a short (1-2 sentence) context prefix for each chunk using an LLM,
     improving retrieval quality by providing document-level context.
-    
+
     The service is stateless except for the concurrency semaphore, which limits
     the number of concurrent LLM calls to prevent overwhelming the LLM server.
     """
@@ -39,7 +69,7 @@ class ContextualChunker:
     def __init__(self, llm_client: LLMClient):
         """
         Initialize the contextual chunker.
-        
+
         Args:
             llm_client: LLMClient instance for generating context.
                         Must be started before calling contextualize_chunks.
@@ -47,9 +77,7 @@ class ContextualChunker:
         self._llm_client = llm_client
         # Get concurrency limit from settings, falling back to default
         concurrency = getattr(
-            settings, 
-            'contextual_chunking_concurrency', 
-            self._DEFAULT_CONCURRENCY
+            settings, "contextual_chunking_concurrency", self._DEFAULT_CONCURRENCY
         )
         self._semaphore = asyncio.Semaphore(concurrency)
         logger.info(
@@ -59,24 +87,24 @@ class ContextualChunker:
     def _truncate_document(self, document_text: str) -> str:
         """
         Truncate document text if it exceeds the maximum length.
-        
+
         When the document exceeds _MAX_DOCUMENT_LENGTH characters, keeps the first
         _TRUNCATE_CHARS characters and the last _TRUNCATE_CHARS characters,
         with a [...] marker in between.
-        
+
         Args:
             document_text: The full document text to potentially truncate.
-            
+
         Returns:
             The document text, truncated if necessary.
         """
         if len(document_text) <= self._MAX_DOCUMENT_LENGTH:
             return document_text
-        
+
         truncated = (
-            document_text[:self._TRUNCATE_CHARS] 
-            + "\n\n[...truncated...]\n\n" 
-            + document_text[-self._TRUNCATE_CHARS:]
+            document_text[: self._TRUNCATE_CHARS]
+            + "\n\n[...truncated...]\n\n"
+            + document_text[-self._TRUNCATE_CHARS :]
         )
         logger.warning(
             f"Document truncated from {len(document_text)} to {len(truncated)} characters"
@@ -84,27 +112,27 @@ class ContextualChunker:
         return truncated
 
     def _build_prompt(
-        self, 
-        document_text: str, 
-        chunk_text: str, 
+        self,
+        document_text: str,
+        chunk_text: str,
         chunk_index: int,
         total_chunks: int,
-        source_filename: str
+        source_filename: str,
     ) -> List[dict]:
         """
         Build the prompt for generating chunk context.
-        
+
         Creates a prompt that asks the LLM to generate a short (1-2 sentence)
         context description that helps understand where this chunk fits in the
         overall document.
-        
+
         Args:
             document_text: The (potentially truncated) full document text.
             chunk_text: The text content of the chunk to contextualize.
             chunk_index: The index of the chunk in the document.
             total_chunks: Total number of chunks in the document.
             source_filename: The name of the source file.
-            
+
         Returns:
             List of message dicts for LLM chat completion.
         """
@@ -112,40 +140,37 @@ class ContextualChunker:
             {
                 "role": "system",
                 "content": "You are a helpful assistant that generates brief context "
-                           "descriptions for document chunks. Generate a short (1-2 sentence) "
-                           "description that explains where this chunk fits in the document. "
-                           "Be concise and focus on the main topic or section."
+                "descriptions for document chunks. Generate a short (1-2 sentence) "
+                "description that explains where this chunk fits in the document. "
+                "Be concise and focus on the main topic or section.",
             },
             {
                 "role": "user",
                 "content": f"Source file: {source_filename}\n"
-                           f"Chunk {chunk_index + 1} of {total_chunks}\n\n"
-                           f"Full document (for context):\n"
-                           f"{document_text}\n\n"
-                           f"Chunk to contextualize:\n"
-                           f"{chunk_text}\n\n"
-                           f"Provide a brief context description (1-2 sentences) for this chunk."
-            }
+                f"Chunk {chunk_index + 1} of {total_chunks}\n\n"
+                f"Full document (for context):\n"
+                f"{document_text}\n\n"
+                f"Chunk to contextualize:\n"
+                f"{chunk_text}\n\n"
+                f"Provide a brief context description (1-2 sentences) for this chunk.",
+            },
         ]
 
     async def contextualize_chunks(
-        self, 
-        document_text: str, 
-        chunks: List[ProcessedChunk], 
-        source_filename: str
+        self, document_text: str, chunks: List[ProcessedChunk], source_filename: str
     ) -> List[ProcessedChunk]:
         """
         Add LLM-generated context to each chunk in the document.
-        
+
         For each chunk, generates a short (1-2 sentence) context prefix using
         the LLM and prepends it to the chunk text. Uses a semaphore to limit
         concurrent LLM calls.
-        
+
         Args:
             document_text: The full document text.
             chunks: List of ProcessedChunk objects to contextualize.
             source_filename: The name of the source file for context.
-            
+
         Returns:
             The same chunks list with context added to each chunk's text,
             with metadata['contextualized'] set to True.
@@ -153,15 +178,14 @@ class ContextualChunker:
         if not chunks:
             logger.debug("No chunks to contextualize")
             return chunks
-        
+
         # Truncate document if too long
         truncated_doc = self._truncate_document(document_text)
-        
+
         total_chunks = len(chunks)
-        logger.info(
-            f"Contextualizing {total_chunks} chunks for file: {source_filename}"
-        )
-        
+        safe_filename = _sanitize_filename(source_filename)
+        logger.info(f"Contextualizing {total_chunks} chunks for file: {safe_filename}")
+
         # Process all chunks concurrently with semaphore limiting
         tasks = [
             self._contextualize_single_chunk(
@@ -169,17 +193,15 @@ class ContextualChunker:
                 document_text=truncated_doc,
                 chunk_index=idx,
                 total_chunks=total_chunks,
-                source_filename=source_filename
+                source_filename=safe_filename,
             )
             for idx, chunk in enumerate(chunks)
         ]
-        
+
         await asyncio.gather(*tasks)
-        
-        logger.info(
-            f"Completed contextualization for {total_chunks} chunks"
-        )
-        
+
+        logger.info(f"Completed contextualization for {total_chunks} chunks")
+
         return chunks
 
     async def _contextualize_single_chunk(
@@ -188,14 +210,14 @@ class ContextualChunker:
         document_text: str,
         chunk_index: int,
         total_chunks: int,
-        source_filename: str
+        source_filename: str,
     ) -> None:
         """
         Generate and add context to a single chunk.
-        
+
         Uses the LLM to generate a context prefix and prepends it to the
         chunk text. Always sets contextualized=True in metadata, even on failure.
-        
+
         Args:
             chunk: The ProcessedChunk to modify.
             document_text: The truncated document text for context.
@@ -210,18 +232,41 @@ class ContextualChunker:
                     chunk_text=chunk.text,
                     chunk_index=chunk_index,
                     total_chunks=total_chunks,
-                    source_filename=source_filename
+                    source_filename=source_filename,
                 )
-                
-                context = await self._llm_client.chat_completion(
-                    messages=prompt,
-                    temperature=0.3,
-                    max_tokens=self._MAX_TOKENS
-                )
-                
+
+                # Retry loop with exponential backoff for transient LLM failures
+                max_attempts = 3
+                delays = [0.5, 1.0, 2.0]  # seconds
+                last_error = None
+                context = ""  # Initialize to satisfy type checker
+
+                for attempt in range(max_attempts):
+                    try:
+                        context = await self._llm_client.chat_completion(
+                            messages=prompt,
+                            temperature=0.3,
+                            max_tokens=self._MAX_TOKENS,
+                        )
+                        break  # Success
+                    except LLMError as e:
+                        last_error = e
+                        if attempt < max_attempts - 1:
+                            delay = delays[attempt]
+                            logger.warning(
+                                f"LLM error on attempt {attempt + 1}/{max_attempts} for chunk "
+                                f"{chunk_index} (retry in {delay}s): {e}"
+                            )
+                            await asyncio.sleep(delay)
+                        else:
+                            logger.warning(
+                                f"LLM error on final attempt for chunk {chunk_index}: {e}"
+                            )
+                            raise  # Re-raise to be caught by outer handler
+
                 # Strip whitespace and check if we got a valid response
                 context = context.strip()
-                
+
                 if context:
                     # Prepend context to chunk text with two newlines
                     chunk.text = f"{context}\n\n{chunk.text}"
@@ -229,10 +274,8 @@ class ContextualChunker:
                         f"Added context to chunk {chunk_index}: {context[:50]}..."
                     )
                 else:
-                    logger.warning(
-                        f"Empty context response for chunk {chunk_index}"
-                    )
-                
+                    logger.warning(f"Empty context response for chunk {chunk_index}")
+
             except LLMError as e:
                 logger.warning(
                     f"LLM error generating context for chunk {chunk_index}: {e}"
@@ -241,6 +284,9 @@ class ContextualChunker:
                 logger.warning(
                     f"Unexpected error generating context for chunk {chunk_index}: {e}"
                 )
+                # Re-raise to avoid silent suppression (LLMError re-raised from inner handler
+                # can still reach here if raised in same function scope)
+                raise
             finally:
                 # Always mark as contextualized, even on failure
-                chunk.metadata['contextualized'] = True
+                chunk.metadata["contextualized"] = True

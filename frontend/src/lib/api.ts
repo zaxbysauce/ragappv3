@@ -669,4 +669,223 @@ export async function deleteChatSession(sessionId: number): Promise<void> {
   await apiClient.delete(`/chat/sessions/${sessionId}`);
 }
 
+// ============================================================================
+// Session Interfaces and Functions
+// ============================================================================
+
+export interface Session {
+  id: string;
+  user_id: number;
+  user_agent: string | null;
+  ip_address: string | null;
+  created_at: string;
+  expires_at: string;
+  is_current: boolean;
+}
+
+export interface SessionListResponse {
+  sessions: Session[];
+}
+
+export interface ChangePasswordRequest {
+  current_password: string;
+  new_password: string;
+}
+
+export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
+  const request: ChangePasswordRequest = {
+    current_password: currentPassword,
+    new_password: newPassword,
+  };
+  await apiClient.post("/auth/change-password", request);
+}
+
+// TODO: Session management endpoints not yet implemented in backend
+// export async function listSessions(): Promise<SessionListResponse> {
+//   const response = await apiClient.get<SessionListResponse>("/auth/sessions");
+//   return response.data;
+// }
+
+// export async function revokeSession(sessionId: string): Promise<void> {
+//   await apiClient.delete(`/auth/sessions/${sessionId}`);
+// }
+
+// export async function revokeAllSessions(): Promise<void> {
+//   await apiClient.delete("/auth/sessions");
+// }
+
+// ============================================================================
+// Group Interfaces and Functions
+// ============================================================================
+
+export interface Group {
+  id: number;
+  name: string;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+  member_count?: number;
+  org_id: number;
+  organization_name: string;
+}
+
+export interface GroupCreateRequest {
+  name: string;
+  description: string;
+}
+
+export interface GroupUpdateRequest {
+  name: string;
+  description: string;
+}
+
+export interface GroupListResponse {
+  groups: Group[];
+  total: number;
+  page: number;
+  per_page: number;
+}
+
+export async function listGroups(
+  page?: number,
+  perPage?: number,
+  search?: string
+): Promise<GroupListResponse> {
+  const params: Record<string, string | number> = {};
+  if (page !== undefined) params.page = page;
+  if (perPage !== undefined) params.per_page = perPage;
+  if (search !== undefined) params.search = search;
+
+  const response = await apiClient.get<GroupListResponse>("/groups", { params });
+  return response.data;
+}
+
+export async function createGroup(name: string, description: string): Promise<Group> {
+  const request: GroupCreateRequest = { name, description };
+  const response = await apiClient.post<Group>("/groups", request);
+  return response.data;
+}
+
+export async function updateGroup(
+  groupId: number,
+  name: string,
+  description: string
+): Promise<Group> {
+  const request: GroupUpdateRequest = { name, description };
+  const response = await apiClient.put<Group>(`/groups/${groupId}`, request);
+  return response.data;
+}
+
+export async function deleteGroup(groupId: number): Promise<void> {
+  await apiClient.delete(`/groups/${groupId}`);
+}
+
+export async function getGroupMembers(groupId: number): Promise<User[]> {
+  const response = await apiClient.get<User[]>(`/groups/${groupId}/members`);
+  return response.data;
+}
+
+export async function updateGroupMembers(groupId: number, userIds: number[]): Promise<void> {
+  await apiClient.put(`/groups/${groupId}/members`, { user_ids: userIds });
+}
+
+export async function getGroupVaults(groupId: number): Promise<GroupVault[]> {
+  const response = await apiClient.get<GroupVault[]>(`/groups/${groupId}/vaults`);
+  return response.data;
+}
+
+export async function updateGroupVaults(groupId: number, vaultIds: number[]): Promise<void> {
+  await apiClient.put(`/groups/${groupId}/vaults`, { vault_ids: vaultIds });
+}
+
+// ============================================================================
+// User Interfaces and Functions
+// ============================================================================
+
+export interface User {
+  id: number;
+  email: string;
+  full_name: string | null;
+  is_active: boolean;
+  is_superuser: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function getUserGroups(userId: number): Promise<{ groups: Group[] }> {
+  const response = await apiClient.get<{ groups: Group[] }>(`/users/${userId}/groups`);
+  return response.data;
+}
+
+export async function updateUserGroups(userId: number, groupIds: number[]): Promise<void> {
+  await apiClient.put(`/users/${userId}/groups`, { group_ids: groupIds });
+}
+
+// ============================================================================
+// Vault-Group Interfaces and Functions
+// ============================================================================
+
+export interface GroupVault {
+  id: number;
+  name: string;
+}
+
+export interface VaultGroupAccess {
+  group_id: number;
+  permission: string;
+}
+
+export async function getVaultGroups(vaultId: number): Promise<{ groups: Array<{ id: number; name: string }> }> {
+  const response = await apiClient.get<{ groups: Array<{ id: number; name: string }> }>(`/vaults/${vaultId}/groups`);
+  return response.data;
+}
+
+export async function updateVaultGroups(
+  vaultId: number,
+  groupAccess: { groupId: number; permission: string }[]
+): Promise<void> {
+  await apiClient.put(`/vaults/${vaultId}/groups`, { group_ids: groupAccess.map(ga => ga.groupId) });
+}
+
+// ============================================================================
+// Chat Message Functions (TODO: Not yet implemented in backend)
+// ============================================================================
+
+// export interface ChatMessageUpdateRequest {
+//   content: string;
+// }
+
+// TODO: editMessage endpoint not yet implemented in backend
+// export async function editMessage(
+//   sessionId: number,
+//   messageId: number,
+//   content: string
+// ): Promise<ChatSessionMessage> {
+//   const request: ChatMessageUpdateRequest = { content };
+//   const response = await apiClient.patch<ChatSessionMessage>(
+//     `/chat/sessions/${sessionId}/messages/${messageId}`,
+//     request
+//   );
+//   return response.data;
+// }
+
+// TODO: regenerateMessage endpoint not yet implemented in backend
+// export async function regenerateMessage(
+//   sessionId: number,
+//   messageId: number
+// ): Promise<ChatSessionMessage> {
+//   const response = await apiClient.post<ChatSessionMessage>(
+//     `/chat/sessions/${sessionId}/messages/${messageId}/regenerate`
+//   );
+//   return response.data;
+// }
+
+// TODO: exportChatSession endpoint not yet implemented in backend
+// export async function exportChatSession(sessionId: number): Promise<Blob> {
+//   const response = await apiClient.get<Blob>(`/chat/sessions/${sessionId}/export`, {
+//     responseType: "blob",
+//   });
+//   return response.data;
+// }
+
 export default apiClient;

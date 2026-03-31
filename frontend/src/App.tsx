@@ -13,6 +13,7 @@ import LoginPage from "@/pages/LoginPage";
 import SetupPage from "@/pages/SetupPage";
 import RegisterPage from "@/pages/RegisterPage";
 import AdminUsersPage from "@/pages/AdminUsersPage";
+import AdminGroupsPage from "@/pages/AdminGroupsPage";
 import OrgsPage from "@/pages/OrgsPage";
 import ProfilePage from "@/pages/ProfilePage";
 import { useHealthCheck } from "@/hooks/useHealthCheck";
@@ -63,6 +64,7 @@ function App() {
             <Route path="/chat" element={<ProtectedRoute><ChatShell /></ProtectedRoute>} />
             <Route path="/chat/:sessionId" element={<ProtectedRoute><ChatShell /></ProtectedRoute>} />
             <Route path="/admin/users" element={<ProtectedRoute><AdminUsersPage /></ProtectedRoute>} />
+            <Route path="/admin/groups" element={<ProtectedRoute><AdminGroupsPage /></ProtectedRoute>} />
             <Route path="/admin/organizations" element={<ProtectedRoute><OrgsPage /></ProtectedRoute>} />
             <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
             <Route

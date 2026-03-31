@@ -301,14 +301,33 @@ class TestSparseSearchIntegration(unittest.IsolatedAsyncioTestCase):
         original_execute_retrieval = RAGEngine._execute_retrieval
 
         async def mock_execute_retrieval(
-            self, query_embeddings, user_input, vault_id, query_sparse=None
+            self,
+            query_embeddings,
+            user_input,
+            vault_id,
+            query_sparse=None,
+            effective_alpha=0.6,
         ):
+            """Mock wrapper for _execute_retrieval that captures arguments.
+
+            Args:
+                query_embeddings: Dense embedding vectors for the query.
+                user_input: The original user query string.
+                vault_id: Optional vault ID to scope retrieval.
+                query_sparse: Optional sparse vector representation of the query.
+                effective_alpha: Hybrid search weighting (0.0=all sparse, 1.0=all dense).
+            """
             # Capture the query_sparse argument
             retrieval_call_args["query_sparse"] = query_sparse
             retrieval_call_args["query_embeddings"] = query_embeddings
             # Call original method
             return await original_execute_retrieval(
-                self, query_embeddings, user_input, vault_id, query_sparse
+                self,
+                query_embeddings,
+                user_input,
+                vault_id,
+                query_sparse,
+                effective_alpha,
             )
 
         # Setup

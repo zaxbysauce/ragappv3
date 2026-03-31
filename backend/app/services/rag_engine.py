@@ -327,6 +327,7 @@ class RAGEngine:
                 query_text=user_input if i == 0 else "",
                 hybrid=self.hybrid_search_enabled and i == 0,
                 hybrid_alpha=effective_alpha,
+                query_sparse=query_sparse if i == 0 else None,
             )
             all_results.append(results)
 

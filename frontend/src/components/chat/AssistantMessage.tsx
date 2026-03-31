@@ -1,9 +1,9 @@
 // frontend/src/components/chat/AssistantMessage.tsx
 // Business logic implementation for assistant message display with citations
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { motion } from "framer-motion";
-import { Bot, Copy, Check, RotateCcw, Bug, ChevronRight, FileText } from "lucide-react";
+import { Bot, Copy, Check, RotateCcw, Bug, ChevronRight, FileText, ThumbsUp, ThumbsDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -35,6 +35,10 @@ interface AssistantMessageProps {
   onRetry?: () => void;
   /** Callback when debug toggle is clicked */
   onDebugToggle?: (isActive: boolean) => void;
+  /** Current feedback state for this message */
+  feedback?: "up" | "down" | null;
+  /** Callback when feedback is changed */
+  onFeedback?: (feedback: "up" | "down" | null) => void;
 }
 
 interface CitationChipProps {
@@ -194,7 +198,7 @@ function EvidenceStrip({ sources, onSourceClick, onViewAll }: EvidenceStripProps
 }
 
 /**
- * ActionBar - Copy, Retry, Debug action buttons
+ * ActionBar - Copy, Retry, Debug, Feedback action buttons
  */
 interface ActionBarProps {
   /** Whether to show the copy button */
@@ -203,6 +207,8 @@ interface ActionBarProps {
   showRetry?: boolean;
   /** Whether to show the debug button */
   showDebug?: boolean;
+  /** Whether to show the feedback buttons */
+  showFeedback?: boolean;
   /** Content to copy */
   content: string;
   /** Callback when copy is clicked */
@@ -213,19 +219,71 @@ interface ActionBarProps {
   onDebugToggle?: (isActive: boolean) => void;
   /** Whether debug mode is active */
   isDebugActive?: boolean;
+  /** Current feedback state */
+  feedback?: "up" | "down" | null;
+  /** Callback when feedback is changed */
+  onFeedback?: (feedback: "up" | "down" | null) => void;
+  /** Message ID for localStorage key */
+  messageId?: string;
 }
 
 function ActionBar({
   showCopy = true,
   showRetry = true,
   showDebug = true,
+  showFeedback = true,
   content,
   onCopy,
   onRetry,
   onDebugToggle,
   isDebugActive = false,
+  feedback: externalFeedback,
+  onFeedback,
+  messageId,
 }: ActionBarProps) {
   const [copied, setCopied] = useState(false);
+  const [internalFeedback, setInternalFeedback] = useState<"up" | "down" | null>(null);
+
+  // Use external feedback if provided, otherwise use internal state
+  const feedback = externalFeedback !== undefined ? externalFeedback : internalFeedback;
+
+  // Load feedback from localStorage on mount
+  const loadFeedbackFromStorage = useCallback(() => {
+    if (!messageId) return null;
+    try {
+      const storageKey = `chat_feedback_${messageId}`;
+      const stored = localStorage.getItem(storageKey);
+      if (stored === "up" || stored === "down") {
+        return stored;
+      }
+    } catch {
+      // Silently fail if localStorage is not available
+    }
+    return null;
+  }, [messageId]);
+
+  // Initialize feedback from localStorage on mount
+  useEffect(() => {
+    const storedFeedback = loadFeedbackFromStorage();
+    if (storedFeedback && externalFeedback === undefined) {
+      setInternalFeedback(storedFeedback);
+    }
+  }, [loadFeedbackFromStorage, externalFeedback]);
+
+  // Save feedback to localStorage
+  const saveFeedbackToStorage = useCallback((value: "up" | "down" | null) => {
+    if (!messageId) return;
+    try {
+      const storageKey = `chat_feedback_${messageId}`;
+      if (value === null) {
+        localStorage.removeItem(storageKey);
+      } else {
+        localStorage.setItem(storageKey, value);
+      }
+    } catch {
+      // Silently fail if localStorage is not available
+    }
+  }, [messageId]);
 
   const handleCopy = useCallback(async () => {
     try {
@@ -237,6 +295,18 @@ function ActionBar({
       // Silently fail if clipboard is not available
     }
   }, [content, onCopy]);
+
+  const handleFeedback = useCallback((type: "up" | "down") => {
+    // Toggle off if clicking the same feedback
+    const newFeedback = feedback === type ? null : type;
+    
+    if (externalFeedback === undefined) {
+      setInternalFeedback(newFeedback);
+    }
+    
+    saveFeedbackToStorage(newFeedback);
+    onFeedback?.(newFeedback);
+  }, [feedback, externalFeedback, onFeedback, saveFeedbackToStorage]);
 
   return (
     <div className="flex items-center gap-1 mt-3 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -301,6 +371,46 @@ function ActionBar({
             </TooltipContent>
           </Tooltip>
         )}
+
+        {showFeedback && (
+          <>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className={cn("h-7 w-7", feedback === "up" && "bg-accent text-accent-foreground")}
+                  onClick={() => handleFeedback("up")}
+                  aria-label="Good response"
+                  aria-pressed={feedback === "up"}
+                >
+                  <ThumbsUp className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Good response</p>
+              </TooltipContent>
+            </Tooltip>
+
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className={cn("h-7 w-7", feedback === "down" && "bg-accent text-accent-foreground")}
+                  onClick={() => handleFeedback("down")}
+                  aria-label="Bad response"
+                  aria-pressed={feedback === "down"}
+                >
+                  <ThumbsDown className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Bad response</p>
+              </TooltipContent>
+            </Tooltip>
+          </>
+        )}
       </TooltipProvider>
     </div>
   );
@@ -318,6 +428,8 @@ export function AssistantMessage({
   onCopy,
   onRetry,
   onDebugToggle,
+  feedback: externalFeedback,
+  onFeedback,
 }: AssistantMessageProps) {
   const [isDebugActive, setIsDebugActive] = useState(false);
   const { openRightPane, setSelectedEvidenceSource, setActiveRightTab } = useChatShellStore();
@@ -465,6 +577,9 @@ export function AssistantMessage({
             onRetry={onRetry}
             onDebugToggle={handleDebugToggle}
             isDebugActive={isDebugActive}
+            feedback={externalFeedback}
+            onFeedback={onFeedback}
+            messageId={message.id}
           />
         )}
 

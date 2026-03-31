@@ -1,4 +1,4 @@
-import { MessageSquare, FileText, Brain, Settings, Database, Sparkles } from "lucide-react";
+import { MessageSquare, FileText, Brain, Settings, Database, Sparkles, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { NavItem, NavItemId, NavigationProps } from "./navigationTypes";
 
@@ -12,6 +12,7 @@ const navItems: NavItem[] = [
   { id: "memory", label: "Memory", icon: Brain },
   { id: "vaults", label: "Vaults", icon: Database },
   { id: "settings", label: "Settings", icon: Settings },
+  { id: "groups", label: "Groups", icon: Users },
 ];
 
 interface NavigationRailProps extends Omit<NavigationProps, 'onItemSelect'> {
@@ -50,11 +51,12 @@ export function NavigationRail({ activeItem, onItemSelect, healthStatus }: Navig
           const Icon = item.icon;
           const isActive = activeItem === item.id;
           const isNewChat = item.id === "chatNew";
+          const isGroups = item.id === "groups";
 
           return (
             <button
               key={item.id}
-              onClick={isNewChat ? () => window.location.href = "/chat/redesign" : () => onItemSelect(item.id)}
+              onClick={isNewChat ? () => window.location.href = "/chat/redesign" : isGroups ? () => window.location.href = "/admin/groups" : () => onItemSelect(item.id)}
               className={cn(
                 "group relative flex flex-col items-center gap-1 p-3 rounded-xl transition-all duration-200 ease-out",
                 "hover:bg-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",

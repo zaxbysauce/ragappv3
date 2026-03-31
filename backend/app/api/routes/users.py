@@ -1,11 +1,20 @@
 """User management routes (admin/superadmin only)."""
 
+import asyncio
+import sqlite3
+from typing import List, Optional
+
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 
-from app.api.deps import get_current_active_user, require_role
+from app.api.deps import (
+    require_role,
+    require_admin_role,
+    get_db,
+)
 from app.config import settings
 from app.models.database import get_pool
+from app.services.auth_service import hash_password, password_strength_check
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -16,6 +25,27 @@ class UpdateRoleRequest(BaseModel):
 
 class UpdateActiveRequest(BaseModel):
     is_active: bool = Field(...)
+
+
+class UpdateUserRequest(BaseModel):
+    username: Optional[str] = Field(default=None, max_length=255)
+    full_name: Optional[str] = Field(default=None, max_length=255)
+    role: Optional[str] = Field(default=None)
+
+
+class AdminResetPasswordRequest(BaseModel):
+    new_password: str = Field(..., max_length=128)
+
+
+class UserGroupsUpdateRequest(BaseModel):
+    group_ids: List[int]
+
+
+class UserGroupResponse(BaseModel):
+    id: int
+    name: str
+    description: str
+    org_id: int
 
 
 @router.get("/")
@@ -86,6 +116,189 @@ async def get_user(
         }
     finally:
         pool.release_connection(conn)
+
+
+@router.patch("/{user_id}")
+async def update_user(
+    user_id: int,
+    body: UpdateUserRequest,
+    user: dict = Depends(require_admin_role),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Edit user fields (admin/superadmin only).
+
+    Column whitelist: only username, full_name, role can be updated.
+    Cannot change own role to prevent admin locking themselves out.
+    """
+    # Verify target user exists
+    cursor = db.execute(
+        "SELECT id, username, full_name, role, is_active, created_at FROM users WHERE id = ?",
+        (user_id,),
+    )
+    target_row = cursor.fetchone()
+
+    if not target_row:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Build update fields based on whitelist
+    update_fields = []
+    update_values = []
+
+    if body.username is not None:
+        update_fields.append("username = ?")
+        update_values.append(body.username)
+
+    if body.full_name is not None:
+        update_fields.append("full_name = ?")
+        update_values.append(body.full_name)
+
+    if body.role is not None:
+        # Prevent changing own role
+        if user_id == user.get("id"):
+            raise HTTPException(status_code=400, detail="Cannot change your own role")
+
+        valid_roles = ["superadmin", "admin", "member", "viewer"]
+        if body.role not in valid_roles:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid role. Must be one of: {', '.join(valid_roles)}",
+            )
+
+        update_fields.append("role = ?")
+        update_values.append(body.role)
+
+    if not update_fields:
+        # No fields to update, return current user
+        return {
+            "id": target_row[0],
+            "username": target_row[1],
+            "full_name": target_row[2] or "",
+            "role": target_row[3],
+            "is_active": bool(target_row[4]),
+            "created_at": target_row[5],
+        }
+
+    # Execute update
+    update_values.append(user_id)
+    db.execute(
+        f"UPDATE users SET {', '.join(update_fields)} WHERE id = ?",
+        tuple(update_values),
+    )
+    db.commit()
+
+    # Fetch updated user
+    cursor = db.execute(
+        "SELECT id, username, full_name, role, is_active, created_at FROM users WHERE id = ?",
+        (user_id,),
+    )
+    row = cursor.fetchone()
+
+    return {
+        "id": row[0],
+        "username": row[1],
+        "full_name": row[2] or "",
+        "role": row[3],
+        "is_active": bool(row[4]),
+        "created_at": row[5],
+    }
+
+
+@router.patch("/{user_id}/password")
+async def admin_reset_password(
+    user_id: int,
+    body: AdminResetPasswordRequest,
+    user: dict = Depends(require_admin_role),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Admin reset password (admin/superadmin only).
+
+    Forces must_change_password=1 for the target user.
+    """
+    # Verify target user exists
+    cursor = db.execute("SELECT id FROM users WHERE id = ?", (user_id,))
+    if not cursor.fetchone():
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Validate password strength
+    try:
+        password_strength_check(body.new_password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Hash the new password
+    hashed_password = hash_password(body.new_password)
+
+    # Update password and force password change on next login
+    db.execute(
+        "UPDATE users SET hashed_password = ?, must_change_password = 1 WHERE id = ?",
+        (hashed_password, user_id),
+    )
+    db.commit()
+
+    return {
+        "message": "Password reset successfully",
+        "must_change_password": True,
+    }
+
+
+@router.patch("/{user_id}/active-status")
+async def update_user_active_status(
+    user_id: int,
+    body: UpdateActiveRequest,
+    user: dict = Depends(require_admin_role),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Toggle user active status (admin/superadmin only).
+
+    Cannot deactivate yourself.
+    Cannot deactivate the last admin user.
+    """
+    # Cannot deactivate yourself
+    if user_id == user.get("id") and not body.is_active:
+        raise HTTPException(
+            status_code=400, detail="Cannot deactivate your own account"
+        )
+
+    # Verify target user exists
+    cursor = db.execute("SELECT role, is_active FROM users WHERE id = ?", (user_id,))
+    target_row = cursor.fetchone()
+
+    if not target_row:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    target_role = target_row[0]
+    currently_active = bool(target_row[1])
+
+    # Check if trying to deactivate an admin/superadmin
+    if (
+        target_role in ("admin", "superadmin")
+        and not body.is_active
+        and currently_active
+    ):
+        # Count active admins/superadmins
+        cursor.execute(
+            "SELECT COUNT(*) FROM users WHERE role IN ('admin', 'superadmin') AND is_active = 1"
+        )
+        admin_count = cursor.fetchone()[0]
+
+        if admin_count <= 1:
+            raise HTTPException(
+                status_code=400, detail="Cannot deactivate the last admin user"
+            )
+
+    # Update active status
+    db.execute(
+        "UPDATE users SET is_active = ? WHERE id = ?",
+        (1 if body.is_active else 0, user_id),
+    )
+    db.commit()
+
+    status_str = "activated" if body.is_active else "deactivated"
+    return {
+        "id": user_id,
+        "is_active": body.is_active,
+        "message": f"User {status_str}",
+    }
 
 
 @router.patch("/{user_id}/role")
@@ -233,5 +446,160 @@ async def delete_user(
         conn.commit()
 
         return {"message": "User deleted", "user_id": user_id}
+    finally:
+        pool.release_connection(conn)
+
+
+@router.get("/{user_id}/groups")
+async def get_user_groups(
+    user_id: int,
+    user: dict = Depends(require_role("admin")),
+):
+    """Get all groups a user is a member of (admin/superadmin only)."""
+    pool = get_pool(str(settings.sqlite_path))
+    conn = pool.get_connection()
+
+    try:
+        # Verify user exists
+        cursor = conn.execute("SELECT id FROM users WHERE id = ?", (user_id,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # For non-superadmins, verify caller shares an org with target user
+        if user.get("role") != "superadmin":
+            # Get target user's orgs
+            cursor.execute(
+                "SELECT org_id FROM org_members WHERE user_id = ?", (user_id,)
+            )
+            target_orgs = {row[0] for row in cursor.fetchall()}
+            # Get caller's orgs
+            caller_id = user.get("id")
+            cursor.execute(
+                "SELECT org_id FROM org_members WHERE user_id = ?", (caller_id,)
+            )
+            caller_orgs = {row[0] for row in cursor.fetchall()}
+            # Check overlap
+            if not target_orgs & caller_orgs:  # intersection
+                raise HTTPException(
+                    status_code=403,
+                    detail="Cannot view group memberships of users outside your organization",
+                )
+
+        # Get groups the user is a member of
+        cursor = conn.execute(
+            """SELECT g.id, g.name, g.description, g.org_id
+               FROM groups g
+               JOIN group_members gm ON g.id = gm.group_id
+               WHERE gm.user_id = ?""",
+            (user_id,),
+        )
+        rows = cursor.fetchall()
+
+        groups = []
+        for row in rows:
+            groups.append(
+                {
+                    "id": row[0],
+                    "name": row[1],
+                    "description": row[2] or "",
+                    "org_id": row[3],
+                }
+            )
+
+        return {"groups": groups}
+    finally:
+        pool.release_connection(conn)
+
+
+@router.put("/{user_id}/groups")
+async def update_user_groups(
+    user_id: int,
+    body: UserGroupsUpdateRequest,
+    user: dict = Depends(require_role("admin")),
+):
+    """Replace user's group memberships (admin/superadmin only).
+
+    Validates that all groups exist and that the user is a member of each group's organization.
+    """
+    pool = get_pool(str(settings.sqlite_path))
+    conn = pool.get_connection()
+
+    def _update_groups():
+        # Verify user exists
+        cursor = conn.execute("SELECT id FROM users WHERE id = ?", (user_id,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # If group_ids is empty, just delete all memberships and return empty list
+        if not body.group_ids:
+            cursor.execute("DELETE FROM group_members WHERE user_id = ?", (user_id,))
+            conn.commit()
+            return []
+
+        # Validate all group_ids exist and get their org_ids
+        placeholders = ",".join("?" * len(body.group_ids))
+        cursor.execute(
+            f"SELECT id, org_id FROM groups WHERE id IN ({placeholders})",
+            tuple(body.group_ids),
+        )
+        found_groups = {row[0]: row[1] for row in cursor.fetchall()}
+
+        missing_groups = set(body.group_ids) - set(found_groups.keys())
+        if missing_groups:
+            raise HTTPException(
+                status_code=400, detail=f"Groups not found: {sorted(missing_groups)}"
+            )
+
+        # Check user is a member of each group's organization (skip for superadmins)
+        if user.get("role") != "superadmin":
+            for group_id, org_id in found_groups.items():
+                cursor.execute(
+                    "SELECT 1 FROM org_members WHERE user_id = ? AND org_id = ?",
+                    (user_id, org_id),
+                )
+                if not cursor.fetchone():
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"User is not a member of organization for group {group_id}",
+                    )
+
+        # Delete existing memberships
+        cursor.execute("DELETE FROM group_members WHERE user_id = ?", (user_id,))
+
+        # Insert new memberships
+        for group_id in body.group_ids:
+            cursor.execute(
+                "INSERT INTO group_members (group_id, user_id) VALUES (?, ?)",
+                (group_id, user_id),
+            )
+
+        conn.commit()
+
+        # Return updated list of groups
+        cursor.execute(
+            """SELECT g.id, g.name, g.description, g.org_id
+               FROM groups g
+               JOIN group_members gm ON g.id = gm.group_id
+               WHERE gm.user_id = ?""",
+            (user_id,),
+        )
+        rows = cursor.fetchall()
+
+        groups = []
+        for row in rows:
+            groups.append(
+                {
+                    "id": row[0],
+                    "name": row[1],
+                    "description": row[2] or "",
+                    "org_id": row[3],
+                }
+            )
+
+        return groups
+
+    try:
+        groups = await asyncio.to_thread(_update_groups)
+        return {"groups": groups}
     finally:
         pool.release_connection(conn)

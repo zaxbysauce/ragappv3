@@ -27,6 +27,7 @@ from app.api.routes.vault_members import (
     group_access_router as vault_group_access_router,
 )
 from app.api.routes.organizations import router as organizations_router
+from app.api.routes.groups import router as groups_router
 from app.config import settings
 from app.lifespan import lifespan
 from app.limiter import limiter
@@ -106,6 +107,7 @@ app.include_router(users_router, prefix="/api")
 app.include_router(vault_members_router, prefix="/api")
 app.include_router(vault_group_access_router, prefix="/api")
 app.include_router(organizations_router, prefix="/api")
+app.include_router(groups_router, prefix="/api")
 
 # Register exception handler for validation errors (empty filename)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)

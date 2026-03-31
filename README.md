@@ -71,6 +71,7 @@ backend/app/
 │   │   ├── search.py       # Search endpoints
 │   │   ├── memories.py     # Memory management
 │   │   ├── vaults.py       # Vault management
+│   │   ├── groups.py       # Groups management (admin panel)
 │   │   ├── settings.py     # App settings
 │   │   ├── email.py        # Email ingestion
 │   │   ├── health.py       # Health checks
@@ -377,6 +378,34 @@ docker compose logs knowledgevault
 | DELETE | `/api/orgs/{id}` | Delete organization |
 | POST | `/api/orgs/{id}/members` | Add member to organization |
 | DELETE | `/api/orgs/{id}/members/{user_id}` | Remove member from organization |
+
+### Groups
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/groups/` | List all groups (admin+) |
+| POST | `/api/groups/` | Create a new group (admin+) |
+| GET | `/api/groups/{id}` | Get group details (admin+) |
+| PUT | `/api/groups/{id}` | Update group (admin+) |
+| DELETE | `/api/groups/{id}` | Delete group (admin+) |
+| GET | `/api/groups/{id}/members` | List group members (admin+) |
+| PUT | `/api/groups/{id}/members` | Replace group members (admin+) |
+| GET | `/api/groups/{id}/vaults` | List vaults accessible by group (admin+) |
+| PUT | `/api/groups/{id}/vaults` | Replace group vault access (admin+) |
+
+### User-Group Associations
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/users/{id}/groups` | Get user's group memberships (admin+) |
+| PUT | `/api/users/{id}/groups` | Replace user's group memberships (admin+) |
+
+### Vault-Group Associations
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/vaults/{id}/groups` | Get groups with vault access |
+| PUT | `/api/vaults/{id}/groups` | Replace vault group access |
 
 ### Chat Sessions
 

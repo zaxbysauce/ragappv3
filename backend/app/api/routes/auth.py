@@ -40,6 +40,11 @@ class UpdateProfileRequest(BaseModel):
     password: Optional[str] = Field(default=None, max_length=128)
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(max_length=128)
+    new_password: str = Field(max_length=128)
+
+
 @limiter.limit("5/hour")
 @router.post("/register")
 async def register(
@@ -363,7 +368,6 @@ async def update_me(
         updates.append("full_name = ?")
         params.append(body.full_name)
 
-    # Invalidate sessions when password changes (in same transaction)
     if body.password is not None:
         try:
             password_strength_check(body.password)
@@ -380,10 +384,8 @@ async def update_me(
 
     try:
         db.execute(f"UPDATE users SET {', '.join(updates)} WHERE id = ?", tuple(params))
-        if body.password is not None:
-            db.execute("DELETE FROM user_sessions WHERE user_id = ?", (user_id,))
         db.commit()
-    except Exception as e:
+    except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to update user")
 
@@ -400,4 +402,98 @@ async def update_me(
         "role": row[3],
         "is_active": bool(row[4]),
         "message": "Profile updated successfully",
+    }
+
+
+@router.post("/change-password")
+async def change_password(
+    body: ChangePasswordRequest,
+    response: Response,
+    user: dict = Depends(get_current_active_user),
+    db=Depends(get_db),
+    _csrf_token: str = Depends(csrf_protect),
+):
+    """Change current user's password. Requires current password verification.
+    Revokes all existing sessions and returns new tokens.
+    """
+    user_id = user["id"]
+    username = user["username"]
+    role = user["role"]
+
+    # Fetch current hashed password
+    cursor = db.execute(
+        "SELECT hashed_password FROM users WHERE id = ?",
+        (user_id,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    current_hashed_pw = row[0]
+
+    # Verify current password
+    if not verify_password(body.current_password, current_hashed_pw):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+    # Validate new password strength
+    try:
+        password_strength_check(body.new_password)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # Hash new password
+    new_hashed_pw = hash_password(body.new_password)
+
+    # Update password and revoke all sessions in a transaction
+    try:
+        db.execute(
+            "UPDATE users SET hashed_password = ? WHERE id = ?",
+            (new_hashed_pw, user_id),
+        )
+        # Revoke ALL user sessions to force re-login
+        db.execute(
+            "DELETE FROM user_sessions WHERE user_id = ?",
+            (user_id,),
+        )
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500, detail=f"Failed to change password: {str(e)}"
+        )
+
+    # Generate new tokens
+    access_token = create_access_token(user_id, username, role)
+    refresh_token_raw, refresh_token_hash = create_refresh_token()
+
+    # Store new refresh token session
+    expires_at = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_MAX_AGE_DAYS)
+
+    try:
+        db.execute(
+            "INSERT INTO user_sessions (user_id, refresh_token_hash, expires_at) VALUES (?, ?, ?)",
+            (user_id, refresh_token_hash, expires_at.isoformat()),
+        )
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500, detail=f"Failed to create new session: {str(e)}"
+        )
+
+    # Set httpOnly refresh cookie
+    response.set_cookie(
+        key=REFRESH_TOKEN_COOKIE_NAME,
+        value=refresh_token_raw,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=REFRESH_TOKEN_MAX_AGE_DAYS * 24 * 60 * 60,
+        path="/api/auth/refresh",
+    )
+
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token_raw,
+        "token_type": "bearer",
     }
