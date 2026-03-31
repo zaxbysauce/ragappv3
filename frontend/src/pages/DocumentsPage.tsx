@@ -49,10 +49,11 @@ export default function DocumentsPage() {
   const fetchDocuments = useCallback(async () => {
     try {
       const response = await listDocuments(activeVaultId ?? undefined);
-      setDocuments(response.documents);
+      setDocuments(response?.documents || []);
     } catch (err) {
       console.error("Failed to fetch documents:", err);
       toast.error(err instanceof Error ? err.message : "Failed to load documents");
+      setDocuments([]);
     }
   }, [activeVaultId]);
 
@@ -99,7 +100,7 @@ export default function DocumentsPage() {
 
   // Status polling for documents in processing state
   useEffect(() => {
-    const hasProcessingDocs = documents.some(
+    const hasProcessingDocs = documents?.some(
       (doc) => doc.metadata?.status === "processing" || doc.metadata?.status === "pending"
     );
 
@@ -129,7 +130,7 @@ export default function DocumentsPage() {
   // Bulk selection handlers
   const handleSelectAll = useCallback((checked: boolean | 'indeterminate') => {
     if (checked) {
-      const allIds = new Set(documents.map((doc) => String(doc.id)));
+      const allIds = new Set(documents?.map((doc) => String(doc.id)) ?? []);
       setSelectedIds(allIds);
     } else {
       setSelectedIds(new Set());
@@ -177,7 +178,7 @@ export default function DocumentsPage() {
   }, [selectedIds]);
 
   const handleDeleteAllInVault = useCallback(async () => {
-    if (documents.length === 0) return;
+    if (!documents || documents.length === 0) return;
     if (!activeVaultId) {
       toast.error("No vault selected");
       return;
@@ -256,9 +257,9 @@ export default function DocumentsPage() {
   };
 
   const filteredDocuments = useMemo(
-    () => documents.filter((doc) =>
+    () => documents?.filter((doc) =>
       doc.filename.toLowerCase().includes(debouncedSearchQuery.toLowerCase())
-    ),
+    ) ?? [],
     [documents, debouncedSearchQuery]
   );
 

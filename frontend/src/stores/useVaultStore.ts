@@ -78,6 +78,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
 
   getActiveVault: () => {
     const { vaults, activeVaultId } = get();
+    if (!vaults || !Array.isArray(vaults)) return undefined;
     return vaults.find((v) => v.id === activeVaultId);
   },
 }));
