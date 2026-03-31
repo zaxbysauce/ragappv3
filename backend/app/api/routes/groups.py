@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.deps import get_db, require_role, MultipleOrgError, get_user_primary_org
+from app.models.database import transaction_context
 
 
 router = APIRouter(prefix="/groups", tags=["groups"])
@@ -601,22 +602,22 @@ async def update_group_members(
                 detail=f"Users are not members of this organization: {sorted(non_member_ids)}",
             )
 
-    # Delete existing memberships
-    await asyncio.to_thread(
-        db.execute,
-        "DELETE FROM group_members WHERE group_id = ?",
-        (group_id,),
-    )
+    # Atomic update: delete existing and insert new in transaction
+    def _update_members():
+        with transaction_context(db):
+            # Delete existing memberships
+            db.execute(
+                "DELETE FROM group_members WHERE group_id = ?",
+                (group_id,),
+            )
+            # Insert new memberships (deduplicated)
+            for user_id in set(request.user_ids):
+                db.execute(
+                    "INSERT INTO group_members (group_id, user_id) VALUES (?, ?)",
+                    (group_id, user_id),
+                )
 
-    # Insert new memberships (deduplicated)
-    for user_id in set(request.user_ids):
-        await asyncio.to_thread(
-            db.execute,
-            "INSERT INTO group_members (group_id, user_id) VALUES (?, ?)",
-            (group_id, user_id),
-        )
-
-    await asyncio.to_thread(db.commit)
+    await asyncio.to_thread(_update_members)
 
     # Fetch and return updated members
     cursor = await asyncio.to_thread(
@@ -751,22 +752,22 @@ async def update_group_vaults(
                 detail=f"Vaults do not belong to this organization: {sorted(cross_org_vaults)}",
             )
 
-    # Delete existing vault access
-    await asyncio.to_thread(
-        db.execute,
-        "DELETE FROM vault_group_access WHERE group_id = ?",
-        (group_id,),
-    )
+    # Atomic update: delete existing and insert new in transaction
+    def _update_vaults():
+        with transaction_context(db):
+            # Delete existing vault access
+            db.execute(
+                "DELETE FROM vault_group_access WHERE group_id = ?",
+                (group_id,),
+            )
+            # Insert new vault access (deduplicated)
+            for vault_id in set(request.vault_ids):
+                db.execute(
+                    "INSERT INTO vault_group_access (vault_id, group_id) VALUES (?, ?)",
+                    (vault_id, group_id),
+                )
 
-    # Insert new vault access (deduplicated)
-    for vault_id in set(request.vault_ids):
-        await asyncio.to_thread(
-            db.execute,
-            "INSERT INTO vault_group_access (vault_id, group_id) VALUES (?, ?)",
-            (vault_id, group_id),
-        )
-
-    await asyncio.to_thread(db.commit)
+    await asyncio.to_thread(_update_vaults)
 
     # Fetch and return updated vaults
     cursor = await asyncio.to_thread(
