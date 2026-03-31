@@ -6,7 +6,8 @@ from pydantic import BaseModel, field_validator, model_validator
 from typing import Optional
 from app.config import settings
 from app.api.deps import get_csrf_manager, get_db
-from app.security import CSRFManager, issue_csrf_token, require_auth
+from app.security import CSRFManager, issue_csrf_token
+from app.api.deps import get_current_active_user
 
 router = APIRouter()
 
@@ -156,7 +157,11 @@ class SettingsUpdate(BaseModel):
     def validate_chunk_overlap_less_than_size(self):
         chunk_overlap = self.chunk_overlap
         chunk_size = self.chunk_size
-        if chunk_overlap is not None and chunk_size is not None and chunk_overlap >= chunk_size:
+        if (
+            chunk_overlap is not None
+            and chunk_size is not None
+            and chunk_overlap >= chunk_size
+        ):
             raise ValueError("chunk_overlap must be less than chunk_size")
         return self
 
@@ -276,7 +281,9 @@ def _apply_settings_update(update: SettingsUpdate) -> SettingsResponse:
             setattr(settings, field, value)
             updated = True
     if not updated:
-        raise HTTPException(status_code=400, detail="No valid fields provided for update")
+        raise HTTPException(
+            status_code=400, detail="No valid fields provided for update"
+        )
     # Convert settings object to dict for validation
     settings_dict = {
         "port": settings.port,
@@ -318,7 +325,9 @@ def _apply_settings_update(update: SettingsUpdate) -> SettingsResponse:
 
 
 @router.get("/settings", response_model=SettingsResponse)
-def get_settings():
+def get_settings(
+    user: dict = Depends(get_current_active_user),
+):
     """Return current public settings dict (including embedding_batch_size)."""
     settings_dict = {
         "port": settings.port,
@@ -363,7 +372,7 @@ def get_settings():
 def post_settings(
     update: SettingsUpdate,
     conn: sqlite3.Connection = Depends(get_db),
-    auth: dict = Depends(require_auth),
+    user: dict = Depends(get_current_active_user),
 ):
     """Apply settings update and persist to database."""
     result = _apply_settings_update(update)
@@ -375,23 +384,24 @@ def post_settings(
 def put_settings(
     update: SettingsUpdate,
     conn: sqlite3.Connection = Depends(get_db),
-    auth: dict = Depends(require_auth),
+    user: dict = Depends(get_current_active_user),
 ):
     """Update existing settings. Returns 404 if any setting does not exist."""
     # Determine which fields are being updated
     fields_to_update = [
-        field for field in ALLOWED_FIELDS
-        if getattr(update, field) is not None
+        field for field in ALLOWED_FIELDS if getattr(update, field) is not None
     ]
 
     if not fields_to_update:
-        raise HTTPException(status_code=400, detail="No valid fields provided for update")
+        raise HTTPException(
+            status_code=400, detail="No valid fields provided for update"
+        )
 
     # Check if all settings being updated exist in the database
     placeholders = ", ".join(["?"] * len(fields_to_update))
     cursor = conn.execute(
         f"SELECT key FROM settings_kv WHERE key IN ({placeholders})",
-        tuple(fields_to_update)
+        tuple(fields_to_update),
     )
     existing_keys = {row[0] for row in cursor.fetchall()}
 
@@ -399,7 +409,7 @@ def put_settings(
     if missing_keys:
         raise HTTPException(
             status_code=404,
-            detail=f"Settings not found: {', '.join(sorted(missing_keys))}"
+            detail=f"Settings not found: {', '.join(sorted(missing_keys))}",
         )
 
     # Apply updates only to existing settings
@@ -438,10 +448,19 @@ async def test_connection():
         for name, url in targets.items():
             try:
                 response = await client.get(url)
-                results[name] = {"url": url, "status": response.status_code, "ok": response.status_code < 300}
+                results[name] = {
+                    "url": url,
+                    "status": response.status_code,
+                    "ok": response.status_code < 300,
+                }
             except Exception as exc:
-                results[name] = {"url": url, "status": None, "ok": False, "error": str(exc)}
-        
+                results[name] = {
+                    "url": url,
+                    "status": None,
+                    "ok": False,
+                    "error": str(exc),
+                }
+
         # Only add local mode result if reranker wasn't tested (i.e., reranker_url was not set)
         if "reranker" not in results:
             results["reranker"] = {
@@ -451,4 +470,3 @@ async def test_connection():
                 "model": settings.reranker_model,
             }
     return results
-

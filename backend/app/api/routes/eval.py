@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from app.api.deps import get_embedding_service
+from app.api.deps import get_embedding_service, require_admin_role
 from app.services.embeddings import EmbeddingService
 
 
@@ -397,6 +397,7 @@ async def _calculate_answer_similarity(
 async def ragas_evaluation(
     request: RAGASEvaluationRequest,
     embedding_service: EmbeddingService = Depends(get_embedding_service),
+    user: dict = Depends(require_admin_role),
 ):
     """
     Evaluate RAG pipeline using RAGAS metrics.

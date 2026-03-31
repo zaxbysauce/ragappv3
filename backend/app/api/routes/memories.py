@@ -483,6 +483,7 @@ async def search_memories(
     limit: int = Query(5, ge=1, le=100, description="Maximum number of results"),
     vault_id: Optional[int] = Query(None, description="Filter by vault ID"),
     memory_store: MemoryStore = Depends(get_memory_store),
+    user: dict = Depends(get_current_active_user),
 ):
     """
     Search memories using full-text search.
@@ -498,6 +499,7 @@ async def search_memories(
 async def search_memories_post(
     request: MemorySearchRequest,
     memory_store: MemoryStore = Depends(get_memory_store),
+    user: dict = Depends(get_current_active_user),
 ):
     # Handle empty or whitespace-only queries gracefully
     if not request.query or not request.query.strip():
