@@ -95,7 +95,7 @@ export const useAuthStore = create<AuthState>()(
         if (apiKey) {
           set({ authMode: "apikey", isAuthenticated: true, isLoading: false });
         } else {
-          set({ authMode: state.needsSetup ? "jwt" : "unknown", isLoading: false });
+          set({ authMode: "jwt", isLoading: false });
         }
       },
 
