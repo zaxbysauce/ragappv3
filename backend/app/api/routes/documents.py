@@ -50,8 +50,11 @@ from app.api.deps import (
     get_db,
     get_db_pool,
     get_current_active_user,
+    require_vault_permission,
+    require_admin_role,
+    evaluate_policy,
 )
-from app.security import csrf_protect, require_scope, require_auth
+from app.security import csrf_protect
 from app.limiter import limiter
 from app.services.background_tasks import BackgroundProcessor
 
@@ -125,7 +128,7 @@ async def retry_document(
     file_id: int,
     request: Request,
     conn: sqlite3.Connection = Depends(get_db),
-    auth: dict = Depends(require_scope("documents:manage")),
+    user: dict = Depends(require_admin_role),
     csrf_token: str = Depends(csrf_protect),
     secret_manager: SecretManager = Depends(get_secret_manager),
     background_processor: BackgroundProcessor = Depends(get_background_processor),
@@ -148,7 +151,7 @@ async def retry_document(
         user_id = (
             str(current_user["id"])
             if current_user and current_user.get("id")
-            else auth.get("user_id", "unknown")
+            else user.get("id", "unknown")
         )
         await asyncio.to_thread(
             _record_document_action,
@@ -168,7 +171,7 @@ async def retry_document(
         user_id = (
             str(current_user["id"])
             if current_user and current_user.get("id")
-            else auth.get("user_id", "unknown")
+            else user.get("id", "unknown")
         )
         await asyncio.to_thread(
             _record_document_action,
@@ -294,6 +297,7 @@ def _row_to_document_response(row: sqlite3.Row) -> DocumentResponse:
 async def list_documents(
     vault_id: Optional[int] = Query(None, description="Filter by vault ID"),
     conn: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_active_user),
 ):
     """
     List all documents from the files table.
@@ -333,6 +337,7 @@ async def list_documents(
 async def get_document_stats(
     vault_id: Optional[int] = Query(None, description="Filter by vault ID"),
     conn: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_active_user),
 ):
     """
     Get counts of files and chunks.
@@ -421,7 +426,7 @@ async def upload_document_root(
     vector_store: VectorStore = Depends(get_vector_store),
     embedding_service: EmbeddingService = Depends(get_embedding_service),
     db_pool: SQLiteConnectionPool = Depends(get_db_pool),
-    auth: dict = Depends(require_auth),
+    user: dict = Depends(require_vault_permission("write")),
 ):
     """
     Upload endpoint at root /documents for frontend compatibility.
@@ -441,7 +446,7 @@ async def upload_document(
     vector_store: VectorStore = Depends(get_vector_store),
     embedding_service: EmbeddingService = Depends(get_embedding_service),
     db_pool: SQLiteConnectionPool = Depends(get_db_pool),
-    auth: dict = Depends(require_auth),
+    user: dict = Depends(require_vault_permission("write")),
 ):
     """
     Upload a file and process it with strict security controls.
@@ -597,7 +602,7 @@ async def scan_directories(
     request: Request,
     background_processor: BackgroundProcessor = Depends(get_background_processor),
     db_pool: SQLiteConnectionPool = Depends(get_db_pool),
-    auth: dict = Depends(require_auth),
+    user: dict = Depends(require_vault_permission("write")),
 ):
     """
     Trigger a scan of configured directories for new files.
@@ -645,7 +650,7 @@ async def delete_document(
     file_id: int,
     request: Request,
     conn: sqlite3.Connection = Depends(get_db),
-    auth: dict = Depends(require_auth),
+    user: dict = Depends(get_current_active_user),
     vector_store: VectorStore = Depends(get_vector_store),
 ):
     """
@@ -654,9 +659,11 @@ async def delete_document(
     Deletes the file record from the database and removes all associated
     chunks from the vector store. Returns 404 if the file is not found.
     """
-    # Check if file exists
+    # Check if file exists and get vault_id for permission check
     cursor = await asyncio.to_thread(
-        conn.execute, "SELECT id, file_name FROM files WHERE id = ?", (file_id,)
+        conn.execute,
+        "SELECT id, file_name, vault_id FROM files WHERE id = ?",
+        (file_id,),
     )
     row = await asyncio.to_thread(cursor.fetchone)
 
@@ -666,6 +673,11 @@ async def delete_document(
         )
 
     file_name = row["file_name"]
+    file_vault_id = row["vault_id"]
+
+    # Check vault admin permission
+    if not await evaluate_policy(user, "vault", file_vault_id, "admin"):
+        raise HTTPException(status_code=403, detail="Insufficient vault permissions")
 
     try:
         # Delete from vector store first
@@ -714,7 +726,7 @@ async def batch_delete_documents(
         ..., embed=True, description="List of file IDs to delete"
     ),
     conn: sqlite3.Connection = Depends(get_db),
-    auth: dict = Depends(require_auth),
+    user: dict = Depends(require_admin_role),
     vector_store: VectorStore = Depends(get_vector_store),
 ):
     """
@@ -777,7 +789,7 @@ async def delete_all_vault_documents(
     vault_id: int,
     request: Request,
     conn: sqlite3.Connection = Depends(get_db),
-    auth: dict = Depends(require_auth),
+    user: dict = Depends(require_vault_permission("admin")),
     vector_store: VectorStore = Depends(get_vector_store),
 ):
     """
