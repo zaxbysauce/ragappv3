@@ -705,7 +705,7 @@ export async function listSessions(): Promise<SessionListResponse> {
   return response.data;
 }
 
-export async function revokeSession(sessionId: string): Promise<void> {
+export async function revokeSession(sessionId: number): Promise<void> {
   await apiClient.delete(`/auth/sessions/${sessionId}`);
 }
 
@@ -723,8 +723,6 @@ export interface Group {
   name: string;
   description: string | null;
   created_at: string;
-  updated_at: string;
-  member_count?: number;
   org_id: number;
   organization_name: string;
 }
@@ -780,8 +778,14 @@ export async function deleteGroup(groupId: number): Promise<void> {
   await apiClient.delete(`/groups/${groupId}`);
 }
 
-export async function getGroupMembers(groupId: number): Promise<User[]> {
-  const response = await apiClient.get<User[]>(`/groups/${groupId}/members`);
+export interface GroupMember {
+  id: number;
+  username: string;
+  full_name: string | null;
+}
+
+export async function getGroupMembers(groupId: number): Promise<GroupMember[]> {
+  const response = await apiClient.get<GroupMember[]>(`/groups/${groupId}/members`);
   return response.data;
 }
 

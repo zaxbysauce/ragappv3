@@ -49,6 +49,7 @@ class ChangePasswordRequest(BaseModel):
 @router.post("/register")
 async def register(
     request: Request,
+    response: Response,
     body: RegisterRequest,
     db=Depends(get_db),
     _csrf_token: str = Depends(csrf_protect),
@@ -88,12 +89,41 @@ async def register(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to create user: {str(e)}")
 
+    # Create tokens for auto-login
+    access_token = create_access_token(user_id, body.username, role)
+    refresh_token_raw, refresh_token_hash = create_refresh_token()
+
+    # Store refresh token session
+    expires_at = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_MAX_AGE_DAYS)
+    ip_address = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
+
+    db.execute(
+        "INSERT INTO user_sessions (user_id, refresh_token_hash, expires_at, ip_address, user_agent) VALUES (?, ?, ?, ?, ?)",
+        (user_id, refresh_token_hash, expires_at.isoformat(), ip_address, user_agent),
+    )
+    db.commit()
+
+    # Set refresh token cookie
+    response.set_cookie(
+        key=REFRESH_TOKEN_COOKIE_NAME,
+        value=refresh_token_raw,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=REFRESH_TOKEN_MAX_AGE_DAYS * 24 * 60 * 60,
+        path="/api/auth/refresh",
+    )
+
     return {
         "id": user_id,
         "username": body.username,
         "full_name": body.full_name,
         "role": role,
         "is_active": True,
+        "access_token": access_token,
+        "refresh_token": refresh_token_raw,
+        "token_type": "bearer",
         "message": "User registered successfully",
     }
 

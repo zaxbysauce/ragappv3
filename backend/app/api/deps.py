@@ -396,3 +396,45 @@ def get_user_accessible_vault_ids(user: dict, db) -> list:
         vault_ids.add(row[0])
 
     return list(vault_ids)
+
+
+class MultipleOrgError(Exception):
+    """Raised when a user belongs to multiple organizations."""
+
+    pass
+
+
+def get_user_orgs(user_id: int, db: sqlite3.Connection) -> list[int]:
+    """Get all organization IDs for a user.
+
+    Args:
+        user_id: The user's ID
+        db: Database connection
+
+    Returns:
+        List of organization IDs the user belongs to
+    """
+    cursor = db.execute("SELECT org_id FROM org_members WHERE user_id = ?", (user_id,))
+    return [row[0] for row in cursor.fetchall()]
+
+
+def get_user_primary_org(user_id: int, db: sqlite3.Connection) -> int | None:
+    """Get the primary organization ID for a user.
+
+    Args:
+        user_id: The user's ID
+        db: Database connection
+
+    Returns:
+        The organization ID if user belongs to exactly one org
+        None if user belongs to no orgs
+
+    Raises:
+        MultipleOrgError: If user belongs to multiple organizations
+    """
+    orgs = get_user_orgs(user_id, db)
+    if len(orgs) == 0:
+        return None
+    if len(orgs) == 1:
+        return orgs[0]
+    raise MultipleOrgError(f"User {user_id} belongs to multiple organizations: {orgs}")

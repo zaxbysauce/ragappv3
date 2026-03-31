@@ -845,3 +845,31 @@ def get_pool(sqlite_path: str, max_size: int = 5) -> SQLiteConnectionPool:
         if sqlite_path not in _pool_cache:
             _pool_cache[sqlite_path] = SQLiteConnectionPool(sqlite_path, max_size)
         return _pool_cache[sqlite_path]
+
+
+@contextmanager
+def transaction_context(conn: sqlite3.Connection):
+    """Context manager for database transactions.
+
+    Usage:
+        with transaction_context(conn):
+            conn.execute("INSERT ...")
+            conn.execute("UPDATE ...")
+        # Automatically commits on success, rolls back on exception
+
+    Args:
+        conn: SQLite database connection
+
+    Yields:
+        The connection object (for convenience)
+
+    Raises:
+        Any exception that occurs during the transaction (after rollback)
+    """
+    conn.execute("BEGIN")
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise

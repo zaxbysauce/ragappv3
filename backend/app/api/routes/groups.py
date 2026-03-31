@@ -7,7 +7,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.api.deps import get_db, require_role
+from app.api.deps import get_db, require_role, MultipleOrgError, get_user_primary_org
 
 
 router = APIRouter(prefix="/groups", tags=["groups"])
@@ -168,11 +168,15 @@ async def create_group(
     """
     user_role = user.get("role", "")
     user_id = user.get("id")
-    user_org_id = user.get("org_id")
 
-    # Determine target org_id: use user's org for regular admins,
-    # superadmins would need explicit org_id but for now we use user's org
-    target_org_id = user_org_id
+    # Determine target org_id using helper
+    try:
+        target_org_id = get_user_primary_org(user_id, db)
+    except MultipleOrgError:
+        raise HTTPException(
+            status_code=400,
+            detail="User belongs to multiple organizations. Please specify org_id explicitly.",
+        )
 
     if not target_org_id:
         raise HTTPException(
