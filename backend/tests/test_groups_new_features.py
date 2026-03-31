@@ -194,6 +194,7 @@ def setup_db(monkeypatch):
 def _get_db_conn():
     """Get a direct connection to the test database for setup."""
     from app.config import settings
+
     return sqlite3.connect(str(settings.sqlite_path))
 
 
@@ -257,6 +258,7 @@ def client():
 # Test 1: Pagination (page, per_page)
 # =============================================================================
 
+
 class TestPagination:
     """Tests for pagination in list_groups."""
 
@@ -286,7 +288,9 @@ class TestPagination:
             _create_group(org_id, f"Group {i}")
 
         # Request page 2 with per_page=3
-        response = client.get("/api/groups?page=2&per_page=3", headers=auth_headers(admin1_token))
+        response = client.get(
+            "/api/groups?page=2&per_page=3", headers=auth_headers(admin1_token)
+        )
         assert response.status_code == 200
         data = response.json()
         assert data["page"] == 2
@@ -302,7 +306,9 @@ class TestPagination:
         for i in range(5):
             _create_group(org_id, f"Group {i}")
 
-        response = client.get("/api/groups?per_page=5000", headers=auth_headers(admin1_token))
+        response = client.get(
+            "/api/groups?per_page=5000", headers=auth_headers(admin1_token)
+        )
         assert response.status_code == 200
         data = response.json()
         # Should be capped at 1000
@@ -324,7 +330,9 @@ class TestPagination:
         org_id = _create_org("Empty Page Org")
         _create_group(org_id, "Single Group")
 
-        response = client.get("/api/groups?page=999&per_page=10", headers=auth_headers(admin1_token))
+        response = client.get(
+            "/api/groups?page=999&per_page=10", headers=auth_headers(admin1_token)
+        )
         assert response.status_code == 200
         data = response.json()
         assert data["page"] == 999
@@ -336,6 +344,7 @@ class TestPagination:
 # Test 2: Search filtering
 # =============================================================================
 
+
 class TestSearch:
     """Tests for search parameter in list_groups."""
 
@@ -346,7 +355,9 @@ class TestSearch:
         _create_group(org_id, "Beta Squad")
         _create_group(org_id, "Alpha Leaders")
 
-        response = client.get("/api/groups?search=Alpha", headers=auth_headers(admin1_token))
+        response = client.get(
+            "/api/groups?search=Alpha", headers=auth_headers(admin1_token)
+        )
         assert response.status_code == 200
         data = response.json()
         assert data["total"] == 2
@@ -360,7 +371,9 @@ class TestSearch:
         _create_group(org_id, "UPPERCASE")
         _create_group(org_id, "MixedCase")
 
-        response = client.get("/api/groups?search=UPPER", headers=auth_headers(admin1_token))
+        response = client.get(
+            "/api/groups?search=UPPER", headers=auth_headers(admin1_token)
+        )
         assert response.status_code == 200
         data = response.json()
         assert data["total"] == 1
@@ -372,20 +385,24 @@ class TestSearch:
         _create_group(org_id, "Group Alpha")
         _create_group(org_id, "Group Beta")
 
-        response = client.get("/api/groups?search=Gamma", headers=auth_headers(admin1_token))
+        response = client.get(
+            "/api/groups?search=Gamma", headers=auth_headers(admin1_token)
+        )
         assert response.status_code == 200
         data = response.json()
         assert data["total"] == 0
         assert data["groups"] == []
 
-    def test_list_groups_search_partial_match(self client):
+    def test_list_groups_search_partial_match(self, client):
         """List groups search matches partial strings."""
         org_id = _create_org("Partial Search Org")
         _create_group(org_id, "Engineering Team")
         _create_group(org_id, "Engineering Managers")
         _create_group(org_id, "Sales Team")
 
-        response = client.get("/api/groups?search=Engine", headers=auth_headers(admin1_token))
+        response = client.get(
+            "/api/groups?search=Engine", headers=auth_headers(admin1_token)
+        )
         assert response.status_code == 200
         data = response.json()
         assert data["total"] == 2
@@ -394,6 +411,7 @@ class TestSearch:
 # =============================================================================
 # Test 3: LIKE injection prevention
 # =============================================================================
+
 
 class TestLikeInjection:
     """Tests for LIKE injection prevention in search."""
@@ -405,7 +423,9 @@ class TestLikeInjection:
         _create_group(org_id, "Half Done")
         _create_group(org_id, "Zero Percent")
 
-        response = client.get("/api/groups?search=%", headers=auth_headers(admin1_token))
+        response = client.get(
+            "/api/groups?search=%", headers=auth_headers(admin1_token)
+        )
         assert response.status_code == 200
         data = response.json()
         # Should only match the group with literal % in name
@@ -419,7 +439,9 @@ class TestLikeInjection:
         _create_group(org_id, "TestB")
         _create_group(org_id, "Test_C")
 
-        response = client.get("/api/groups?search=_", headers=auth_headers(admin1_token))
+        response = client.get(
+            "/api/groups?search=_", headers=auth_headers(admin1_token)
+        )
         assert response.status_code == 200
         data = response.json()
         # Should only match groups with literal _
@@ -434,7 +456,9 @@ class TestLikeInjection:
         _create_group(org_id, "path\\to\\file")
         _create_group(org_id, "normal/path")
 
-        response = client.get("/api/groups?search=\\", headers=auth_headers(admin1_token))
+        response = client.get(
+            "/api/groups?search=\\", headers=auth_headers(admin1_token)
+        )
         assert response.status_code == 200
         data = response.json()
         # Should only match group with literal backslash
@@ -449,7 +473,9 @@ class TestLikeInjection:
         _create_group(org_id, "testnormal")
 
         # Search for literal %value
-        response = client.get("/api/groups?search=%value", headers=auth_headers(admin1_token))
+        response = client.get(
+            "/api/groups?search=%value", headers=auth_headers(admin1_token)
+        )
         assert response.status_code == 200
         data = response.json()
         assert data["total"] == 1
@@ -459,6 +485,7 @@ class TestLikeInjection:
 # =============================================================================
 # Test 4: create_group auto-assigns org_id from user context
 # =============================================================================
+
 
 class TestAutoOrgId:
     """Tests for create_group auto-assigning org_id from user context."""
@@ -515,9 +542,10 @@ class TestAutoOrgId:
     def test_create_group_user_without_org_id_fails(self, client):
         """create_group fails if user has no org_id in token."""
         from app.services.auth_service import create_access_token
+
         # Create a token without org_id
         token_no_org = create_access_token(4, "member1", "member", org_id=None)
-        
+
         response = client.post(
             "/api/groups",
             json={
