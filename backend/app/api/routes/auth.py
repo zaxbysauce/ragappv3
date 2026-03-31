@@ -497,3 +497,149 @@ async def change_password(
         "refresh_token": refresh_token_raw,
         "token_type": "bearer",
     }
+
+
+@router.get("/sessions")
+async def list_sessions(
+    user: dict = Depends(get_current_active_user),
+    db=Depends(get_db),
+):
+    """List all active sessions for the current user.
+
+    Returns sessions with: id, ip_address, user_agent, created_at, expires_at
+    Never returns token hashes.
+    """
+    cursor = db.execute(
+        """SELECT id, ip_address, user_agent, created_at, expires_at
+           FROM user_sessions
+           WHERE user_id = ?
+           ORDER BY created_at DESC""",
+        (user["id"],),
+    )
+    rows = cursor.fetchall()
+
+    sessions = []
+    for row in rows:
+        sessions.append(
+            {
+                "id": row[0],
+                "ip_address": row[1],
+                "user_agent": row[2],
+                "created_at": row[3],
+                "expires_at": row[4],
+            }
+        )
+
+    return {"sessions": sessions}
+
+
+@router.delete("/sessions/{session_id}")
+async def revoke_session(
+    session_id: int,
+    user: dict = Depends(get_current_active_user),
+    db=Depends(get_db),
+):
+    """Revoke a specific session.
+
+    Users can only revoke their own sessions.
+    Returns 204 on success.
+    """
+    # Verify session belongs to user
+    cursor = db.execute(
+        "SELECT id FROM user_sessions WHERE id = ? AND user_id = ?",
+        (session_id, user["id"]),
+    )
+    row = cursor.fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Delete the session
+    try:
+        db.execute(
+            "DELETE FROM user_sessions WHERE id = ?",
+            (session_id,),
+        )
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500, detail=f"Failed to revoke session: {str(e)}"
+        )
+
+    return Response(status_code=204)
+
+
+@router.delete("/sessions")
+async def revoke_all_sessions(
+    response: Response,
+    request: Request,
+    user: dict = Depends(get_current_active_user),
+    db=Depends(get_db),
+):
+    """Revoke all sessions except the current one.
+
+    Rotates the current refresh token and returns new tokens.
+    """
+    # Get current session from cookie
+    refresh_token = request.cookies.get(REFRESH_TOKEN_COOKIE_NAME)
+    if not refresh_token:
+        raise HTTPException(status_code=401, detail="Refresh token missing")
+
+    token_hash = hashlib.sha256(refresh_token.encode()).hexdigest()
+
+    # Find current session
+    cursor = db.execute(
+        "SELECT id FROM user_sessions WHERE refresh_token_hash = ? AND user_id = ?",
+        (token_hash, user["id"]),
+    )
+    row = cursor.fetchone()
+
+    if not row:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+
+    current_session_id = row[0]
+
+    # Generate new refresh token for current session
+    new_refresh_token_raw, new_refresh_token_hash = create_refresh_token()
+    new_expires_at = datetime.now(timezone.utc) + timedelta(
+        days=REFRESH_TOKEN_MAX_AGE_DAYS
+    )
+
+    try:
+        # Delete all other sessions for this user
+        db.execute(
+            "DELETE FROM user_sessions WHERE user_id = ? AND id != ?",
+            (user["id"], current_session_id),
+        )
+        # Update current session with new refresh token
+        db.execute(
+            "UPDATE user_sessions SET refresh_token_hash = ?, expires_at = ? WHERE id = ?",
+            (new_refresh_token_hash, new_expires_at.isoformat(), current_session_id),
+        )
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500, detail=f"Failed to revoke sessions: {str(e)}"
+        )
+
+    # Generate new access token
+    access_token = create_access_token(user["id"], user["username"], user["role"])
+
+    # Set new refresh cookie
+    response.set_cookie(
+        key=REFRESH_TOKEN_COOKIE_NAME,
+        value=new_refresh_token_raw,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=REFRESH_TOKEN_MAX_AGE_DAYS * 24 * 60 * 60,
+        path="/api/auth/refresh",
+    )
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "expires_in": 15 * 60,
+    }

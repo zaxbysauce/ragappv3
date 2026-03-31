@@ -700,19 +700,19 @@ export async function changePassword(currentPassword: string, newPassword: strin
   await apiClient.post("/auth/change-password", request);
 }
 
-// TODO: Session management endpoints not yet implemented in backend
-// export async function listSessions(): Promise<SessionListResponse> {
-//   const response = await apiClient.get<SessionListResponse>("/auth/sessions");
-//   return response.data;
-// }
+export async function listSessions(): Promise<SessionListResponse> {
+  const response = await apiClient.get<SessionListResponse>("/auth/sessions");
+  return response.data;
+}
 
-// export async function revokeSession(sessionId: string): Promise<void> {
-//   await apiClient.delete(`/auth/sessions/${sessionId}`);
-// }
+export async function revokeSession(sessionId: string): Promise<void> {
+  await apiClient.delete(`/auth/sessions/${sessionId}`);
+}
 
-// export async function revokeAllSessions(): Promise<void> {
-//   await apiClient.delete("/auth/sessions");
-// }
+export async function revokeAllSessions(): Promise<{ access_token: string; token_type: string; expires_in: number }> {
+  const response = await apiClient.delete<{ access_token: string; token_type: string; expires_in: number }>("/auth/sessions");
+  return response.data;
+}
 
 // ============================================================================
 // Group Interfaces and Functions

@@ -53,6 +53,7 @@ from app.api.deps import (
     require_vault_permission,
     require_admin_role,
     evaluate_policy,
+    get_user_accessible_vault_ids,
 )
 from app.security import csrf_protect
 from app.limiter import limiter
@@ -306,7 +307,11 @@ async def list_documents(
     chunk_count, created_at, and processed_at fields.
     Optionally filter by vault_id.
     """
+    # Check vault permissions
     if vault_id is not None:
+        if not await evaluate_policy(user, "vault", vault_id, "read"):
+            raise HTTPException(status_code=403, detail="Access denied to vault")
+        # Query with specific vault_id
         cursor = await asyncio.to_thread(
             conn.execute,
             """
@@ -318,14 +323,33 @@ async def list_documents(
             (vault_id,),
         )
     else:
-        cursor = await asyncio.to_thread(
-            conn.execute,
-            """
-            SELECT id, file_name, file_path, status, chunk_count, file_size, created_at, processed_at
-            FROM files
-            ORDER BY created_at DESC
-            """,
-        )
+        # For non-admins without vault_id, get accessible vaults
+        if user.get("role") not in ("admin", "superadmin"):
+            accessible_vaults = get_user_accessible_vault_ids(user, conn)
+            if not accessible_vaults:
+                return DocumentListResponse(documents=[], total=0)
+            # Query with vault_id IN clause
+            placeholders = ",".join("?" * len(accessible_vaults))
+            cursor = await asyncio.to_thread(
+                conn.execute,
+                f"""
+                SELECT id, file_name, file_path, status, chunk_count, file_size, created_at, processed_at
+                FROM files
+                WHERE vault_id IN ({placeholders})
+                ORDER BY created_at DESC
+                """,
+                tuple(accessible_vaults),
+            )
+        else:
+            # Admins can see all documents
+            cursor = await asyncio.to_thread(
+                conn.execute,
+                """
+                SELECT id, file_name, file_path, status, chunk_count, file_size, created_at, processed_at
+                FROM files
+                ORDER BY created_at DESC
+                """,
+            )
     rows = await asyncio.to_thread(cursor.fetchall)
 
     documents = [_row_to_document_response(row) for row in rows]
@@ -346,64 +370,68 @@ async def get_document_stats(
     total size in bytes, and documents grouped by status.
     Optionally filter by vault_id.
     """
-    # Get total files count
+    # Determine vault filter for queries
+    vault_filter_sql = ""
+    vault_filter_params: tuple = ()
+
+    # Check vault permissions
     if vault_id is not None:
-        cursor = await asyncio.to_thread(
-            conn.execute,
-            "SELECT COUNT(*) as total_files FROM files WHERE vault_id = ?",
-            (vault_id,),
-        )
+        if not await evaluate_policy(user, "vault", vault_id, "read"):
+            raise HTTPException(status_code=403, detail="Access denied to vault")
+        vault_filter_sql = "WHERE vault_id = ?"
+        vault_filter_params = (vault_id,)
     else:
-        cursor = await asyncio.to_thread(
-            conn.execute, "SELECT COUNT(*) as total_files FROM files"
-        )
+        # For non-admins without vault_id, get accessible vaults
+        if user.get("role") not in ("admin", "superadmin"):
+            accessible_vaults = get_user_accessible_vault_ids(user, conn)
+            if not accessible_vaults:
+                return DocumentStatsResponse(
+                    total_documents=0,
+                    total_chunks=0,
+                    total_size_bytes=0,
+                    documents_by_status={},
+                    total_files=0,
+                )
+            placeholders = ",".join("?" * len(accessible_vaults))
+            vault_filter_sql = f"WHERE vault_id IN ({placeholders})"
+            vault_filter_params = tuple(accessible_vaults)
+
+    # Get total files count
+    cursor = await asyncio.to_thread(
+        conn.execute,
+        f"SELECT COUNT(*) as total_files FROM files {vault_filter_sql}".strip(),
+        vault_filter_params,
+    )
     row = await asyncio.to_thread(cursor.fetchone)
     total_files = row["total_files"]
 
     # Get total chunks count
-    if vault_id is not None:
-        cursor = await asyncio.to_thread(
-            conn.execute,
-            "SELECT COALESCE(SUM(chunk_count), 0) as total_chunks FROM files WHERE vault_id = ?",
-            (vault_id,),
-        )
-    else:
-        cursor = await asyncio.to_thread(
-            conn.execute,
-            "SELECT COALESCE(SUM(chunk_count), 0) as total_chunks FROM files",
-        )
+    cursor = await asyncio.to_thread(
+        conn.execute,
+        f"SELECT COALESCE(SUM(chunk_count), 0) as total_chunks FROM files {vault_filter_sql}".strip(),
+        vault_filter_params,
+    )
     row = await asyncio.to_thread(cursor.fetchone)
     total_chunks = row["total_chunks"]
 
     # Get total size (sum of file_size if column exists, otherwise 0)
     try:
-        if vault_id is not None:
-            cursor = await asyncio.to_thread(
-                conn.execute,
-                "SELECT COALESCE(SUM(file_size), 0) as total_size FROM files WHERE vault_id = ?",
-                (vault_id,),
-            )
-        else:
-            cursor = await asyncio.to_thread(
-                conn.execute,
-                "SELECT COALESCE(SUM(file_size), 0) as total_size FROM files",
-            )
+        cursor = await asyncio.to_thread(
+            conn.execute,
+            f"SELECT COALESCE(SUM(file_size), 0) as total_size FROM files {vault_filter_sql}".strip(),
+            vault_filter_params,
+        )
         row = await asyncio.to_thread(cursor.fetchone)
         total_size_bytes = row["total_size"] or 0
     except sqlite3.OperationalError:
         total_size_bytes = 0
 
     # Get documents grouped by status
-    if vault_id is not None:
-        cursor = await asyncio.to_thread(
-            conn.execute,
-            "SELECT status, COUNT(*) as count FROM files WHERE vault_id = ? GROUP BY status",
-            (vault_id,),
-        )
-    else:
-        cursor = await asyncio.to_thread(
-            conn.execute, "SELECT status, COUNT(*) as count FROM files GROUP BY status"
-        )
+    cursor = await asyncio.to_thread(
+        conn.execute,
+        f"SELECT status, COUNT(*) as count FROM files {vault_filter_sql} GROUP BY status".strip(),
+        vault_filter_params,
+    )
     rows = await asyncio.to_thread(cursor.fetchall)
     documents_by_status = {row["status"]: row["count"] for row in rows}
 
