@@ -40,6 +40,7 @@ class GroupCreateRequest(BaseModel):
 
     name: str = Field(..., min_length=1)
     description: str = Field(..., min_length=1)
+    org_id: Optional[int] = None
 
 
 class GroupUpdateRequest(BaseModel):
@@ -169,14 +170,17 @@ async def create_group(
     user_role = user.get("role", "")
     user_id = user.get("id")
 
-    # Determine target org_id using helper
-    try:
-        target_org_id = get_user_primary_org(user_id, db)
-    except MultipleOrgError:
-        raise HTTPException(
-            status_code=400,
-            detail="User belongs to multiple organizations. Please specify org_id explicitly.",
-        )
+    # Determine target org_id: use explicit org_id if provided, otherwise use helper
+    if request.org_id is not None:
+        target_org_id = request.org_id
+    else:
+        try:
+            target_org_id = get_user_primary_org(user_id, db)
+        except MultipleOrgError:
+            raise HTTPException(
+                status_code=400,
+                detail="User belongs to multiple organizations. Please specify org_id explicitly.",
+            )
 
     if not target_org_id:
         raise HTTPException(
