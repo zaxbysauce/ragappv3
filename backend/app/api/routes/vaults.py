@@ -7,14 +7,16 @@ Vaults are containers for documents, memories, and chat sessions.
 
 import asyncio
 import logging
+import shutil
 import sqlite3
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.api.deps import (
     get_current_active_user,
+    get_evaluate_policy,
     get_user_accessible_vault_ids,
     require_vault_permission,
     get_db,
@@ -171,6 +173,7 @@ async def get_vault(
     vault_id: int,
     user: dict = Depends(get_current_active_user),
     conn: sqlite3.Connection = Depends(get_db),
+    evaluate: Callable = Depends(get_evaluate_policy),
 ):
     """Get a single vault with counts."""
     vault = await _fetch_vault_with_counts(conn, vault_id)
@@ -179,9 +182,7 @@ async def get_vault(
             status_code=404, detail=f"Vault with id {vault_id} not found"
         )
 
-    from app.api.deps import evaluate_policy
-
-    if not await evaluate_policy(user, "vault", vault_id, "read"):
+    if not await evaluate(user, "vault", vault_id, "read"):
         raise HTTPException(status_code=403, detail="No read access to this vault")
 
     return vault
@@ -431,6 +432,7 @@ async def get_vault_groups(
     vault_id: int,
     user: dict = Depends(get_current_active_user),
     conn: sqlite3.Connection = Depends(get_db),
+    evaluate: Callable = Depends(get_evaluate_policy),
 ):
     """
     Get all groups that have access to this vault.
@@ -439,8 +441,6 @@ async def get_vault_groups(
     Requires admin permission on the vault.
     Returns 404 if vault doesn't exist.
     """
-    from app.api.deps import evaluate_policy
-
     # Check if vault exists
     cursor = await asyncio.to_thread(
         conn.execute, "SELECT id FROM vaults WHERE id = ?", (vault_id,)
@@ -452,7 +452,7 @@ async def get_vault_groups(
         )
 
     # Check admin permission on vault
-    if not await evaluate_policy(user, "vault", vault_id, "admin"):
+    if not await evaluate(user, "vault", vault_id, "admin"):
         raise HTTPException(status_code=403, detail="No admin access to this vault")
 
     # Fetch groups with access to this vault

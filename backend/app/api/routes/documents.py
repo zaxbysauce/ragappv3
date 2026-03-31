@@ -13,7 +13,7 @@ import os
 import re
 import sqlite3
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import aiofiles
 from fastapi import (
@@ -52,7 +52,7 @@ from app.api.deps import (
     get_current_active_user,
     require_vault_permission,
     require_admin_role,
-    evaluate_policy,
+    get_evaluate_policy,
     get_user_accessible_vault_ids,
 )
 from app.security import csrf_protect
@@ -299,6 +299,7 @@ async def list_documents(
     vault_id: Optional[int] = Query(None, description="Filter by vault ID"),
     conn: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_active_user),
+    evaluate: Callable = Depends(get_evaluate_policy),
 ):
     """
     List all documents from the files table.
@@ -309,7 +310,7 @@ async def list_documents(
     """
     # Check vault permissions
     if vault_id is not None:
-        if not await evaluate_policy(user, "vault", vault_id, "read"):
+        if not await evaluate(user, "vault", vault_id, "read"):
             raise HTTPException(status_code=403, detail="Access denied to vault")
         # Query with specific vault_id
         cursor = await asyncio.to_thread(
@@ -362,6 +363,7 @@ async def get_document_stats(
     vault_id: Optional[int] = Query(None, description="Filter by vault ID"),
     conn: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_active_user),
+    evaluate: Callable = Depends(get_evaluate_policy),
 ):
     """
     Get counts of files and chunks.
@@ -376,7 +378,7 @@ async def get_document_stats(
 
     # Check vault permissions
     if vault_id is not None:
-        if not await evaluate_policy(user, "vault", vault_id, "read"):
+        if not await evaluate(user, "vault", vault_id, "read"):
             raise HTTPException(status_code=403, detail="Access denied to vault")
         vault_filter_sql = "WHERE vault_id = ?"
         vault_filter_params = (vault_id,)
@@ -680,6 +682,7 @@ async def delete_document(
     conn: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_active_user),
     vector_store: VectorStore = Depends(get_vector_store),
+    evaluate: Callable = Depends(get_evaluate_policy),
 ):
     """
     Delete a document by ID.
@@ -704,7 +707,7 @@ async def delete_document(
     file_vault_id = row["vault_id"]
 
     # Check vault admin permission
-    if not await evaluate_policy(user, "vault", file_vault_id, "admin"):
+    if not await evaluate(user, "vault", file_vault_id, "admin"):
         raise HTTPException(status_code=403, detail="Insufficient vault permissions")
 
     try:
