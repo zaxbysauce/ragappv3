@@ -4,6 +4,7 @@ Vault API routes for vault management.
 Provides endpoints for listing, creating, updating, and deleting vaults.
 Vaults are containers for documents, memories, and chat sessions.
 """
+
 import asyncio
 import logging
 import sqlite3
@@ -12,8 +13,13 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.api.deps import get_db, get_vector_store
-from app.security import require_auth
+from app.api.deps import (
+    get_current_active_user,
+    get_user_accessible_vault_ids,
+    require_vault_permission,
+    get_db,
+    get_vector_store,
+)
 from app.services.vector_store import VectorStore
 
 
@@ -25,10 +31,11 @@ router = APIRouter()
 
 class VaultCreateRequest(BaseModel):
     """Request model for creating a new vault."""
+
     name: str = Field(..., min_length=1, max_length=255, description="Vault name")
     description: str = Field("", max_length=1000, description="Vault description")
 
-    @field_validator('name', mode='before')
+    @field_validator("name", mode="before")
     @classmethod
     def strip_name(cls, v):
         if isinstance(v, str):
@@ -38,10 +45,15 @@ class VaultCreateRequest(BaseModel):
 
 class VaultUpdateRequest(BaseModel):
     """Request model for updating an existing vault."""
-    name: Optional[str] = Field(None, min_length=1, max_length=255, description="New vault name")
-    description: Optional[str] = Field(None, max_length=1000, description="New description")
 
-    @field_validator('name', mode='before')
+    name: Optional[str] = Field(
+        None, min_length=1, max_length=255, description="New vault name"
+    )
+    description: Optional[str] = Field(
+        None, max_length=1000, description="New description"
+    )
+
+    @field_validator("name", mode="before")
     @classmethod
     def strip_name(cls, v):
         if isinstance(v, str):
@@ -51,6 +63,7 @@ class VaultUpdateRequest(BaseModel):
 
 class VaultResponse(BaseModel):
     """Response model for a vault record."""
+
     id: int
     name: str
     description: str
@@ -65,6 +78,7 @@ class VaultResponse(BaseModel):
 
 class VaultListResponse(BaseModel):
     """Response model for listing vaults."""
+
     vaults: List[VaultResponse]
 
 
@@ -94,12 +108,14 @@ _VAULT_WITH_COUNTS_SQL = """
 """
 
 
-async def _fetch_vault_with_counts(conn: sqlite3.Connection, vault_id: int) -> Optional[VaultResponse]:
+async def _fetch_vault_with_counts(
+    conn: sqlite3.Connection, vault_id: int
+) -> Optional[VaultResponse]:
     """Fetch a single vault with file/memory/session counts."""
     cursor = await asyncio.to_thread(
         conn.execute,
         _VAULT_WITH_COUNTS_SQL + " WHERE v.id = ? GROUP BY v.id",
-        (vault_id,)
+        (vault_id,),
     )
     row = await asyncio.to_thread(cursor.fetchone)
     return _row_to_vault_response(row) if row else None
@@ -109,35 +125,65 @@ async def _fetch_all_vaults(conn: sqlite3.Connection) -> List[VaultResponse]:
     """Fetch all vaults with counts, ordered by creation date."""
     cursor = await asyncio.to_thread(
         conn.execute,
-        _VAULT_WITH_COUNTS_SQL + " GROUP BY v.id ORDER BY v.created_at ASC"
+        _VAULT_WITH_COUNTS_SQL + " GROUP BY v.id ORDER BY v.created_at ASC",
     )
     rows = await asyncio.to_thread(cursor.fetchall)
     return [_row_to_vault_response(row) for row in rows]
 
 
 @router.get("/vaults", response_model=VaultListResponse)
-async def list_vaults(conn: sqlite3.Connection = Depends(get_db)):
-    """
-    List all vaults with document/memory/session counts.
-
-    Returns a list of all vaults with their associated counts for files,
-    memories, and chat sessions, ordered by creation date.
-    """
+async def list_vaults(
+    user: dict = Depends(get_current_active_user),
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """List all vaults with document/memory/session counts."""
     vaults = await _fetch_all_vaults(conn)
+
+    if user.get("role") not in ("superadmin", "admin"):
+        accessible_ids = get_user_accessible_vault_ids(user, conn)
+        if accessible_ids:
+            vaults = [v for v in vaults if v.id in accessible_ids]
+        else:
+            vaults = []
+
     return VaultListResponse(vaults=vaults)
 
 
-@router.get("/vaults/{vault_id}", response_model=VaultResponse)
-async def get_vault(vault_id: int, conn: sqlite3.Connection = Depends(get_db)):
-    """
-    Get a single vault with counts.
+@router.get("/vaults/accessible", response_model=VaultListResponse)
+async def list_accessible_vaults(
+    user: dict = Depends(get_current_active_user),
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """Return vaults the current user has access to."""
+    if user.get("role") in ("superadmin", "admin"):
+        return VaultListResponse(vaults=await _fetch_all_vaults(conn))
 
-    Returns the vault with the given id including file, memory,
-    and session counts. Returns 404 if not found.
-    """
+    accessible_ids = get_user_accessible_vault_ids(user, conn)
+    if not accessible_ids:
+        return VaultListResponse(vaults=[])
+
+    vaults = await _fetch_all_vaults(conn)
+    return VaultListResponse(vaults=[v for v in vaults if v.id in accessible_ids])
+
+
+@router.get("/vaults/{vault_id}", response_model=VaultResponse)
+async def get_vault(
+    vault_id: int,
+    user: dict = Depends(get_current_active_user),
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """Get a single vault with counts."""
     vault = await _fetch_vault_with_counts(conn, vault_id)
     if vault is None:
-        raise HTTPException(status_code=404, detail=f"Vault with id {vault_id} not found")
+        raise HTTPException(
+            status_code=404, detail=f"Vault with id {vault_id} not found"
+        )
+
+    from app.api.deps import evaluate_policy
+
+    if not await evaluate_policy(user, "vault", vault_id, "read"):
+        raise HTTPException(status_code=403, detail="No read access to this vault")
+
     return vault
 
 
@@ -145,7 +191,7 @@ async def get_vault(vault_id: int, conn: sqlite3.Connection = Depends(get_db)):
 async def create_vault(
     request: VaultCreateRequest,
     conn: sqlite3.Connection = Depends(get_db),
-    auth: dict = Depends(require_auth),
+    user: dict = Depends(get_current_active_user),
 ):
     """
     Create a new vault.
@@ -157,14 +203,16 @@ async def create_vault(
         cursor = await asyncio.to_thread(
             conn.execute,
             "INSERT INTO vaults (name, description) VALUES (?, ?)",
-            (request.name, request.description)
+            (request.name, request.description),
         )
         await asyncio.to_thread(conn.commit)
         vault_id = cursor.lastrowid
         if vault_id is None:
             raise HTTPException(status_code=500, detail="Failed to create vault")
     except sqlite3.IntegrityError:
-        raise HTTPException(status_code=409, detail=f"Vault with name '{request.name}' already exists")
+        raise HTTPException(
+            status_code=409, detail=f"Vault with name '{request.name}' already exists"
+        )
 
     vault = await _fetch_vault_with_counts(conn, vault_id)
     return vault
@@ -175,7 +223,7 @@ async def update_vault(
     vault_id: int,
     request: VaultUpdateRequest,
     conn: sqlite3.Connection = Depends(get_db),
-    auth: dict = Depends(require_auth),
+    user: dict = Depends(require_vault_permission("admin")),
 ):
     """
     Update vault name/description.
@@ -187,20 +235,19 @@ async def update_vault(
     """
     # Check if vault exists
     cursor = await asyncio.to_thread(
-        conn.execute,
-        "SELECT id, name FROM vaults WHERE id = ?",
-        (vault_id,)
+        conn.execute, "SELECT id, name FROM vaults WHERE id = ?", (vault_id,)
     )
     row = await asyncio.to_thread(cursor.fetchone)
 
     if row is None:
-        raise HTTPException(status_code=404, detail=f"Vault with id {vault_id} not found")
+        raise HTTPException(
+            status_code=404, detail=f"Vault with id {vault_id} not found"
+        )
 
     # Prevent renaming Default vault (id=1)
     if vault_id == 1 and request.name is not None:
         raise HTTPException(
-            status_code=400,
-            detail="Cannot rename the Default vault (id=1)"
+            status_code=400, detail="Cannot rename the Default vault (id=1)"
         )
 
     # Build update query dynamically based on provided fields
@@ -218,7 +265,9 @@ async def update_vault(
         # No fields to update, just fetch and return current record
         vault = await _fetch_vault_with_counts(conn, vault_id)
         if vault is None:
-            raise HTTPException(status_code=404, detail=f"Vault with id {vault_id} not found")
+            raise HTTPException(
+                status_code=404, detail=f"Vault with id {vault_id} not found"
+            )
         return vault
 
     # Add vault_id to params
@@ -228,21 +277,21 @@ async def update_vault(
     try:
         sql = f"""
             UPDATE vaults
-            SET {', '.join(update_fields)}, updated_at = CURRENT_TIMESTAMP
+            SET {", ".join(update_fields)}, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
         """
         await asyncio.to_thread(conn.execute, sql, params)
         await asyncio.to_thread(conn.commit)
     except sqlite3.IntegrityError:
         raise HTTPException(
-            status_code=409,
-            detail=f"Vault with name '{request.name}' already exists"
+            status_code=409, detail=f"Vault with name '{request.name}' already exists"
         )
 
     # Rename vault folder if name changed
     if request.name is not None:
         try:
             from app.services.upload_path import _rename_vault_folder
+
             old_name = row[1]  # Original vault name from line 194
             new_name = request.name
             if old_name != new_name:
@@ -256,7 +305,9 @@ async def update_vault(
 
     # Race condition fix: check if vault is None after fetch
     if vault is None:
-        raise HTTPException(status_code=404, detail=f"Vault with id {vault_id} not found")
+        raise HTTPException(
+            status_code=404, detail=f"Vault with id {vault_id} not found"
+        )
 
     return vault
 
@@ -266,7 +317,7 @@ async def delete_vault(
     vault_id: int,
     conn: sqlite3.Connection = Depends(get_db),
     vector_store: VectorStore = Depends(get_vector_store),
-    auth: dict = Depends(require_auth),
+    user: dict = Depends(require_vault_permission("admin")),
 ):
     """
     Delete vault with cascade cleanup.
@@ -283,20 +334,19 @@ async def delete_vault(
     # Prevent deleting Default vault (id=1)
     if vault_id == 1:
         raise HTTPException(
-            status_code=400,
-            detail="Cannot delete the Default vault (id=1)"
+            status_code=400, detail="Cannot delete the Default vault (id=1)"
         )
 
     # Check if vault exists
     cursor = await asyncio.to_thread(
-        conn.execute,
-        "SELECT id, name FROM vaults WHERE id = ?",
-        (vault_id,)
+        conn.execute, "SELECT id, name FROM vaults WHERE id = ?", (vault_id,)
     )
     row = await asyncio.to_thread(cursor.fetchone)
 
     if row is None:
-        raise HTTPException(status_code=404, detail=f"Vault with id {vault_id} not found")
+        raise HTTPException(
+            status_code=404, detail=f"Vault with id {vault_id} not found"
+        )
 
     vault_name = row[1]
 
@@ -307,10 +357,13 @@ async def delete_vault(
         # Delete vector chunks for this vault
         try:
             deleted_chunks = await asyncio.to_thread(
-                vector_store.delete_by_vault,
-                str(vault_id)
+                vector_store.delete_by_vault, str(vault_id)
             )
-            logger.info("Deleted %d chunks from vector store for vault_id %s", deleted_chunks, vault_id)
+            logger.info(
+                "Deleted %d chunks from vector store for vault_id %s",
+                deleted_chunks,
+                vault_id,
+            )
         except (OSError, RuntimeError, ValueError) as e:
             logger.warning("Error deleting chunks from vector store: %s", e)
             # Continue with database deletion even if vector store fails
@@ -319,34 +372,30 @@ async def delete_vault(
         await asyncio.to_thread(
             conn.execute,
             "UPDATE memories SET vault_id = NULL WHERE vault_id = ?",
-            (vault_id,)
+            (vault_id,),
         )
 
         # Delete chat_sessions (chat_messages will cascade)
         await asyncio.to_thread(
-            conn.execute,
-            "DELETE FROM chat_sessions WHERE vault_id = ?",
-            (vault_id,)
+            conn.execute, "DELETE FROM chat_sessions WHERE vault_id = ?", (vault_id,)
         )
 
         # Delete files
         await asyncio.to_thread(
-            conn.execute,
-            "DELETE FROM files WHERE vault_id = ?",
-            (vault_id,)
+            conn.execute, "DELETE FROM files WHERE vault_id = ?", (vault_id,)
         )
 
         # Delete the vault itself
         await asyncio.to_thread(
-            conn.execute,
-            "DELETE FROM vaults WHERE id = ?",
-            (vault_id,)
+            conn.execute, "DELETE FROM vaults WHERE id = ?", (vault_id,)
         )
 
         # Commit transaction
         await asyncio.to_thread(conn.commit)
 
-        return {"message": f"Vault '{vault_name}' (id: {vault_id}) deleted successfully"}
+        return {
+            "message": f"Vault '{vault_name}' (id: {vault_id}) deleted successfully"
+        }
 
     except HTTPException:
         await asyncio.to_thread(lambda: conn.rollback())
