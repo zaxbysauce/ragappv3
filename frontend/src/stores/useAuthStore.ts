@@ -27,7 +27,7 @@ interface AuthState {
   accessToken: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
-  needsSetup: boolean;
+  needsSetup: boolean | null;
   authMode: "jwt" | "apikey" | "unknown";
 
   // Actions
@@ -64,7 +64,7 @@ export const useAuthStore = create<AuthState>()(
       accessToken: null,
       isAuthenticated: false,
       isLoading: false,
-      needsSetup: false,
+      needsSetup: null as boolean | null,
       authMode: "unknown",
 
       _setLoading: (loading: boolean) => set({ isLoading: loading }),

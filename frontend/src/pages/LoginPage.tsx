@@ -46,6 +46,15 @@ export default function LoginPage() {
   const isJwtMode = authMode === "jwt";
   const isLoading = storeLoading;
 
+  // Show loading while checking setup status
+  if (needsSetup === null) {
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin" />
+      </div>
+    );
+  }
+
   // Redirect to setup if needsSetup is true
   if (needsSetup === true) {
     return <Navigate to="/setup" replace />;
