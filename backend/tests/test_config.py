@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 # Add parent directory to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.config import Settings
 
@@ -19,7 +19,9 @@ class TestSettingsDefaults(unittest.TestCase):
         settings = Settings()
 
         self.assertEqual(settings.data_dir, Path("/data/knowledgevault"))
-        self.assertEqual(settings.ollama_embedding_url, "http://host.docker.internal:11434")
+        self.assertEqual(
+            settings.ollama_embedding_url, "http://host.docker.internal:11434"
+        )
         self.assertEqual(settings.ollama_chat_url, "http://host.docker.internal:11434")
         self.assertEqual(settings.embedding_model, "nomic-embed-text")
         self.assertEqual(settings.chat_model, "qwen2.5:32b")
@@ -28,7 +30,9 @@ class TestSettingsDefaults(unittest.TestCase):
         self.assertEqual(settings.chunk_overlap_chars, 200)
         self.assertEqual(settings.retrieval_top_k, 12)
         self.assertEqual(settings.vector_metric, "cosine")
-        self.assertEqual(settings.max_distance_threshold, 0.5)  # Default threshold for cosine distance
+        self.assertEqual(
+            settings.max_distance_threshold, 0.5
+        )  # Default threshold for cosine distance
         self.assertEqual(settings.embedding_doc_prefix, "")
         self.assertEqual(settings.embedding_query_prefix, "")
         self.assertEqual(settings.retrieval_window, 1)
@@ -41,7 +45,7 @@ class TestSettingsDefaults(unittest.TestCase):
         self.assertTrue(settings.auto_scan_enabled)
         self.assertEqual(settings.auto_scan_interval_minutes, 60)
         self.assertEqual(settings.log_level, "INFO")
-        self.assertEqual(settings.port, 8080)
+        self.assertEqual(settings.port, 9090)
 
 
 class TestRagRelevanceThreshold(unittest.TestCase):

@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     )
 
     # Server configuration
-    port: int = 8080
+    port: int = 9090
 
     # Base data directory - use relative path for cross-platform compatibility
     data_dir: Path = Path("./data")

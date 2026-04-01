@@ -937,4 +937,4 @@ class TestConfigAdversarial:
         new_settings = Settings()
         # Note: pydantic_settings caches, so we need a fresh instance
         # This test verifies the env var isolation concept
-        assert new_settings.port == 9999 or new_settings.port == 8080
+        assert new_settings.port == 9999 or new_settings.port == 9090
