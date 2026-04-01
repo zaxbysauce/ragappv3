@@ -15,46 +15,51 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 # Add parent directory to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 # Stub missing optional dependencies
 try:
     import lancedb
 except ImportError:
     import types
-    sys.modules['lancedb'] = types.ModuleType('lancedb')
+
+    sys.modules["lancedb"] = types.ModuleType("lancedb")
 
 try:
     import pyarrow
 except ImportError:
     import types
-    sys.modules['pyarrow'] = types.ModuleType('pyarrow')
+
+    sys.modules["pyarrow"] = types.ModuleType("pyarrow")
 
 try:
     from unstructured.partition.auto import partition
 except ImportError:
     import types
-    _unstructured = types.ModuleType('unstructured')
+
+    _unstructured = types.ModuleType("unstructured")
     _unstructured.__path__ = []
-    _unstructured.partition = types.ModuleType('unstructured.partition')
+    _unstructured.partition = types.ModuleType("unstructured.partition")
     _unstructured.partition.__path__ = []
-    _unstructured.partition.auto = types.ModuleType('unstructured.partition.auto')
+    _unstructured.partition.auto = types.ModuleType("unstructured.partition.auto")
     _unstructured.partition.auto.partition = lambda *args, **kwargs: []
-    _unstructured.chunking = types.ModuleType('unstructured.chunking')
+    _unstructured.chunking = types.ModuleType("unstructured.chunking")
     _unstructured.chunking.__path__ = []
-    _unstructured.chunking.title = types.ModuleType('unstructured.chunking.title')
+    _unstructured.chunking.title = types.ModuleType("unstructured.chunking.title")
     _unstructured.chunking.title.chunk_by_title = lambda *args, **kwargs: []
-    _unstructured.documents = types.ModuleType('unstructured.documents')
+    _unstructured.documents = types.ModuleType("unstructured.documents")
     _unstructured.documents.__path__ = []
-    _unstructured.documents.elements = types.ModuleType('unstructured.documents.elements')
-    _unstructured.documents.elements.Element = type('Element', (), {})
-    sys.modules['unstructured'] = _unstructured
-    sys.modules['unstructured.partition'] = _unstructured.partition
-    sys.modules['unstructured.partition.auto'] = _unstructured.partition.auto
-    sys.modules['unstructured.chunking'] = _unstructured.chunking
-    sys.modules['unstructured.chunking.title'] = _unstructured.chunking.title
-    sys.modules['unstructured.documents'] = _unstructured.documents
-    sys.modules['unstructured.documents.elements'] = _unstructured.documents.elements
+    _unstructured.documents.elements = types.ModuleType(
+        "unstructured.documents.elements"
+    )
+    _unstructured.documents.elements.Element = type("Element", (), {})
+    sys.modules["unstructured"] = _unstructured
+    sys.modules["unstructured.partition"] = _unstructured.partition
+    sys.modules["unstructured.partition.auto"] = _unstructured.partition.auto
+    sys.modules["unstructured.chunking"] = _unstructured.chunking
+    sys.modules["unstructured.chunking.title"] = _unstructured.chunking.title
+    sys.modules["unstructured.documents"] = _unstructured.documents
+    sys.modules["unstructured.documents.elements"] = _unstructured.documents.elements
 
 from fastapi.testclient import TestClient
 
@@ -71,9 +76,10 @@ def setup_test_db():
     global TEST_DB_PATH, TEST_DATA_DIR
     TEST_DATA_DIR = tempfile.mkdtemp()
     TEST_DB_PATH = Path(TEST_DATA_DIR) / "test.db"
-    
+
     # Import and initialize the database
     from app.models.database import init_db
+
     init_db(str(TEST_DB_PATH))
     return str(TEST_DB_PATH)
 
@@ -81,7 +87,7 @@ def setup_test_db():
 def get_test_settings():
     """Get test settings with temporary database path."""
     from app.config import Settings
-    
+
     settings = Settings()
     settings.data_dir = Path(TEST_DATA_DIR)
     return settings
@@ -96,33 +102,37 @@ from app.config import settings
 
 class TestHealthEndpoint(unittest.TestCase):
     """Tests for the /api/health endpoint."""
-    
+
     def setUp(self):
         self.client = TestClient(app)
-    
+
     def test_health_check_success(self):
         """Test health check returns ok status with mocked services."""
         # Mock LLMHealthChecker
         mock_llm_checker = MagicMock()
-        mock_llm_checker.check_all = AsyncMock(return_value={
-            "ok": True,
-            "embeddings": {"ok": True, "error": None},
-            "chat": {"ok": True, "error": None},
-            "error": None
-        })
+        mock_llm_checker.check_all = AsyncMock(
+            return_value={
+                "ok": True,
+                "embeddings": {"ok": True, "error": None},
+                "chat": {"ok": True, "error": None},
+                "error": None,
+            }
+        )
 
         # Mock ModelChecker
         mock_model_checker = MagicMock()
-        mock_model_checker.check_models = AsyncMock(return_value={
-            "embedding_model": {"available": True, "error": None},
-            "chat_model": {"available": True, "error": None}
-        })
+        mock_model_checker.check_models = AsyncMock(
+            return_value={
+                "embedding_model": {"available": True, "error": None},
+                "chat_model": {"available": True, "error": None},
+            }
+        )
 
         app.dependency_overrides[get_llm_health_checker] = lambda: mock_llm_checker
         app.dependency_overrides[get_model_checker] = lambda: mock_model_checker
 
         try:
-            response = self.client.get("/api/health")
+            response = self.client.get("/api/health?deep=true")
 
             self.assertEqual(response.status_code, 200)
             data = response.json()
@@ -137,24 +147,28 @@ class TestHealthEndpoint(unittest.TestCase):
     def test_health_check_llm_failure(self):
         """Test health check handles LLM service failure."""
         mock_llm_checker = MagicMock()
-        mock_llm_checker.check_all = AsyncMock(return_value={
-            "ok": False,
-            "embeddings": {"ok": False, "error": "Embedding service error"},
-            "chat": {"ok": True, "error": None},
-            "error": "Embedding service error"
-        })
+        mock_llm_checker.check_all = AsyncMock(
+            return_value={
+                "ok": False,
+                "embeddings": {"ok": False, "error": "Embedding service error"},
+                "chat": {"ok": True, "error": None},
+                "error": "Embedding service error",
+            }
+        )
 
         mock_model_checker = MagicMock()
-        mock_model_checker.check_models = AsyncMock(return_value={
-            "embedding_model": {"available": True, "error": None},
-            "chat_model": {"available": True, "error": None}
-        })
+        mock_model_checker.check_models = AsyncMock(
+            return_value={
+                "embedding_model": {"available": True, "error": None},
+                "chat_model": {"available": True, "error": None},
+            }
+        )
 
         app.dependency_overrides[get_llm_health_checker] = lambda: mock_llm_checker
         app.dependency_overrides[get_model_checker] = lambda: mock_model_checker
 
         try:
-            response = self.client.get("/api/health")
+            response = self.client.get("/api/health?deep=true")
 
             self.assertEqual(response.status_code, 200)
             data = response.json()
@@ -167,7 +181,7 @@ class TestHealthEndpoint(unittest.TestCase):
 
 class TestSettingsEndpoints(unittest.TestCase):
     """Tests for the /api/settings GET and POST endpoints."""
-    
+
     def setUp(self):
         self.client = TestClient(app)
         # Store original values
@@ -188,70 +202,70 @@ class TestSettingsEndpoints(unittest.TestCase):
 
         app.dependency_overrides[get_db] = override_get_db
         self._get_db = get_db
-    
+
     def tearDown(self):
         # Restore original values
         settings.chunk_size = self._original_chunk_size
         settings.rag_relevance_threshold = self._original_rag_threshold
         # Restore get_db dependency
         app.dependency_overrides.pop(self._get_db, None)
-    
+
     def test_get_settings(self):
         """Test GET /api/settings returns current settings."""
         response = self.client.get("/api/settings")
-        
+
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIn("chunk_size", data)
         self.assertIn("rag_relevance_threshold", data)
         self.assertIn("embedding_batch_size", data)
-    
+
     def test_post_settings_valid(self):
         """Test POST /api/settings with valid settings updates values."""
         payload = {
             "chunk_size": 1024,
             "rag_relevance_threshold": 0.5,
-            "embedding_batch_size": 256
+            "embedding_batch_size": 256,
         }
-        
+
         response = self.client.post("/api/settings", json=payload)
-        
+
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data["chunk_size"], 1024)
         self.assertEqual(data["rag_relevance_threshold"], 0.5)
         self.assertEqual(data["embedding_batch_size"], 256)
-    
+
     def test_post_settings_invalid_chunk_size(self):
         """Test POST /api/settings with invalid chunk_size returns 422."""
         payload = {"chunk_size": 0}
-        
+
         response = self.client.post("/api/settings", json=payload)
-        
+
         self.assertEqual(response.status_code, 422)
-    
+
     def test_post_settings_invalid_rag_threshold_low(self):
         """Test POST /api/settings with rag_relevance_threshold < 0 returns 422."""
         payload = {"rag_relevance_threshold": -0.1}
-        
+
         response = self.client.post("/api/settings", json=payload)
-        
+
         self.assertEqual(response.status_code, 422)
-    
+
     def test_post_settings_invalid_rag_threshold_high(self):
         """Test POST /api/settings with rag_relevance_threshold > 1 returns 422."""
         payload = {"rag_relevance_threshold": 1.5}
-        
+
         response = self.client.post("/api/settings", json=payload)
-        
+
         self.assertEqual(response.status_code, 422)
-    
+
     def test_post_settings_no_valid_fields(self):
         """Test POST /api/settings with no valid fields returns 400."""
         payload = {}
-        
+
         response = self.client.post("/api/settings", json=payload)
-        
+
         self.assertEqual(response.status_code, 400)
         data = response.json()
         self.assertIn("No valid fields provided", data["detail"])
@@ -266,12 +280,14 @@ class TestMemoriesEndpoints(unittest.TestCase):
 
         # Initialize test database
         from app.models.database import init_db
+
         db_path = str(Path(self._temp_dir) / "test.db")
         init_db(db_path)
 
         # Create a real MemoryStore pointing to test DB
         from app.services.memory_store import MemoryStore
         from app.models.database import SQLiteConnectionPool
+
         self.test_pool = SQLiteConnectionPool(db_path, max_size=2)
         test_store = MemoryStore(pool=self.test_pool)
 
@@ -338,17 +354,18 @@ class TestMemoriesEndpoints(unittest.TestCase):
     def tearDown(self):
         app.dependency_overrides.pop(self._get_db, None)
         app.dependency_overrides.pop(self._get_memory_store, None)
-        if hasattr(self, 'test_pool'):
+        if hasattr(self, "test_pool"):
             self.test_pool.close_all()
-        if hasattr(self, '_connection_pool'):
+        if hasattr(self, "_connection_pool"):
             self._connection_pool.close_all()
         import shutil
+
         shutil.rmtree(self._temp_dir, ignore_errors=True)
-    
+
     def test_list_memories_empty(self):
         """Test GET /api/memories returns empty list when no memories."""
         response = self.client.get("/api/memories")
-        
+
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data["memories"], [])
@@ -358,8 +375,8 @@ class TestMemoriesEndpoints(unittest.TestCase):
         payload = {
             "content": "Test memory content",
             "category": "test",
-            "tags": "[\"tag1\", \"tag2\"]",
-            "source": "test_source"
+            "tags": '["tag1", "tag2"]',
+            "source": "test_source",
         }
 
         response = self.client.post("/api/memories", json=payload)
@@ -372,67 +389,60 @@ class TestMemoriesEndpoints(unittest.TestCase):
 
     def test_create_memory_invalid_empty_content(self):
         """Test POST /api/memories with empty content returns 422."""
-        payload = {
-            "content": "",
-            "category": "test"
-        }
+        payload = {"content": "", "category": "test"}
 
         response = self.client.post("/api/memories", json=payload)
 
         self.assertEqual(response.status_code, 422)
-    
+
     def test_create_and_list_memory(self):
         """Test creating a memory and then listing it."""
         # Create a memory
         create_payload = {
             "content": "Integration test memory",
             "category": "integration",
-            "tags": "[\"test\"]"
+            "tags": '["test"]',
         }
-        
+
         create_response = self.client.post("/api/memories", json=create_payload)
         self.assertEqual(create_response.status_code, 200)
         created = create_response.json()
         self.assertEqual(created["content"], "Integration test memory")
-        
+
         # List memories
         list_response = self.client.get("/api/memories")
         self.assertEqual(list_response.status_code, 200)
         data = list_response.json()
         self.assertEqual(len(data["memories"]), 1)
         self.assertEqual(data["memories"][0]["content"], "Integration test memory")
-    
+
     def test_update_memory(self):
         """Test PUT /api/memories/{id} updates a memory."""
         # Create a memory first
-        create_payload = {
-            "content": "Original content",
-            "category": "original"
-        }
+        create_payload = {"content": "Original content", "category": "original"}
         create_response = self.client.post("/api/memories", json=create_payload)
         self.assertEqual(create_response.status_code, 200)
         memory_id = create_response.json()["id"]
 
         # Update the memory
-        update_payload = {
-            "content": "Updated content",
-            "category": "updated"
-        }
-        update_response = self.client.put(f"/api/memories/{memory_id}", json=update_payload)
+        update_payload = {"content": "Updated content", "category": "updated"}
+        update_response = self.client.put(
+            f"/api/memories/{memory_id}", json=update_payload
+        )
 
         self.assertEqual(update_response.status_code, 200)
         data = update_response.json()
         self.assertEqual(data["content"], "Updated content")
         self.assertEqual(data["metadata"]["category"], "updated")
-    
+
     def test_update_memory_not_found(self):
         """Test PUT /api/memories/{id} returns 404 for non-existent memory."""
         update_payload = {"content": "Updated content"}
-        
+
         response = self.client.put("/api/memories/99999", json=update_payload)
-        
+
         self.assertEqual(response.status_code, 404)
-    
+
     def test_delete_memory(self):
         """Test DELETE /api/memories/{id} deletes a memory."""
         # Create a memory first
@@ -440,22 +450,22 @@ class TestMemoriesEndpoints(unittest.TestCase):
         create_response = self.client.post("/api/memories", json=create_payload)
         self.assertEqual(create_response.status_code, 200)
         memory_id = create_response.json()["id"]
-        
+
         # Delete the memory
         delete_response = self.client.delete(f"/api/memories/{memory_id}")
-        
+
         self.assertEqual(delete_response.status_code, 200)
         data = delete_response.json()
         self.assertIn("deleted successfully", data["message"])
-        
+
         # Verify it's gone
         list_response = self.client.get("/api/memories")
         self.assertEqual(len(list_response.json()["memories"]), 0)
-    
+
     def test_delete_memory_not_found(self):
         """Test DELETE /api/memories/{id} returns 404 for non-existent memory."""
         response = self.client.delete("/api/memories/99999")
-        
+
         self.assertEqual(response.status_code, 404)
 
 
@@ -468,6 +478,7 @@ class TestDocumentsEndpoints(unittest.TestCase):
         db_path = str(Path(self._temp_dir) / "test.db")
 
         from app.models.database import init_db
+
         init_db(db_path)
 
         # Override get_db to use a pool that allows cross-thread usage
@@ -529,9 +540,10 @@ class TestDocumentsEndpoints(unittest.TestCase):
 
     def tearDown(self):
         app.dependency_overrides.pop(self._get_db, None)
-        if hasattr(self, '_connection_pool'):
+        if hasattr(self, "_connection_pool"):
             self._connection_pool.close_all()
         import shutil
+
         shutil.rmtree(self._temp_dir, ignore_errors=True)
 
     def test_get_document_stats_empty(self):
@@ -561,11 +573,13 @@ class TestChatEndpoint(unittest.TestCase):
 
     def tearDown(self):
         from app.api.deps import get_rag_engine
+
         app.dependency_overrides.pop(get_rag_engine, None)
 
     def _set_mock_rag_engine(self, mock_query_fn):
         """Helper to override get_rag_engine with a mock that uses the given query function."""
         from app.api.deps import get_rag_engine
+
         mock_engine = MagicMock()
         mock_engine.query = mock_query_fn
         app.dependency_overrides[get_rag_engine] = lambda: mock_engine
@@ -579,19 +593,23 @@ class TestChatEndpoint(unittest.TestCase):
             yield {
                 "type": "done",
                 "sources": [
-                    {"file_id": "1", "score": 0.95, "metadata": {"source_file": "test.txt"}},
-                    {"file_id": "2", "score": 0.85, "metadata": {"source_file": "test2.txt"}}
+                    {
+                        "file_id": "1",
+                        "score": 0.95,
+                        "metadata": {"source_file": "test.txt"},
+                    },
+                    {
+                        "file_id": "2",
+                        "score": 0.85,
+                        "metadata": {"source_file": "test2.txt"},
+                    },
                 ],
-                "memories_used": ["Memory 1"]
+                "memories_used": ["Memory 1"],
             }
 
         self._set_mock_rag_engine(mock_query)
 
-        payload = {
-            "message": "What is the test?",
-            "history": [],
-            "stream": False
-        }
+        payload = {"message": "What is the test?", "history": [], "stream": False}
 
         response = self.client.post("/api/chat", json=payload)
 
@@ -613,18 +631,14 @@ class TestChatEndpoint(unittest.TestCase):
             self.assertEqual(chat_history[0]["content"], "Previous message")
 
             yield {"type": "content", "content": "Response with history."}
-            yield {
-                "type": "done",
-                "sources": [],
-                "memories_used": []
-            }
+            yield {"type": "done", "sources": [], "memories_used": []}
 
         self._set_mock_rag_engine(mock_query)
 
         payload = {
             "message": "Follow-up question",
             "history": [{"role": "user", "content": "Previous message"}],
-            "stream": False
+            "stream": False,
         }
 
         response = self.client.post("/api/chat", json=payload)
@@ -638,19 +652,11 @@ class TestChatEndpoint(unittest.TestCase):
 
         async def mock_query(user_input, chat_history, stream=False, **kwargs):
             yield {"type": "content", "content": "No relevant sources found."}
-            yield {
-                "type": "done",
-                "sources": [],
-                "memories_used": []
-            }
+            yield {"type": "done", "sources": [], "memories_used": []}
 
         self._set_mock_rag_engine(mock_query)
 
-        payload = {
-            "message": "Unknown query",
-            "history": [],
-            "stream": False
-        }
+        payload = {"message": "Unknown query", "history": [], "stream": False}
 
         response = self.client.post("/api/chat", json=payload)
 
@@ -663,14 +669,14 @@ class TestChatEndpoint(unittest.TestCase):
 
 class TestBasicHealthEndpoint(unittest.TestCase):
     """Tests for the basic /health endpoint."""
-    
+
     def setUp(self):
         self.client = TestClient(app)
-    
+
     def test_basic_health_check(self):
         """Test GET /health returns ok status."""
         response = self.client.get("/health")
-        
+
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data["status"], "ok")

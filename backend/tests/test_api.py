@@ -1,50 +1,56 @@
 """
 Basic API integration tests using unittest and FastAPI TestClient.
 """
+
 import sys
 import os
 
 # Add parent directory to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 # Stub missing optional dependencies
 try:
     import lancedb
 except ImportError:
     import types
-    sys.modules['lancedb'] = types.ModuleType('lancedb')
+
+    sys.modules["lancedb"] = types.ModuleType("lancedb")
 
 try:
     import pyarrow
 except ImportError:
     import types
-    sys.modules['pyarrow'] = types.ModuleType('pyarrow')
+
+    sys.modules["pyarrow"] = types.ModuleType("pyarrow")
 
 try:
     from unstructured.partition.auto import partition
 except ImportError:
     import types
-    _unstructured = types.ModuleType('unstructured')
+
+    _unstructured = types.ModuleType("unstructured")
     _unstructured.__path__ = []
-    _unstructured.partition = types.ModuleType('unstructured.partition')
+    _unstructured.partition = types.ModuleType("unstructured.partition")
     _unstructured.partition.__path__ = []
-    _unstructured.partition.auto = types.ModuleType('unstructured.partition.auto')
+    _unstructured.partition.auto = types.ModuleType("unstructured.partition.auto")
     _unstructured.partition.auto.partition = lambda *args, **kwargs: []
-    _unstructured.chunking = types.ModuleType('unstructured.chunking')
+    _unstructured.chunking = types.ModuleType("unstructured.chunking")
     _unstructured.chunking.__path__ = []
-    _unstructured.chunking.title = types.ModuleType('unstructured.chunking.title')
+    _unstructured.chunking.title = types.ModuleType("unstructured.chunking.title")
     _unstructured.chunking.title.chunk_by_title = lambda *args, **kwargs: []
-    _unstructured.documents = types.ModuleType('unstructured.documents')
+    _unstructured.documents = types.ModuleType("unstructured.documents")
     _unstructured.documents.__path__ = []
-    _unstructured.documents.elements = types.ModuleType('unstructured.documents.elements')
-    _unstructured.documents.elements.Element = type('Element', (), {})
-    sys.modules['unstructured'] = _unstructured
-    sys.modules['unstructured.partition'] = _unstructured.partition
-    sys.modules['unstructured.partition.auto'] = _unstructured.partition.auto
-    sys.modules['unstructured.chunking'] = _unstructured.chunking
-    sys.modules['unstructured.chunking.title'] = _unstructured.chunking.title
-    sys.modules['unstructured.documents'] = _unstructured.documents
-    sys.modules['unstructured.documents.elements'] = _unstructured.documents.elements
+    _unstructured.documents.elements = types.ModuleType(
+        "unstructured.documents.elements"
+    )
+    _unstructured.documents.elements.Element = type("Element", (), {})
+    sys.modules["unstructured"] = _unstructured
+    sys.modules["unstructured.partition"] = _unstructured.partition
+    sys.modules["unstructured.partition.auto"] = _unstructured.partition.auto
+    sys.modules["unstructured.chunking"] = _unstructured.chunking
+    sys.modules["unstructured.chunking.title"] = _unstructured.chunking.title
+    sys.modules["unstructured.documents"] = _unstructured.documents
+    sys.modules["unstructured.documents.elements"] = _unstructured.documents.elements
 
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -73,25 +79,29 @@ class TestAPI(unittest.TestCase):
         """Test GET /api/health returns status ok with llm and models data."""
         # Configure mock checkers to return deterministic values matching actual service structure
         mock_llm_checker = AsyncMock()
-        mock_llm_checker.check_all = AsyncMock(return_value={
-            "ok": True,
-            "embeddings": {"ok": True, "error": None},
-            "chat": {"ok": True, "error": None},
-            "error": None
-        })
+        mock_llm_checker.check_all = AsyncMock(
+            return_value={
+                "ok": True,
+                "embeddings": {"ok": True, "error": None},
+                "chat": {"ok": True, "error": None},
+                "error": None,
+            }
+        )
 
         mock_model_checker = AsyncMock()
-        mock_model_checker.check_models = AsyncMock(return_value={
-            "embedding_model": {"available": True, "error": None},
-            "chat_model": {"available": True, "error": None}
-        })
+        mock_model_checker.check_models = AsyncMock(
+            return_value={
+                "embedding_model": {"available": True, "error": None},
+                "chat_model": {"available": True, "error": None},
+            }
+        )
 
         # Override dependencies with mocks
         app.dependency_overrides[get_llm_health_checker] = lambda: mock_llm_checker
         app.dependency_overrides[get_model_checker] = lambda: mock_model_checker
 
         try:
-            response = self.client.get("/api/health")
+            response = self.client.get("/api/health?deep=true")
             self.assertEqual(response.status_code, 200)
             data = response.json()
             self.assertEqual(data["status"], "ok")
@@ -116,7 +126,7 @@ class TestAPI(unittest.TestCase):
             "chunk_size",
             "chunk_overlap",
             "max_context_chunks",
-            "rag_relevance_threshold"
+            "rag_relevance_threshold",
         ]
         for key in expected_keys:
             self.assertIn(key, data)

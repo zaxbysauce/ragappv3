@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
-import { getHealth } from "@/lib/api";
+import { useState, useEffect, useCallback, useRef } from "react";
+import apiClient, { type HealthResponse } from "@/lib/api";
 import type { HealthStatus } from "@/types/health";
 
 interface UseHealthCheckOptions {
@@ -16,13 +16,21 @@ export function useHealthCheck(options?: UseHealthCheckOptions): HealthStatus {
     lastChecked: null,
   });
 
+  const isFirstCheck = useRef(true);
+
   const checkHealth = useCallback(async () => {
     try {
-      const response = await getHealth();
+      // First check includes deep model probing; subsequent polls are lightweight
+      const params = isFirstCheck.current ? { deep: true } : {};
+      isFirstCheck.current = false;
+
+      const response = await apiClient.get<HealthResponse>("/health", { params });
+      const services = response.data.services;
+
       setHealth({
-        backend: response.services?.backend ?? response.status === "ok",
-        embeddings: response.services?.embeddings ?? false,
-        chat: response.services?.chat ?? false,
+        backend: services?.backend ?? response.data.status === "ok",
+        embeddings: services?.embeddings ?? false,
+        chat: services?.chat ?? false,
         loading: false,
         lastChecked: new Date(),
       });
