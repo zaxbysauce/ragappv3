@@ -1,6 +1,7 @@
 """
 Lifespan context manager for FastAPI application startup and shutdown.
 """
+
 import asyncio
 import logging
 import sqlite3
@@ -32,16 +33,16 @@ logger = logging.getLogger(__name__)
 async def _llm_keepalive_task(llm_client: LLMClient, interval: int = 30):
     """
     Background task to keep LLM model loaded in LM Studio.
-    
+
     LM Studio unloads models when clients disconnect. This task periodically
     sends a ping request to keep the model in memory.
-    
+
     Args:
         llm_client: The LLM client instance
         interval: Seconds between keep-alive pings (default: 30)
     """
     logger.info("Starting LLM keep-alive task (interval: %ds)", interval)
-    
+
     while True:
         try:
             await asyncio.sleep(interval)
@@ -60,13 +61,14 @@ async def _llm_keepalive_task(llm_client: LLMClient, interval: int = 30):
 def _load_persisted_settings(sqlite_path: str) -> None:
     """Load user-configurable settings from DB if they were previously saved."""
     import json
+
     conn = sqlite3.connect(sqlite_path)
     conn.row_factory = sqlite3.Row
     try:
         cursor = conn.execute("SELECT key, value FROM settings_kv")
         # Build persisted dict from all rows
         persisted = {row["key"]: row["value"] for row in cursor.fetchall()}
-        
+
         # Legacy keys — require JSON parsing and type conversion
         legacy_keys = {
             "chunk_size": int,
@@ -87,7 +89,7 @@ def _load_persisted_settings(sqlite_path: str) -> None:
                         setattr(settings, key, float(json.loads(persisted[key])))
                 except Exception as e:
                     logger.warning(f"Failed to restore persisted setting {key}: {e}")
-        
+
         # New fields — load directly without legacy conversion
         NEW_DIRECT_KEYS = [
             "chunk_size_chars",
@@ -118,7 +120,11 @@ def _load_persisted_settings(sqlite_path: str) -> None:
                     if expected_type == type(None):  # NoneType - just set as string
                         setattr(settings, key, raw)
                     elif expected_type == bool:
-                        setattr(settings, key, str(raw).lower() in ("true", "1", "yes", "on"))
+                        setattr(
+                            settings,
+                            key,
+                            str(raw).lower() in ("true", "1", "yes", "on"),
+                        )
                     elif expected_type == int:
                         setattr(settings, key, int(raw))
                     elif expected_type == float:
@@ -133,6 +139,16 @@ def _load_persisted_settings(sqlite_path: str) -> None:
         conn.close()
 
 
+async def _safe_await(coro, name, timeout=10):
+    """Await a coroutine with a timeout, logging warnings on failure."""
+    try:
+        await asyncio.wait_for(coro, timeout=timeout)
+    except asyncio.TimeoutError:
+        logger.warning(f"{name} timed out after {timeout}s (continuing)")
+    except Exception as e:
+        logger.warning(f"{name} failed: {e} (continuing)")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown events."""
@@ -143,21 +159,35 @@ async def lifespan(app: FastAPI):
     # Migrate uploads to per-vault directories (run before accepting requests)
     try:
         from app.services.upload_path import migrate_uploads
-        import asyncio
+
         logger.info("Checking for upload migration...")
-        await asyncio.to_thread(migrate_uploads, False)
+        await asyncio.wait_for(asyncio.to_thread(migrate_uploads, False), timeout=15)
     except Exception as e:
         logger.warning(f"Upload migration failed (continuing anyway): {e}")
 
     app.state.db_pool = get_pool(str(settings.sqlite_path), max_size=10)
     app.state.llm_client = LLMClient()
-    await app.state.llm_client.start()
+    await _safe_await(app.state.llm_client.start(), "LLM client start", timeout=10)
     app.state.embedding_service = EmbeddingService()
     app.state.vector_store = VectorStore()
-    await app.state.vector_store.connect()
-    await app.state.vector_store.migrate_add_vault_id()
-    await app.state.vector_store.migrate_add_chunk_scale()
-    await app.state.vector_store.migrate_add_sparse_embedding()
+    await _safe_await(
+        app.state.vector_store.connect(), "Vector store connect", timeout=15
+    )
+    await _safe_await(
+        app.state.vector_store.migrate_add_vault_id(),
+        "Vector store migrate vault_id",
+        timeout=10,
+    )
+    await _safe_await(
+        app.state.vector_store.migrate_add_chunk_scale(),
+        "Vector store migrate chunk_scale",
+        timeout=10,
+    )
+    await _safe_await(
+        app.state.vector_store.migrate_add_sparse_embedding(),
+        "Vector store migrate sparse",
+        timeout=10,
+    )
 
     # Initialize RerankingService
     app.state.reranking_service = RerankingService(
@@ -165,12 +195,14 @@ async def lifespan(app: FastAPI):
         reranker_model=settings.reranker_model,
         top_n=settings.reranker_top_n,
     )
-    
+
     # Validate schema at startup
     try:
         embedding_model_id = settings.embedding_model
         embedding_dim = settings.embedding_dim
-        validation_result = app.state.vector_store.validate_schema(embedding_model_id, embedding_dim)
+        validation_result = app.state.vector_store.validate_schema(
+            embedding_model_id, embedding_dim
+        )
         logger.info(f"Vector store schema validation completed: {validation_result}")
     except VectorStoreError as e:
         logger.error("=" * 60)
@@ -184,7 +216,13 @@ async def lifespan(app: FastAPI):
     app.state.memory_store = MemoryStore(app.state.db_pool)
     app.state.secret_manager = SecretManager()
     app.state.toggle_manager = ToggleManager(app.state.db_pool)
-    app.state.csrf_manager = CSRFManager(settings.redis_url, settings.csrf_token_ttl)
+    try:
+        app.state.csrf_manager = CSRFManager(
+            settings.redis_url, settings.csrf_token_ttl
+        )
+    except Exception as e:
+        logger.warning(f"CSRF manager init failed (continuing): {e}")
+        app.state.csrf_manager = None
     app.state.maintenance_service = MaintenanceService(app.state.db_pool)
     app.state.llm_health_checker = LLMHealthChecker(
         embedding_service=app.state.embedding_service,
@@ -193,34 +231,58 @@ async def lifespan(app: FastAPI):
     app.state.model_checker = ModelChecker()
     app.state.model_validation = (
         settings.enable_model_validation
-        or app.state.toggle_manager.get_toggle("model_validation", settings.enable_model_validation)
+        or app.state.toggle_manager.get_toggle(
+            "model_validation", settings.enable_model_validation
+        )
     )
     # Initialize background processor as singleton (runs continuously)
-    app.state.background_processor = get_background_processor(
-        max_retries=3,
-        retry_delay=1.0,
-        chunk_size_chars=settings.chunk_size_chars or 2000,
-        chunk_overlap_chars=settings.chunk_overlap_chars or 200,
-        vector_store=app.state.vector_store,
-        embedding_service=app.state.embedding_service,
-        maintenance_service=app.state.maintenance_service,
-        pool=app.state.db_pool,
-        llm_client=app.state.llm_client,
-    )
-    await app.state.background_processor.start()
-    
+    try:
+        app.state.background_processor = get_background_processor(
+            max_retries=3,
+            retry_delay=1.0,
+            chunk_size_chars=settings.chunk_size_chars or 2000,
+            chunk_overlap_chars=settings.chunk_overlap_chars or 200,
+            vector_store=app.state.vector_store,
+            embedding_service=app.state.embedding_service,
+            maintenance_service=app.state.maintenance_service,
+            pool=app.state.db_pool,
+            llm_client=app.state.llm_client,
+        )
+        await _safe_await(
+            app.state.background_processor.start(),
+            "Background processor start",
+            timeout=10,
+        )
+    except Exception as e:
+        logger.warning(f"Background processor start failed (continuing): {e}")
+        app.state.background_processor = None
+
     # Initialize email ingestion service if enabled
-    app.state.email_service = EmailIngestionService(
-        settings=settings,
-        pool=app.state.db_pool,
-        background_processor=app.state.background_processor,
-    )
-    await app.state.email_service.start_polling()
-    
+    try:
+        app.state.email_service = EmailIngestionService(
+            settings=settings,
+            pool=app.state.db_pool,
+            background_processor=app.state.background_processor,
+        )
+        await _safe_await(
+            app.state.email_service.start_polling(), "Email service start", timeout=10
+        )
+    except Exception as e:
+        logger.warning(f"Email service start failed (continuing): {e}")
+        app.state.email_service = None
+
     # Start FileWatcher for auto-scanning directories
-    app.state.file_watcher = FileWatcher(app.state.background_processor, pool=app.state.db_pool)
-    await app.state.file_watcher.start()
-    
+    try:
+        app.state.file_watcher = FileWatcher(
+            app.state.background_processor, pool=app.state.db_pool
+        )
+        await _safe_await(
+            app.state.file_watcher.start(), "FileWatcher start", timeout=10
+        )
+    except Exception as e:
+        logger.warning(f"FileWatcher start failed (continuing): {e}")
+        app.state.file_watcher = None
+
     # Initialize RAGEngine singleton with cached services
     app.state.rag_engine = RAGEngine(
         embedding_service=app.state.embedding_service,
@@ -230,23 +292,43 @@ async def lifespan(app: FastAPI):
         reranking_service=app.state.reranking_service,
     )
     logger.info("RAGEngine singleton initialized")
-    
+
     # Start LLM keep-alive task to prevent LM Studio from unloading model
-    keepalive_task = asyncio.create_task(_llm_keepalive_task(app.state.llm_client))
-    
+    keepalive_task = None
+    try:
+        keepalive_task = asyncio.create_task(_llm_keepalive_task(app.state.llm_client))
+    except Exception as e:
+        logger.warning(f"LLM keepalive task failed (continuing): {e}")
+
     yield
-    
+
     # Shutdown: Cancel keepalive, stop file watcher, and close services
     # Stop email ingestion service
-    app.state.email_service.stop_polling()
-    keepalive_task.cancel()
+    if app.state.email_service:
+        app.state.email_service.stop_polling()
+    if keepalive_task:
+        keepalive_task.cancel()
+        try:
+            await keepalive_task
+        except asyncio.CancelledError:
+            pass
+    if app.state.file_watcher:
+        await app.state.file_watcher.stop()
+    if app.state.background_processor:
+        await app.state.background_processor.stop()
     try:
-        await keepalive_task
-    except asyncio.CancelledError:
+        await app.state.llm_client.close()
+    except Exception:
         pass
-    await app.state.file_watcher.stop()
-    await app.state.background_processor.stop()
-    await app.state.llm_client.close()
-    await app.state.embedding_service.close()
-    app.state.vector_store.close()
-    app.state.db_pool.close_all()
+    try:
+        await app.state.embedding_service.close()
+    except Exception:
+        pass
+    try:
+        app.state.vector_store.close()
+    except Exception:
+        pass
+    try:
+        app.state.db_pool.close_all()
+    except Exception:
+        pass

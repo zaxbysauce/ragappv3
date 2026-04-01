@@ -1,29 +1,37 @@
 """FastAPI dependency functions."""
 
+from __future__ import annotations
+
 import secrets
 import sqlite3
 from collections.abc import Callable
 from contextlib import contextmanager
+from typing import TYPE_CHECKING
 
 from fastapi import Request, Depends, Header, HTTPException, Cookie
 
 from app.config import Settings, settings
 from app.services.auth_service import decode_access_token
 from app.models.database import get_pool, SQLiteConnectionPool
-from app.services.llm_client import LLMClient
-from app.services.embeddings import EmbeddingService
-from app.services.vector_store import VectorStore
-from app.services.memory_store import MemoryStore
-from app.services.reranking import RerankingService
-from app.services.rag_engine import RAGEngine
-from app.services.secret_manager import SecretManager
-from app.services.toggle_manager import ToggleManager
-from app.services.background_tasks import BackgroundProcessor
-from app.services.maintenance import MaintenanceService
-from app.services.llm_health import LLMHealthChecker
-from app.services.model_checker import ModelChecker
-from app.services.email_service import EmailIngestionService
 from app.security import get_csrf_manager
+
+# Lazy imports — services are only loaded when their getter is actually called.
+# This prevents heavy imports (unstructured, aioimaplib, torch, etc.) from
+# blocking every request handler import chain.
+if TYPE_CHECKING:
+    from app.services.llm_client import LLMClient
+    from app.services.embeddings import EmbeddingService
+    from app.services.vector_store import VectorStore
+    from app.services.memory_store import MemoryStore
+    from app.services.reranking import RerankingService
+    from app.services.rag_engine import RAGEngine
+    from app.services.secret_manager import SecretManager
+    from app.services.toggle_manager import ToggleManager
+    from app.services.background_tasks import BackgroundProcessor
+    from app.services.maintenance import MaintenanceService
+    from app.services.llm_health import LLMHealthChecker
+    from app.services.model_checker import ModelChecker
+    from app.services.email_service import EmailIngestionService
 
 
 def get_db():
