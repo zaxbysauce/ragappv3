@@ -81,14 +81,14 @@ async function fetchGroups(
   search: string,
   perPage: number = PAGE_SIZE
 ): Promise<GroupsResponse> {
-  const params = new URLSearchParams({
-    page: String(page),
-    per_page: String(perPage),
-  });
+  const params: Record<string, string | number> = {
+    page,
+    per_page: perPage,
+  };
   if (search) {
-    params.append("search", search);
+    params.search = search;
   }
-  const response = await apiClient.get<GroupsResponse>(`/groups?${params.toString()}`);
+  const response = await apiClient.get<GroupsResponse>("/groups", { params });
   return response.data;
 }
 

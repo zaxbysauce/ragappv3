@@ -217,6 +217,11 @@ export interface UpdateSettingsRequest {
   reranker_top_n?: number;
   hybrid_search_enabled?: boolean;
   hybrid_alpha?: number;
+  // Model connection settings
+  ollama_embedding_url?: string;
+  ollama_chat_url?: string;
+  embedding_model?: string;
+  chat_model?: string;
 }
 
 export interface SearchMemoriesRequest {

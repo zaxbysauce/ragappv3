@@ -15,6 +15,7 @@ import { useHealthCheck } from "@/hooks/useHealthCheck";
 import { APIKeySettings } from "@/components/settings/APIKeySettings";
 import { ConnectionSettings } from "@/components/settings/ConnectionSettings";
 import { DocumentProcessingSettings } from "@/components/settings/DocumentProcessingSettings";
+import { ModelConnectionSettings } from "@/components/settings/ModelConnectionSettings";
 import { RAGSettings } from "@/components/settings/RAGSettings";
 import { RetrievalSettings } from "@/components/settings/RetrievalSettings";
 import type { SettingsFormData } from "@/stores/useSettingsStore";
@@ -78,14 +79,16 @@ function SettingsPageContent() {
     };
   }, [setSettings, initializeForm, setError, setLoading]);
 
-  const handleInputChange = (field: keyof SettingsFormData, value: string | boolean) => {
+  const handleInputChange = (field: keyof SettingsFormData, value: string | boolean | number) => {
     if (typeof value === "boolean") {
       updateFormField(field, value);
     } else if (typeof value === "string" && value === "") {
       // Handle empty string for optional text fields
       updateFormField(field as any, value);
+    } else if (typeof value === "number") {
+      updateFormField(field, value);
     } else {
-      const numValue = parseFloat(value);
+      const numValue = parseFloat(value as string);
       if (!isNaN(numValue)) {
         updateFormField(field, numValue);
       }
@@ -121,6 +124,11 @@ function SettingsPageContent() {
         reranker_top_n: formData.reranker_top_n,
         hybrid_search_enabled: formData.hybrid_search_enabled,
         hybrid_alpha: formData.hybrid_alpha,
+        // Model connection settings
+        ollama_embedding_url: formData.ollama_embedding_url,
+        ollama_chat_url: formData.ollama_chat_url,
+        embedding_model: formData.embedding_model,
+        chat_model: formData.chat_model,
       });
       setSettings(updated);
       toast.success("Settings saved successfully");
@@ -239,8 +247,15 @@ function SettingsPageContent() {
               </p>
             </div>
 
-            {/* Document Processing Settings */}
-            <DocumentProcessingSettings
+{/* Model Connection Settings */}
+      <ModelConnectionSettings
+        formData={formData}
+        errors={errors}
+        onChange={handleInputChange}
+      />
+
+      {/* Document Processing Settings */}
+      <DocumentProcessingSettings
               formData={formData}
               errors={errors}
               onChange={handleInputChange}

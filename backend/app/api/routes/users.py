@@ -12,6 +12,7 @@ from app.api.deps import (
     require_admin_role,
     get_db,
 )
+from app.security import csrf_protect
 from app.config import settings
 from app.models.database import get_pool
 from app.services.auth_service import hash_password, password_strength_check
@@ -37,6 +38,13 @@ class AdminResetPasswordRequest(BaseModel):
     new_password: str = Field(..., max_length=128)
 
 
+class CreateUserRequest(BaseModel):
+    username: str = Field(..., min_length=3, max_length=255)
+    password: str = Field(..., min_length=8, max_length=128)
+    full_name: str = Field(default="", max_length=255)
+    role: str = Field(default="member")
+
+
 class UserGroupsUpdateRequest(BaseModel):
     group_ids: List[int]
 
@@ -46,6 +54,82 @@ class UserGroupResponse(BaseModel):
     name: str
     description: str
     org_id: int
+
+
+@router.post("/")
+async def create_user(
+    body: CreateUserRequest,
+    user: dict = Depends(require_admin_role),
+    _csrf_token: str = Depends(csrf_protect),
+):
+    """Create a new user (admin/superadmin only).
+
+    Only superadmin can create other superadmins.
+    """
+    valid_roles = ["superadmin", "admin", "member", "viewer"]
+    if body.role not in valid_roles:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid role. Must be one of: {', '.join(valid_roles)}",
+        )
+
+    # Only superadmin can create other superadmins
+    if body.role == "superadmin" and user.get("role") != "superadmin":
+        raise HTTPException(
+            status_code=403,
+            detail="Only superadmin can create superadmin users",
+        )
+
+    # Validate password strength
+    try:
+        password_strength_check(body.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Hash the password
+    hashed_password = hash_password(body.password)
+
+    pool = get_pool(str(settings.sqlite_path))
+    conn = pool.get_connection()
+
+    try:
+        # Check username uniqueness (case-insensitive)
+        cursor = conn.execute(
+            "SELECT id FROM users WHERE username = ? COLLATE NOCASE",
+            (body.username,),
+        )
+        if cursor.fetchone():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Username '{body.username}' already exists",
+            )
+
+        # Insert the new user
+        cursor = conn.execute(
+            """INSERT INTO users (username, hashed_password, full_name, role, is_active)
+            VALUES (?, ?, ?, ?, 1)""",
+            (body.username, hashed_password, body.full_name, body.role),
+        )
+        conn.commit()
+        user_id = cursor.lastrowid
+
+        # Fetch the created user
+        cursor = conn.execute(
+            "SELECT id, username, full_name, role, is_active, created_at FROM users WHERE id = ?",
+            (user_id,),
+        )
+        row = cursor.fetchone()
+
+        return {
+            "id": row[0],
+            "username": row[1],
+            "full_name": row[2] or "",
+            "role": row[3],
+            "is_active": bool(row[4]),
+            "created_at": row[5],
+        }
+    finally:
+        pool.release_connection(conn)
 
 
 @router.get("/")

@@ -42,6 +42,12 @@ class SettingsUpdate(BaseModel):
     hybrid_search_enabled: Optional[bool] = None
     hybrid_alpha: Optional[float] = None
 
+    # Ollama and model config
+    ollama_embedding_url: Optional[str] = None
+    ollama_chat_url: Optional[str] = None
+    embedding_model: Optional[str] = None
+    chat_model: Optional[str] = None
+
     # Feature flags (still supported)
     auto_scan_enabled: Optional[bool] = None
     auto_scan_interval_minutes: Optional[int] = None
@@ -153,6 +159,35 @@ class SettingsUpdate(BaseModel):
             raise ValueError("hybrid_alpha must be between 0 and 1")
         return v
 
+    @field_validator("ollama_embedding_url", "ollama_chat_url", mode="before")
+    @classmethod
+    def validate_ollama_url(cls, v):
+        if v is None:
+            return v
+        if not isinstance(v, str) or len(v) > 2048:
+            raise ValueError("URL must be a string up to 2048 characters")
+        v = v.strip()
+        if v and not v.startswith(("http://", "https://")):
+            raise ValueError("URL must start with http:// or https://")
+        if "@" in v:
+            raise ValueError("URL must not contain credentials (@)")
+        return v
+
+    @field_validator("embedding_model", "chat_model", mode="before")
+    @classmethod
+    def validate_model_name(cls, v):
+        if v is None:
+            return v
+        if not isinstance(v, str) or len(v) > 256:
+            raise ValueError("Model name must be a string up to 256 characters")
+        v = v.strip()
+        if not v:
+            raise ValueError("Model name must not be empty")
+        # Check for control characters (ASCII 0-31 and 127)
+        if any(ord(c) < 32 or ord(c) == 127 for c in v):
+            raise ValueError("Model name must not contain control characters")
+        return v
+
     @model_validator(mode="after")
     def validate_chunk_overlap_less_than_size(self):
         chunk_overlap = self.chunk_overlap
@@ -190,6 +225,10 @@ ALLOWED_FIELDS = [
     "initial_retrieval_top_k",
     "hybrid_search_enabled",
     "hybrid_alpha",
+    "ollama_embedding_url",
+    "ollama_chat_url",
+    "embedding_model",
+    "chat_model",
 ]
 
 

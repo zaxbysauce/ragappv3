@@ -24,6 +24,12 @@ REFRESH_TOKEN_COOKIE_NAME = "refresh_token"
 REFRESH_TOKEN_MAX_AGE_DAYS = 30
 
 
+def _is_secure_request(request: Request) -> bool:
+    """Return True if the request came in over HTTPS or a trusted proxy header."""
+    forwarded = request.headers.get("x-forwarded-proto", "")
+    return request.url.scheme == "https" or forwarded.lower() == "https"
+
+
 class RegisterRequest(BaseModel):
     username: str = Field(max_length=255)
     password: str = Field(max_length=128)
@@ -109,7 +115,7 @@ async def register(
         key=REFRESH_TOKEN_COOKIE_NAME,
         value=refresh_token_raw,
         httponly=True,
-        secure=True,
+        secure=_is_secure_request(request),
         samesite="lax",
         max_age=REFRESH_TOKEN_MAX_AGE_DAYS * 24 * 60 * 60,
         path="/api/auth/refresh",
@@ -233,7 +239,7 @@ async def login(
         key=REFRESH_TOKEN_COOKIE_NAME,
         value=refresh_token_raw,
         httponly=True,
-        secure=True,
+        secure=_is_secure_request(request),
         samesite="lax",
         max_age=REFRESH_TOKEN_MAX_AGE_DAYS * 24 * 60 * 60,
         path="/api/auth/refresh",
@@ -324,7 +330,7 @@ async def refresh(
         key=REFRESH_TOKEN_COOKIE_NAME,
         value=new_refresh_token_raw,
         httponly=True,
-        secure=True,
+        secure=_is_secure_request(request),
         samesite="lax",
         max_age=REFRESH_TOKEN_MAX_AGE_DAYS * 24 * 60 * 60,
         path="/api/auth/refresh",
@@ -437,6 +443,7 @@ async def update_me(
 
 @router.post("/change-password")
 async def change_password(
+    request: Request,
     body: ChangePasswordRequest,
     response: Response,
     user: dict = Depends(get_current_active_user),
@@ -516,7 +523,7 @@ async def change_password(
         key=REFRESH_TOKEN_COOKIE_NAME,
         value=refresh_token_raw,
         httponly=True,
-        secure=True,
+        secure=_is_secure_request(request),
         samesite="lax",
         max_age=REFRESH_TOKEN_MAX_AGE_DAYS * 24 * 60 * 60,
         path="/api/auth/refresh",
@@ -662,7 +669,7 @@ async def revoke_all_sessions(
         key=REFRESH_TOKEN_COOKIE_NAME,
         value=new_refresh_token_raw,
         httponly=True,
-        secure=True,
+        secure=_is_secure_request(request),
         samesite="lax",
         max_age=REFRESH_TOKEN_MAX_AGE_DAYS * 24 * 60 * 60,
         path="/api/auth/refresh",

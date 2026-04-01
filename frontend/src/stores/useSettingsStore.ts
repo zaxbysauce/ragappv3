@@ -21,6 +21,11 @@ export interface SettingsFormData {
   reranker_top_n?: number;
   hybrid_search_enabled?: boolean;
   hybrid_alpha?: number;
+  // Model connection settings
+  ollama_embedding_url?: string;
+  ollama_chat_url?: string;
+  embedding_model?: string;
+  chat_model?: string;
 }
 
 export interface SettingsErrors {
@@ -39,6 +44,11 @@ export interface SettingsErrors {
   initial_retrieval_top_k?: string;
   reranker_top_n?: string;
   hybrid_alpha?: string;
+  // Model connection settings
+  ollama_embedding_url?: string;
+  ollama_chat_url?: string;
+  embedding_model?: string;
+  chat_model?: string;
 }
 
 export interface SettingsState {
@@ -173,6 +183,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         reranker_top_n: settings.reranker_top_n ?? 5,
         hybrid_search_enabled: settings.hybrid_search_enabled ?? false,
         hybrid_alpha: settings.hybrid_alpha ?? 0.5,
+        // Model connection settings
+        ollama_embedding_url: settings.ollama_embedding_url ?? "",
+        ollama_chat_url: settings.ollama_chat_url ?? "",
+        embedding_model: settings.embedding_model ?? "",
+        chat_model: settings.chat_model ?? "",
       },
       loading: false,
       error: null,
@@ -232,6 +247,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       newErrors.hybrid_alpha = "Hybrid alpha must be between 0 and 1";
     }
 
+    // Validate model connection settings
+    if (formData.ollama_embedding_url && !/^https?:\/\//.test(formData.ollama_embedding_url)) {
+      newErrors.ollama_embedding_url = "URL must start with http:// or https://";
+    }
+    if (formData.ollama_chat_url && !/^https?:\/\//.test(formData.ollama_chat_url)) {
+      newErrors.ollama_chat_url = "URL must start with http:// or https://";
+    }
+
     set({ errors: newErrors });
     return Object.keys(newErrors).length === 0;
   },
@@ -257,7 +280,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
        formData.initial_retrieval_top_k !== (settings.initial_retrieval_top_k ?? 20) ||
        formData.reranker_top_n !== (settings.reranker_top_n ?? 5) ||
        formData.hybrid_search_enabled !== (settings.hybrid_search_enabled ?? false) ||
-      formData.hybrid_alpha !== (settings.hybrid_alpha ?? 0.5)
+       formData.hybrid_alpha !== (settings.hybrid_alpha ?? 0.5) ||
+       formData.ollama_embedding_url !== (settings.ollama_embedding_url ?? "") ||
+       formData.ollama_chat_url !== (settings.ollama_chat_url ?? "") ||
+       formData.embedding_model !== (settings.embedding_model ?? "") ||
+       formData.chat_model !== (settings.chat_model ?? "")
     );
   },
 

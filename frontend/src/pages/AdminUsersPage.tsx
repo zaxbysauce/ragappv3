@@ -28,6 +28,13 @@ import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Search,
   Trash2,
   Loader2,
@@ -35,6 +42,7 @@ import {
   Users,
   Pencil,
   KeyRound,
+  Plus,
 } from "lucide-react";
 
 type UserRole = "superadmin" | "admin" | "member" | "viewer";
@@ -92,6 +100,14 @@ function AdminUsersPageContent() {
   const [groupsSearchQuery, setGroupsSearchQuery] = useState("");
   const [isLoadingGroups, setIsLoadingGroups] = useState(false);
   const [isSavingGroups, setIsSavingGroups] = useState(false);
+
+  // Create User Dialog State
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [createUsername, setCreateUsername] = useState("");
+  const [createFullName, setCreateFullName] = useState("");
+  const [createPassword, setCreatePassword] = useState("");
+  const [createRole, setCreateRole] = useState<UserRole>("member");
+  const [isCreatingUser, setIsCreatingUser] = useState(false);
 
   const currentUser = useAuthStore((state) => state.user);
 
@@ -290,6 +306,51 @@ function AdminUsersPageContent() {
     }
   };
 
+const handleCreateUser = async () => {
+ if (!createUsername.trim() || createUsername.length < 3) {
+ toast.error("Username must be at least 3 characters");
+ return;
+ }
+ // Validate password
+ if (createPassword.length < 8) {
+ toast.error("Password must be at least 8 characters");
+ return;
+ }
+ if (!/[A-Z]/.test(createPassword)) {
+ toast.error("Password must contain at least 1 uppercase letter");
+ return;
+ }
+ if (!/\d/.test(createPassword)) {
+ toast.error("Password must contain at least 1 digit");
+ return;
+ }
+ if (createPassword !== createPassword.trim()) {
+ toast.error("Password cannot be only whitespace");
+ return;
+ }
+ setIsCreatingUser(true);
+    try {
+      await apiClient.post("/users/", {
+        username: createUsername.trim(),
+        password: createPassword,
+        full_name: createFullName.trim(),
+        role: createRole,
+      });
+      toast.success(`User "${createUsername.trim()}" created successfully`);
+      setCreateDialogOpen(false);
+      setCreateUsername("");
+      setCreateFullName("");
+      setCreatePassword("");
+      setCreateRole("member");
+      fetchUsers();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to create user";
+      toast.error(message);
+    } finally {
+      setIsCreatingUser(false);
+    }
+  };
+
   const filteredGroups = allGroups.filter((group) => {
     const searchLower = groupsSearchQuery.toLowerCase();
     return (
@@ -311,9 +372,15 @@ function AdminUsersPageContent() {
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">User Management</h1>
-        <p className="text-muted-foreground mt-1">Manage system users and their permissions</p>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">User Management</h1>
+          <p className="text-muted-foreground mt-1">Manage system users and their permissions</p>
+        </div>
+        <Button onClick={() => setCreateDialogOpen(true)}>
+          <Plus className="mr-2 h-4 w-4" />
+          Add User
+        </Button>
       </div>
       <Card>
         <CardHeader className="pb-4">
@@ -749,6 +816,120 @@ function AdminUsersPageContent() {
           </SheetFooter>
         </SheetContent>
       </Sheet>
+
+      {/* Create User Dialog */}
+      <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
+        <DialogContent
+          className="sm:max-w-[425px]"
+          aria-labelledby="create-title"
+          aria-describedby="create-desc"
+        >
+          <DialogHeader>
+            <DialogTitle id="create-title">Create New User</DialogTitle>
+            <DialogDescription id="create-desc">
+              Add a new user to the system.
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleCreateUser();
+            }}
+          >
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label htmlFor="create-username">
+                  Username
+                  <span className="text-destructive">*</span>
+                </Label>
+                <Input
+                  id="create-username"
+                  placeholder="Enter username"
+                  value={createUsername}
+                  onChange={(e) => setCreateUsername(e.target.value)}
+                  disabled={isCreatingUser}
+                  required
+                  minLength={3}
+                  aria-describedby="username-hint"
+                />
+                <p id="username-hint" className="text-xs text-muted-foreground">
+                  Minimum 3 characters
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="create-fullname">Full Name</Label>
+                <Input
+                  id="create-fullname"
+                  placeholder="Full name (optional)"
+                  value={createFullName}
+                  onChange={(e) => setCreateFullName(e.target.value)}
+                  disabled={isCreatingUser}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="create-password">
+                  Password
+                  <span className="text-destructive">*</span>
+                </Label>
+                <Input
+                  id="create-password"
+                  type="password"
+                  placeholder="Enter password"
+                  value={createPassword}
+                  onChange={(e) => setCreatePassword(e.target.value)}
+                  disabled={isCreatingUser}
+                  required
+                  minLength={8}
+                  aria-describedby="password-requirements"
+                />
+                <p id="password-requirements" className="text-xs text-muted-foreground">
+                  Min 8 characters, at least 1 digit and 1 uppercase letter
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="create-role">Role</Label>
+                <Select
+                  value={createRole}
+                  onValueChange={(value) => setCreateRole(value as UserRole)}
+                  disabled={isCreatingUser}
+                >
+                  <SelectTrigger id="create-role">
+                    <SelectValue placeholder="Select a role" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ROLE_OPTIONS.filter((r) => r.value !== "superadmin" || isSuperAdmin).map((r) => (
+                      <SelectItem key={r.value} value={r.value}>
+                        {r.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <DialogFooter className="flex-col gap-2 sm:flex-row">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setCreateDialogOpen(false)}
+                disabled={isCreatingUser}
+                className="w-full sm:w-auto"
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={isCreatingUser} className="w-full sm:w-auto">
+                {isCreatingUser ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
+                    Creating...
+                  </>
+                ) : (
+                  "Create User"
+                )}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

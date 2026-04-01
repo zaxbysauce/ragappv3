@@ -65,8 +65,10 @@ class CSRFManager:
             self._redis = redis.from_url(redis_url, decode_responses=True)
             self._redis.ping()
             logger.info("CSRFManager connected to Redis successfully")
-        except redis.RedisError as exc:
-            logger.warning("Redis unavailable for CSRF, using in-memory fallback: %s", exc)
+        except Exception as exc:
+            logger.warning(
+                "Redis unavailable for CSRF, using in-memory fallback: %s", exc
+            )
             self._use_fallback = True
             self._fallback_store = _InMemoryCSRFStore(ttl=ttl)
 
@@ -84,7 +86,9 @@ class CSRFManager:
             if self._use_fallback and self._redis:
                 try:
                     self._redis.ping()
-                    logger.info("Redis recovered, switching from in-memory fallback to Redis")
+                    logger.info(
+                        "Redis recovered, switching from in-memory fallback to Redis"
+                    )
                     self._use_fallback = False
                     self._fallback_store = None
                     return True
@@ -180,8 +184,8 @@ def issue_csrf_token(response: Response, csrf_manager: CSRFManager) -> str:
         CSRF_COOKIE_NAME,
         token,
         max_age=settings.csrf_token_ttl,
-        samesite="strict",
-        secure=True,
+        samesite="lax",
+        secure=False,  # Allow HTTP for development; set True in production with HTTPS
         httponly=False,
     )
     return token
@@ -196,7 +200,7 @@ def require_auth(
         # No token configured - require auth header to be set
         raise HTTPException(
             status_code=401,
-            detail="Authentication required. Please set ADMIN_SECRET_TOKEN in environment."
+            detail="Authentication required. Please set ADMIN_SECRET_TOKEN in environment.",
         )
     if not authorization:
         raise HTTPException(status_code=401, detail="Authorization header required")

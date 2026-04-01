@@ -56,6 +56,50 @@ const authClient = axios.create({
   withCredentials: true, // Required for httpOnly refresh cookie
 });
 
+/**
+ * Fetch a CSRF token from the backend and attach it to subsequent requests.
+ * The backend sets the token as a cookie; we read it and echo it back via
+ * the X-CSRF-Token header on every mutating request.
+ */
+let csrfToken: string | null = null;
+let csrfFetchPromise: Promise<string> | null = null;
+
+async function ensureCsrfToken(): Promise<string> {
+  if (csrfToken) return csrfToken;
+  if (!csrfFetchPromise) {
+    csrfFetchPromise = authClient
+      .get<{ csrf_token: string }>("/csrf-token")
+      .then((resp) => {
+        csrfToken = resp.data.csrf_token;
+        return csrfToken;
+      })
+      .finally(() => {
+        csrfFetchPromise = null;
+      });
+  }
+  return csrfFetchPromise;
+}
+
+// Attach CSRF token to all mutating requests
+authClient.interceptors.request.use(async (config) => {
+  if (config.method && ["post", "put", "patch", "delete"].includes(config.method.toLowerCase())) {
+    const token = await ensureCsrfToken();
+    config.headers["X-CSRF-Token"] = token;
+  }
+  return config;
+});
+
+// If a 403 CSRF error occurs, clear the stale token so it gets refreshed on retry
+authClient.interceptors.response.use(
+  (resp) => resp,
+  async (error) => {
+    if (error.response?.status === 403) {
+      csrfToken = null; // force refresh on next request
+    }
+    return Promise.reject(error);
+  }
+);
+
 export const useAuthStore = create<AuthState>()(
   persist(
     (set, get) => ({
@@ -82,7 +126,13 @@ export const useAuthStore = create<AuthState>()(
             return;
           }
         } catch {
-          // Token invalid or expired
+          // Token invalid or expired — clear it so we stop retrying
+          set({
+            accessToken: null,
+            user: null,
+            isAuthenticated: false,
+          });
+          setJwtAccessToken(null);
         }
         try {
           // Check setup status
@@ -150,7 +200,9 @@ export const useAuthStore = create<AuthState>()(
             full_name: fullName,
           });
 
-          const { access_token, user } = response.data;
+          // Backend returns flat response, construct User object manually
+          const { access_token, id, username: uname, full_name, role, is_active } = response.data as any;
+          const user: User = { id, username: uname, full_name, role, is_active };
 
           // Update store state
           set({
@@ -158,6 +210,7 @@ export const useAuthStore = create<AuthState>()(
             user: user,
             isAuthenticated: true,
             authMode: "jwt",
+            needsSetup: false,
           });
 
           // Sync with apiClient
