@@ -21,10 +21,10 @@ export function VaultSelector({ className }: VaultSelectorProps) {
   const activeVault = getActiveVault();
 
   useEffect(() => {
-    if (vaults.length === 0) {
+    if (!vaults || vaults.length === 0) {
       fetchVaults();
     }
-  }, [vaults.length, fetchVaults]);
+  }, [vaults?.length, fetchVaults]);
 
   return (
     <DropdownMenu>
@@ -46,7 +46,7 @@ export function VaultSelector({ className }: VaultSelectorProps) {
           All Vaults
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        {vaults.map((vault) => (
+        {vaults?.map((vault) => (
           <DropdownMenuItem
             key={vault.id}
             onClick={() => setActiveVault(vault.id)}
