@@ -51,6 +51,25 @@ apiClient.interceptors.request.use((config) => {
   return config;
 });
 
+// Parse JWT token to extract expiry timestamp (exp claim)
+function getTokenExpiry(token: string): number | null {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const payload = JSON.parse(atob(parts[1]));
+    return payload.exp ? payload.exp * 1000 : null; // Convert to milliseconds
+  } catch {
+    return null;
+  }
+}
+
+// Check if token is expired or close to expiring (within 1 minute)
+function isTokenNearExpiry(token: string, bufferMs: number = 60000): boolean {
+  const expiry = getTokenExpiry(token);
+  if (!expiry) return false;
+  return Date.now() + bufferMs >= expiry;
+}
+
 // Normalize error responses
 apiClient.interceptors.response.use(
   (response) => response,
@@ -530,13 +549,21 @@ export function chatStream(
   callbacks: ChatStreamCallbacks,
   vaultId?: number
 ): () => void {
-  // TODO: Chat streaming doesn't support silent JWT refresh.
-  // Long-lived sessions (>15min) may fail mid-stream. Consider
-  // adding a pre-stream token refresh check.
   const abortController = new AbortController();
 
   const startStream = async () => {
     try {
+      // Pre-stream token refresh check: if JWT is close to expiring, refresh it first
+      if (_jwtAccessToken && isTokenNearExpiry(_jwtAccessToken)) {
+        const refreshedToken = await refreshAccessToken();
+        if (!refreshedToken) {
+          // Refresh failed - dispatch auth error and abort
+          window.dispatchEvent(new CustomEvent("auth:unauthorized"));
+          callbacks.onError?.(new Error("Session expired. Please log in again."));
+          return;
+        }
+      }
+
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
       };
