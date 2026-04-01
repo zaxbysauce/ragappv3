@@ -34,7 +34,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     set({ loading: true, error: null });
     try {
       const data = await listVaults();
-      set({ vaults: data.vaults, loading: false, error: null });
+      set({ vaults: data.vaults ?? [], loading: false, error: null });
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Failed to fetch vaults";
       set({ error: errorMessage, loading: false });

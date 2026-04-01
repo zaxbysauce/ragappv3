@@ -21,7 +21,8 @@ export function ProtectedRoute({ children }: ProtectedRouteProps) {
   const isAuthenticated = contextAuth || storeAuth;
   const isLoading = contextLoading || storeLoading;
 
-  if (isLoading) {
+  // Show loading while auth state or setup check is still initializing
+  if (isLoading || needsSetup === null) {
     return (
       <div className="flex h-screen w-full items-center justify-center">
         <Loader2
@@ -34,7 +35,7 @@ export function ProtectedRoute({ children }: ProtectedRouteProps) {
   }
 
   // If setup is needed, redirect to setup page with return location
-  if (needsSetup) {
+  if (needsSetup === true) {
     return <Navigate to="/setup" state={{ from: location }} replace />;
   }
 

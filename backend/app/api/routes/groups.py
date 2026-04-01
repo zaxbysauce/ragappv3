@@ -2,12 +2,19 @@
 
 import asyncio
 import sqlite3
+from collections.abc import Callable
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.api.deps import get_db, require_role, MultipleOrgError, get_user_primary_org
+from app.api.deps import (
+    get_db,
+    require_role,
+    MultipleOrgError,
+    get_user_primary_org,
+    get_evaluate_policy,
+)
 from app.models.database import transaction_context
 
 
@@ -85,6 +92,7 @@ async def list_groups(
     search: Optional[str] = None,
     user: dict = Depends(require_role("admin")),
     db: sqlite3.Connection = Depends(get_db),
+    evaluate: Callable = Depends(get_evaluate_policy),
 ):
     """
     List all groups (for admin panel use).
@@ -92,6 +100,10 @@ async def list_groups(
     Returns all groups with their associated organization name.
     Requires admin or superadmin role.
     """
+    # Policy check for listing groups
+    if not await evaluate(user, "group", 0, "list"):
+        raise HTTPException(status_code=403, detail="No access to list groups")
+
     # Cap per_page to prevent memory pressure
     if per_page > 1000:
         per_page = 1000
@@ -161,6 +173,7 @@ async def create_group(
     request: GroupCreateRequest,
     user: dict = Depends(require_role("admin")),
     db: sqlite3.Connection = Depends(get_db),
+    evaluate: Callable = Depends(get_evaluate_policy),
 ):
     """
     Create a new group.
@@ -168,6 +181,10 @@ async def create_group(
     Requires admin role. Group is created in the user's organization.
     Superadmins can create groups in any organization.
     """
+    # Policy check for creating groups
+    if not await evaluate(user, "group", 0, "create"):
+        raise HTTPException(status_code=403, detail="No access to create groups")
+
     user_role = user.get("role", "")
     user_id = user.get("id")
 
@@ -261,6 +278,7 @@ async def get_group(
     group_id: int,
     user: dict = Depends(require_role("admin")),
     db: sqlite3.Connection = Depends(get_db),
+    evaluate: Callable = Depends(get_evaluate_policy),
 ):
     """
     Get a specific group by ID.
@@ -288,6 +306,9 @@ async def get_group(
     if not row:
         raise HTTPException(status_code=404, detail="Group not found")
 
+    if not await evaluate(user, "group", group_id, "read"):
+        raise HTTPException(status_code=403, detail="No access to this group")
+
     return GroupResponse(
         id=row[0],
         org_id=row[1],
@@ -304,6 +325,7 @@ async def update_group(
     request: GroupUpdateRequest,
     user: dict = Depends(require_role("admin")),
     db: sqlite3.Connection = Depends(get_db),
+    evaluate: Callable = Depends(get_evaluate_policy),
 ):
     """
     Update a group.
@@ -320,6 +342,9 @@ async def update_group(
     group_row = await asyncio.to_thread(cursor.fetchone)
     if not group_row:
         raise HTTPException(status_code=404, detail="Group not found")
+
+    if not await evaluate(user, "group", group_id, "update"):
+        raise HTTPException(status_code=403, detail="No access to update this group")
 
     group_org_id = group_row[1]
 
@@ -437,6 +462,7 @@ async def delete_group(
     group_id: int,
     user: dict = Depends(require_role("admin")),
     db: sqlite3.Connection = Depends(get_db),
+    evaluate: Callable = Depends(get_evaluate_policy),
 ):
     """
     Delete a group.
@@ -453,6 +479,9 @@ async def delete_group(
     group_row = await asyncio.to_thread(cursor.fetchone)
     if not group_row:
         raise HTTPException(status_code=404, detail="Group not found")
+
+    if not await evaluate(user, "group", group_id, "delete"):
+        raise HTTPException(status_code=403, detail="No access to delete this group")
 
     group_org_id = group_row[1]
 
@@ -490,6 +519,7 @@ async def get_group_members(
     group_id: int,
     user: dict = Depends(require_role("admin")),
     db: sqlite3.Connection = Depends(get_db),
+    evaluate: Callable = Depends(get_evaluate_policy),
 ):
     """
     Get all members of a group.
@@ -506,6 +536,9 @@ async def get_group_members(
     group_row = await asyncio.to_thread(cursor.fetchone)
     if not group_row:
         raise HTTPException(status_code=404, detail="Group not found")
+
+    if not await evaluate(user, "group", group_id, "read"):
+        raise HTTPException(status_code=403, detail="No access to this group")
 
     cursor = await asyncio.to_thread(
         db.execute,
@@ -536,6 +569,7 @@ async def update_group_members(
     request: GroupMembersUpdateRequest,
     user: dict = Depends(require_role("admin")),
     db: sqlite3.Connection = Depends(get_db),
+    evaluate: Callable = Depends(get_evaluate_policy),
 ):
     """
     Update a group's members (replaces all existing members).
@@ -552,6 +586,9 @@ async def update_group_members(
     group_row = await asyncio.to_thread(cursor.fetchone)
     if not group_row:
         raise HTTPException(status_code=404, detail="Group not found")
+
+    if not await evaluate(user, "group", group_id, "update"):
+        raise HTTPException(status_code=403, detail="No access to update this group")
 
     group_org_id = group_row[1]
 
@@ -648,6 +685,7 @@ async def get_group_vaults(
     group_id: int,
     user: dict = Depends(require_role("admin")),
     db: sqlite3.Connection = Depends(get_db),
+    evaluate: Callable = Depends(get_evaluate_policy),
 ):
     """
     Get all vaults accessible by a group.
@@ -664,6 +702,9 @@ async def get_group_vaults(
     group_row = await asyncio.to_thread(cursor.fetchone)
     if not group_row:
         raise HTTPException(status_code=404, detail="Group not found")
+
+    if not await evaluate(user, "group", group_id, "read"):
+        raise HTTPException(status_code=403, detail="No access to this group")
 
     cursor = await asyncio.to_thread(
         db.execute,
@@ -693,6 +734,7 @@ async def update_group_vaults(
     request: GroupVaultsUpdateRequest,
     user: dict = Depends(require_role("admin")),
     db: sqlite3.Connection = Depends(get_db),
+    evaluate: Callable = Depends(get_evaluate_policy),
 ):
     """
     Update a group's vault access (replaces all existing access).
@@ -709,6 +751,9 @@ async def update_group_vaults(
     group_row = await asyncio.to_thread(cursor.fetchone)
     if not group_row:
         raise HTTPException(status_code=404, detail="Group not found")
+
+    if not await evaluate(user, "group", group_id, "update"):
+        raise HTTPException(status_code=403, detail="No access to update this group")
 
     group_org_id = group_row[1]
 

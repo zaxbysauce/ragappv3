@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { MessageSquare, FileText, Brain, MoreHorizontal, Database, Settings, X } from "lucide-react";
+import { MessageSquare, FileText, Brain, MoreHorizontal, Database, Settings, Users, UserCircle, X } from "lucide-react";
 import {
   Sheet,
   SheetContent,
@@ -26,6 +26,8 @@ const primaryNavItems = [
 const moreNavItems = [
   { id: "vaults" as const, label: "Vaults", icon: Database },
   { id: "settings" as const, label: "Settings", icon: Settings },
+  { id: "groups" as const, label: "Groups", icon: UserCircle },
+  { id: "users" as const, label: "Users", icon: Users },
 ];
 
 export function MobileBottomNav({ activeItem, onItemSelect }: MobileBottomNavProps) {

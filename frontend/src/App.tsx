@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useNavigate } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -23,11 +23,43 @@ import { useAuthStore } from "@/stores/useAuthStore";
 // Main app shell wrapper that provides the navigation and page layout
 function MainAppShell({ children }: { children: React.ReactNode }) {
   const health = useHealthCheck({ pollInterval: 30000 });
+  const navigate = useNavigate();
+
+  const handleItemSelect = (id: string) => {
+    switch (id) {
+      case "chat":
+        navigate("/chat");
+        break;
+      case "documents":
+        navigate("/documents");
+        break;
+      case "memory":
+        navigate("/memory");
+        break;
+      case "vaults":
+        navigate("/vaults");
+        break;
+      case "settings":
+        navigate("/settings");
+        break;
+      case "groups":
+        navigate("/admin/groups");
+        break;
+      case "users":
+        navigate("/admin/users");
+        break;
+      case "organizations":
+        navigate("/admin/organizations");
+        break;
+      default:
+        navigate("/documents");
+    }
+  };
 
   return (
     <PageShell
       activeItem="documents" // Default value, will be overridden by route
-      onItemSelect={() => {}} // No-op since navigation is handled by React Router
+      onItemSelect={handleItemSelect}
       healthStatus={health}
     >
       {children}
@@ -129,6 +161,9 @@ function App() {
             />
 
             <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
+
+            {/* Redirect root to documents */}
+            <Route path="/" element={<Navigate to="/documents" replace />} />
 
             {/* Default redirect to documents */}
             <Route

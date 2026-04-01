@@ -214,7 +214,7 @@ async def _evaluate_policy(
         return False
 
     if resource_type != "vault":
-        return user_role == "superadmin"
+        return user_role in ("superadmin", "admin")
 
     if resource_id is None:
         return False

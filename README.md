@@ -352,7 +352,7 @@ docker compose logs knowledgevault
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/auth/setup-status` | Check if initial admin setup is needed |
-| POST | `/api/auth/register` | Register a new user (requires setup complete) |
+| POST | `/api/auth/register` | Register new user, returns JWT for auto-login |
 | POST | `/api/auth/login` | Login with username/password (returns JWT) |
 | POST | `/api/auth/logout` | Logout (clears httpOnly refresh cookie) |
 | POST | `/api/auth/refresh` | Refresh access token using httpOnly cookie |
