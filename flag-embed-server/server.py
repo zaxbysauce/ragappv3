@@ -7,7 +7,7 @@ A FastAPI server that provides:
 """
 
 import logging
-from typing import List, Optional
+from typing import List, Optional, Union
 
 import torch
 from fastapi import FastAPI, HTTPException
@@ -72,7 +72,7 @@ class EmbedResponse(BaseModel):
 
 
 class OpenAIEmbedRequest(BaseModel):
-    input: List[str]
+    input: Union[str, List[str]]
     model: str = "BAAI/bge-m3"
 
 
@@ -156,8 +156,10 @@ async def openai_embeddings(request: OpenAIEmbedRequest):
     Returns dense embeddings only in OpenAI format.
     """
     try:
+        # Normalize input to list (OpenAI API accepts both str and List[str])
+        texts = request.input if isinstance(request.input, list) else [request.input]
         output = model.encode(
-            request.input,
+            texts,
             return_dense=True,
             return_sparse=False,
             return_colbert_vecs=False,
