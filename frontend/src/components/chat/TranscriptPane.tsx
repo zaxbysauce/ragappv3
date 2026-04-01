@@ -482,7 +482,7 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const navigate = useNavigate();
-  const { messages, isStreaming, setInput } = useChatStore();
+  const { messages, isStreaming, setInput, clearMessages } = useChatStore();
   const { getActiveVault } = useVaultStore();
   const activeVault = getActiveVault();
   const vaultId = useVaultStore((state) => state.activeVaultId);
@@ -494,6 +494,7 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
   // Scroll state
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [isAtBottom, setIsAtBottom] = useState(true);
+  const [showDebug, setShowDebug] = useState(false);
 
   // Check if vault has indexed documents (using file_count from Vault interface)
   const hasIndexedDocs = activeVault ? activeVault.file_count > 0 : false;
@@ -541,6 +542,21 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
     navigate('/documents');
   };
 
+  // Handle retry - find last user message, clear messages, set input, and send
+  const handleRetry = () => {
+    const lastUserMessage = [...messages].reverse().find((msg) => msg.role === "user");
+    if (lastUserMessage) {
+      clearMessages();
+      setInput(lastUserMessage.content);
+      handleSend();
+    }
+  };
+
+  // Handle debug toggle
+  const handleDebugToggle = () => {
+    setShowDebug((prev) => !prev);
+  };
+
   return (
     <TooltipProvider>
       <div className={cn("flex h-full flex-col", className)}>
@@ -574,9 +590,10 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
                           key={message.id}
                           message={message}
                           isStreaming={isAssistantStreaming}
+                          showDebug={showDebug}
                           onCopy={() => { navigator.clipboard.writeText(message.content); }}
-                          onRetry={() => { /* TODO: retry logic - UI only for now */ }}
-                          onDebugToggle={() => { /* TODO: toggle debug info */ }}
+                          onRetry={handleRetry}
+                          onDebugToggle={handleDebugToggle}
                         />
                       );
                     }
