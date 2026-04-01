@@ -494,9 +494,6 @@ export async function uploadDocument(
     "/documents",
     formData,
     {
-      headers: {
-        "Content-Type": "multipart/form-data",
-      },
       ...(vaultId != null && { params: { vault_id: vaultId } }),
       onUploadProgress: (progressEvent) => {
         if (onProgress) {

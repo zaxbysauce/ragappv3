@@ -33,6 +33,10 @@ export const useUploadStore = create<UploadState>((set, get) => ({
   activeVaultId: null,
 
   addUploads: (files, vaultId) => {
+    if (!vaultId) {
+      toast.error("No vault selected. Please select a vault before uploading.");
+      return;
+    }
     const generateId = (f: File) => {
       if (typeof crypto !== "undefined" && crypto.randomUUID) {
         return crypto.randomUUID();
