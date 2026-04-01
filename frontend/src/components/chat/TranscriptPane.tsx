@@ -392,48 +392,43 @@ function Composer({ onSend, onStop, isStreaming, className, inputRef }: Composer
         <div className="flex items-center justify-between border-t border-border px-2 py-2">
           <div className="flex items-center gap-1">
             {/* Attachment button (disabled) */}
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 text-muted-foreground"
-                    disabled
-                    aria-label="Attach file (coming soon)"
-                  >
-                    <Paperclip className="h-4 w-4" aria-hidden="true" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>Coming soon</p>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-muted-foreground"
+                  disabled
+                  aria-label="Attach file (coming soon)"
+                >
+                  <Paperclip className="h-4 w-4" aria-hidden="true" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Coming soon</p>
+              </TooltipContent>
+            </Tooltip>
 
             {/* Slash command hint */}
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 text-muted-foreground"
-                    onClick={() => {
-                      const currentInput = useChatStore.getState().input;
-                      setInput(currentInput + "/");
-                      textareaRef.current?.focus();
-                    }}
-                    aria-label="Open slash commands"
-                  >
-                    <Slash className="h-4 w-4" aria-hidden="true" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>Slash commands</p>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-muted-foreground"
+                  onClick={() => {
+                    setInput(input + "/");
+                    textareaRef.current?.focus();
+                  }}
+                  aria-label="Open slash commands"
+                >
+                  <Slash className="h-4 w-4" aria-hidden="true" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Slash commands</p>
+              </TooltipContent>
+            </Tooltip>
           </div>
 
           {/* Send/Stop button */}
@@ -547,91 +542,93 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
   };
 
   return (
-    <div className={cn("flex h-full flex-col", className)}>
-      {/* Message list area */}
-      <div className="relative flex-1 overflow-hidden">
-        <ScrollArea
-          ref={scrollRef}
-          onScroll={handleScroll}
-          className="h-full"
-          aria-label="Chat messages"
-          role="log"
-          aria-live="polite"
-          aria-relevant="additions"
-        >
-          <div className="mx-auto max-w-4xl">
-            {messages.length === 0 ? (
-              <EmptyTranscript
-                onPromptClick={handlePromptClick}
-                hasIndexedDocs={hasIndexedDocs}
-                onNavigateToDocuments={handleNavigateToDocuments}
-              />
-            ) : (
-              <div className="flex flex-col">
-                {messages.map((message, index) => {
-                  const isLastMessage = index === messages.length - 1;
-                  const isAssistantStreaming = isStreaming && isLastMessage && message.role === "assistant";
+    <TooltipProvider>
+      <div className={cn("flex h-full flex-col", className)}>
+        {/* Message list area */}
+        <div className="relative flex-1 overflow-hidden">
+          <ScrollArea
+            ref={scrollRef}
+            onScroll={handleScroll}
+            className="h-full"
+            aria-label="Chat messages"
+            role="log"
+            aria-live="polite"
+            aria-relevant="additions"
+          >
+            <div className="mx-auto max-w-4xl">
+              {messages.length === 0 ? (
+                <EmptyTranscript
+                  onPromptClick={handlePromptClick}
+                  hasIndexedDocs={hasIndexedDocs}
+                  onNavigateToDocuments={handleNavigateToDocuments}
+                />
+              ) : (
+                <div className="flex flex-col">
+                  {messages.map((message, index) => {
+                    const isLastMessage = index === messages.length - 1;
+                    const isAssistantStreaming = isStreaming && isLastMessage && message.role === "assistant";
 
-                  if (message.role === "assistant") {
+                    if (message.role === "assistant") {
+                      return (
+                        <AssistantMessage
+                          key={message.id}
+                          message={message}
+                          isStreaming={isAssistantStreaming}
+                          onCopy={() => { navigator.clipboard.writeText(message.content); }}
+                          onRetry={() => { /* TODO: retry logic - UI only for now */ }}
+                          onDebugToggle={() => { /* TODO: toggle debug info */ }}
+                        />
+                      );
+                    }
+
                     return (
-                      <AssistantMessage
+                      <MessageBubble
                         key={message.id}
                         message={message}
                         isStreaming={isAssistantStreaming}
-                        onCopy={() => { navigator.clipboard.writeText(message.content); }}
-                        onRetry={() => { /* TODO: retry logic - UI only for now */ }}
-                        onDebugToggle={() => { /* TODO: toggle debug info */ }}
                       />
                     );
-                  }
+                  })}
+                  {/* Spacer for bottom padding */}
+                  <div className="h-4" aria-hidden="true" />
+                </div>
+              )}
+            </div>
+          </ScrollArea>
 
-                  return (
-                    <MessageBubble
-                      key={message.id}
-                      message={message}
-                      isStreaming={isAssistantStreaming}
-                    />
-                  );
-                })}
-                {/* Spacer for bottom padding */}
-                <div className="h-4" aria-hidden="true" />
-              </div>
-            )}
-          </div>
-        </ScrollArea>
-
-        {/* Scroll to bottom button */}
-        <AnimatePresence>
-          {showScrollButton && (
-            <motion.div
-              initial={{ opacity: 0, scale: 0.8 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.8 }}
-              transition={{ duration: 0.15 }}
-              className="absolute bottom-4 left-1/2 -translate-x-1/2"
-            >
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={scrollToBottom}
-                className="h-8 gap-1.5 rounded-full px-3 shadow-lg"
-                aria-label="Scroll to bottom"
+          {/* Scroll to bottom button */}
+          <AnimatePresence>
+            {showScrollButton && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.8 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.8 }}
+                transition={{ duration: 0.15 }}
+                className="absolute bottom-4 left-1/2 -translate-x-1/2"
               >
-                <ArrowDown className="h-3.5 w-3.5" aria-hidden="true" />
-                <span className="text-xs">New messages</span>
-              </Button>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={scrollToBottom}
+                  className="h-8 gap-1.5 rounded-full px-3 shadow-lg"
+                  aria-label="Scroll to bottom"
+                >
+                  <ArrowDown className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span className="text-xs">New messages</span>
+                </Button>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
 
-      {/* Composer area */}
-      <div className="border-t border-border bg-background p-4">
-        <div className="mx-auto max-w-4xl">
-          <Composer onSend={handleSend} onStop={handleStop} isStreaming={isStreaming} inputRef={composerRef} />
+        {/* Composer area */}
+        <div className="border-t border-border bg-background p-4">
+          <div className="mx-auto max-w-4xl">
+            <Composer onSend={handleSend} onStop={handleStop} isStreaming={isStreaming} inputRef={composerRef} />
+          </div>
         </div>
       </div>
-    </div>
+    </TooltipProvider>
   );
 }
 

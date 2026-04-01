@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate, useNavigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -24,11 +24,32 @@ import { useAuthStore } from "@/stores/useAuthStore";
 function MainAppShell({ children }: { children: React.ReactNode }) {
   const health = useHealthCheck({ pollInterval: 30000 });
   const navigate = useNavigate();
+  const location = useLocation();
+
+  // Determine active nav item from current route
+  const getActiveItemFromPath = (pathname: string): string => {
+    if (pathname.startsWith("/chat/redesign")) return "chatNew";
+    if (pathname.startsWith("/chat")) return "chat";
+    if (pathname.startsWith("/documents")) return "documents";
+    if (pathname.startsWith("/memory")) return "memory";
+    if (pathname.startsWith("/vaults")) return "vaults";
+    if (pathname.startsWith("/settings")) return "settings";
+    if (pathname.startsWith("/admin/groups")) return "groups";
+    if (pathname.startsWith("/admin/users")) return "users";
+    if (pathname.startsWith("/admin/organizations")) return "organizations";
+    if (pathname.startsWith("/profile")) return "settings"; // Profile under settings
+    return "documents";
+  };
+
+  const activeItem = getActiveItemFromPath(location.pathname);
 
   const handleItemSelect = (id: string) => {
     switch (id) {
       case "chat":
         navigate("/chat");
+        break;
+      case "chatNew":
+        navigate("/chat/redesign");
         break;
       case "documents":
         navigate("/documents");
@@ -58,7 +79,7 @@ function MainAppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <PageShell
-      activeItem="documents" // Default value, will be overridden by route
+      activeItem={activeItem}
       onItemSelect={handleItemSelect}
       healthStatus={health}
     >
@@ -83,8 +104,8 @@ function App() {
             <Route path="/register" element={<RegisterPage />} />
             <Route path="/login" element={<LoginPage />} />
             <Route path="/chat" element={<ProtectedRoute><ChatShell /></ProtectedRoute>} />
-            <Route path="/chat/:sessionId" element={<ProtectedRoute><ChatShell /></ProtectedRoute>} />
             <Route path="/chat/redesign" element={<ProtectedRoute><ChatPageRedesigned /></ProtectedRoute>} />
+            <Route path="/chat/:sessionId" element={<ProtectedRoute><ChatShell /></ProtectedRoute>} />
 
             {/* Main app pages with shell */}
             <Route
@@ -160,7 +181,16 @@ function App() {
               }
             />
 
-            <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
+            <Route
+              path="/profile"
+              element={
+                <ProtectedRoute>
+                  <MainAppShell>
+                    <ProfilePage />
+                  </MainAppShell>
+                </ProtectedRoute>
+              }
+            />
 
             {/* Redirect root to documents */}
             <Route path="/" element={<Navigate to="/documents" replace />} />

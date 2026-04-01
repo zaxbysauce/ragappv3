@@ -26,7 +26,7 @@ const primaryNavItems = [
 const moreNavItems = [
   { id: "vaults" as const, label: "Vaults", icon: Database },
   { id: "settings" as const, label: "Settings", icon: Settings },
-  { id: "groups" as const, label: "Groups", icon: UserCircle },
+  { id: "groups" as const, label: "Groups", icon: Users },
   { id: "users" as const, label: "Users", icon: Users },
 ];
 
