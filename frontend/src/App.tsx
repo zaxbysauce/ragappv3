@@ -17,31 +17,20 @@ import AdminGroupsPage from "@/pages/AdminGroupsPage";
 import OrgsPage from "@/pages/OrgsPage";
 import ProfilePage from "@/pages/ProfilePage";
 import { useHealthCheck } from "@/hooks/useHealthCheck";
-import { useState, useEffect } from "react";
+import { useEffect } from "react";
 import { useAuthStore } from "@/stores/useAuthStore";
 
-type PageId = "documents" | "memory" | "vaults" | "settings";
-
-const pages: Record<PageId, React.ComponentType> = {
-  documents: DocumentsPage,
-  memory: MemoryPage,
-  vaults: VaultsPage,
-  settings: SettingsPage,
-};
-
-function MainApp() {
-  const [activePage, setActivePage] = useState<PageId>("documents");
+// Main app shell wrapper that provides the navigation and page layout
+function MainAppShell({ children }: { children: React.ReactNode }) {
   const health = useHealthCheck({ pollInterval: 30000 });
-
-  const CurrentPage = pages[activePage];
 
   return (
     <PageShell
-      activeItem={activePage}
-      onItemSelect={(id) => setActivePage(id as PageId)}
+      activeItem="documents" // Default value, will be overridden by route
+      onItemSelect={() => {}} // No-op since navigation is handled by React Router
       healthStatus={health}
     >
-      <CurrentPage />
+      {children}
     </PageShell>
   );
 }
@@ -63,29 +52,92 @@ function App() {
             <Route path="/login" element={<LoginPage />} />
             <Route path="/chat" element={<ProtectedRoute><ChatShell /></ProtectedRoute>} />
             <Route path="/chat/:sessionId" element={<ProtectedRoute><ChatShell /></ProtectedRoute>} />
-            <Route path="/admin/users" element={<ProtectedRoute><AdminUsersPage /></ProtectedRoute>} />
-            <Route path="/admin/groups" element={<ProtectedRoute><AdminGroupsPage /></ProtectedRoute>} />
-            <Route path="/admin/organizations" element={<ProtectedRoute><OrgsPage /></ProtectedRoute>} />
-            <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
+            <Route path="/chat/redesign" element={<ProtectedRoute><ChatPageRedesigned /></ProtectedRoute>} />
+
+            {/* Main app pages with shell */}
             <Route
-              path="/chat/redesign"
+              path="/documents"
               element={
                 <ProtectedRoute>
-                  <PageShell
-                    activeItem="chat"
-                    onItemSelect={() => {}}
-                    healthStatus={{ backend: true, embeddings: true, chat: true, loading: false, lastChecked: null }}
-                  >
-                    <ChatPageRedesigned />
-                  </PageShell>
+                  <MainAppShell>
+                    <DocumentsPage />
+                  </MainAppShell>
                 </ProtectedRoute>
               }
             />
             <Route
+              path="/memory"
+              element={
+                <ProtectedRoute>
+                  <MainAppShell>
+                    <MemoryPage />
+                  </MainAppShell>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/vaults"
+              element={
+                <ProtectedRoute>
+                  <MainAppShell>
+                    <VaultsPage />
+                  </MainAppShell>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/settings"
+              element={
+                <ProtectedRoute>
+                  <MainAppShell>
+                    <SettingsPage />
+                  </MainAppShell>
+                </ProtectedRoute>
+              }
+            />
+
+            {/* Admin pages */}
+            <Route
+              path="/admin/users"
+              element={
+                <ProtectedRoute>
+                  <MainAppShell>
+                    <AdminUsersPage />
+                  </MainAppShell>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin/groups"
+              element={
+                <ProtectedRoute>
+                  <MainAppShell>
+                    <AdminGroupsPage />
+                  </MainAppShell>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin/organizations"
+              element={
+                <ProtectedRoute>
+                  <MainAppShell>
+                    <OrgsPage />
+                  </MainAppShell>
+                </ProtectedRoute>
+              }
+            />
+
+            <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
+
+            {/* Default redirect to documents */}
+            <Route
               path="/*"
               element={
                 <ProtectedRoute>
-                  <MainApp />
+                  <MainAppShell>
+                    <DocumentsPage />
+                  </MainAppShell>
                 </ProtectedRoute>
               }
             />

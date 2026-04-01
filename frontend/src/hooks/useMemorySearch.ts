@@ -37,13 +37,13 @@ export function useMemorySearch(activeVaultId: number | null): UseMemorySearchRe
           activeVaultId ?? undefined
         );
         if (!abortController.signal.aborted) {
-          setMemories(response.results);
+          setMemories(response.results || []);
         }
       } else {
         // List mode — use GET /memories
         const response = await listMemories(activeVaultId ?? undefined);
         if (!abortController.signal.aborted) {
-          setMemories(response.memories);
+          setMemories(response.memories || []);
         }
       }
     } catch (err) {

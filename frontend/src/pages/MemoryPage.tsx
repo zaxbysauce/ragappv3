@@ -62,7 +62,7 @@ export default function MemoryPage() {
           {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Search className="w-4 h-4 mr-2" />}
           Search
         </Button>
-        <Badge variant="secondary">{memories.length} memories</Badge>
+        <Badge variant="secondary">{memories?.length || 0} memories</Badge>
       </div>
 
       {isAddDialogOpen && (
@@ -129,7 +129,7 @@ export default function MemoryPage() {
         </Card>
       )}
 
-      {loading && memories.length === 0 ? (
+      {loading && (!memories || memories.length === 0) ? (
         <div className="space-y-4">
           {[...Array(4)].map((_, i) => (
             <Card key={i}>
@@ -151,7 +151,7 @@ export default function MemoryPage() {
             </Card>
           ))}
         </div>
-      ) : memories.length === 0 ? (
+      ) : !memories || memories.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center">
             <Brain className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
@@ -162,7 +162,7 @@ export default function MemoryPage() {
         </Card>
       ) : (
         <div className="space-y-4">
-          {memories.map((memory) => (
+          {memories?.map((memory) => (
             <Card key={memory.id}>
               <CardContent className="p-4">
                 <div className="flex items-start justify-between gap-4">

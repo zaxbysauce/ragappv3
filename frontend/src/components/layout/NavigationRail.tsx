@@ -1,23 +1,29 @@
-import { MessageSquare, FileText, Brain, Settings, Database, Sparkles, Users } from "lucide-react";
+import { MessageSquare, FileText, Brain, Settings, Database, Sparkles, Users, UserCog } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { NavItem, NavItemId, NavigationProps } from "./navigationTypes";
+import { NavLink, useLocation } from "react-router-dom";
+import type { NavItemId, NavigationProps } from "./navigationTypes";
 
 // Re-export types for backward compatibility
 export type { NavItemId, NavigationProps };
 
-const navItems: NavItem[] = [
-  { id: "chat", label: "Chat", icon: MessageSquare },
-  { id: "chatNew", label: "Chat (New)", icon: Sparkles },
-  { id: "documents", label: "Documents", icon: FileText },
-  { id: "memory", label: "Memory", icon: Brain },
-  { id: "vaults", label: "Vaults", icon: Database },
-  { id: "settings", label: "Settings", icon: Settings },
-  { id: "groups", label: "Groups", icon: Users },
-];
-
-interface NavigationRailProps extends Omit<NavigationProps, 'onItemSelect'> {
-  onItemSelect: (id: NavItemId) => void;
+interface NavConfigItem {
+  id: NavItemId;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  to: string;
+  isSpecial?: boolean;
 }
+
+const navItems: NavConfigItem[] = [
+  { id: "chat", label: "Chat", icon: MessageSquare, to: "/chat" },
+  { id: "chatNew", label: "Chat (New)", icon: Sparkles, to: "/chat/redesign", isSpecial: true },
+  { id: "documents", label: "Documents", icon: FileText, to: "/documents" },
+  { id: "memory", label: "Memory", icon: Brain, to: "/memory" },
+  { id: "vaults", label: "Vaults", icon: Database, to: "/vaults" },
+  { id: "settings", label: "Settings", icon: Settings, to: "/settings" },
+  { id: "groups", label: "Groups", icon: Users, to: "/admin/groups" },
+  { id: "users", label: "Users", icon: UserCog, to: "/admin/users" },
+];
 
 function StatusIndicator({ isUp, label, loading }: { isUp: boolean; label: string; loading?: boolean }) {
   return (
@@ -35,7 +41,31 @@ function StatusIndicator({ isUp, label, loading }: { isUp: boolean; label: strin
   );
 }
 
-export function NavigationRail({ activeItem, onItemSelect, healthStatus }: NavigationRailProps) {
+interface NavigationRailProps {
+  healthStatus: NavigationProps["healthStatus"];
+}
+
+export function NavigationRail({ healthStatus }: NavigationRailProps) {
+  const location = useLocation();
+  const pathname = location.pathname;
+
+  // Determine active item based on current pathname
+  const getActiveItem = (): NavItemId | null => {
+    // Check exact matches first
+    for (const item of navItems) {
+      if (item.to === pathname) {
+        return item.id;
+      }
+    }
+    // Check partial matches for nested routes
+    if (pathname.startsWith("/chat/")) return "chat";
+    if (pathname.startsWith("/admin/groups")) return "groups";
+    if (pathname.startsWith("/admin/users")) return "users";
+    return null;
+  };
+
+  const activeItem = getActiveItem();
+
   return (
     <nav className="w-20 min-h-screen bg-card/80 backdrop-blur-sm border-r border-border flex flex-col items-center py-6 gap-2" aria-label="Main navigation">
       {/* App Logo */}
@@ -51,12 +81,11 @@ export function NavigationRail({ activeItem, onItemSelect, healthStatus }: Navig
           const Icon = item.icon;
           const isActive = activeItem === item.id;
           const isNewChat = item.id === "chatNew";
-          const isGroups = item.id === "groups";
 
           return (
-            <button
+            <NavLink
               key={item.id}
-              onClick={isNewChat ? () => window.location.href = "/chat/redesign" : isGroups ? () => window.location.href = "/admin/groups" : () => onItemSelect(item.id)}
+              to={item.to}
               className={cn(
                 "group relative flex flex-col items-center gap-1 p-3 rounded-xl transition-all duration-200 ease-out",
                 "hover:bg-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
@@ -106,7 +135,7 @@ export function NavigationRail({ activeItem, onItemSelect, healthStatus }: Navig
 
               {/* Tooltip for larger screens */}
               <span className="sr-only">{item.label}</span>
-            </button>
+            </NavLink>
           );
         })}
       </div>

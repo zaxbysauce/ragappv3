@@ -1,7 +1,7 @@
 import type { HealthStatus } from "@/types/health";
 import type { ComponentType } from "react";
 
-export type NavItemId = "chat" | "chatNew" | "documents" | "memory" | "vaults" | "settings" | "groups";
+export type NavItemId = "chat" | "chatNew" | "documents" | "memory" | "vaults" | "settings" | "groups" | "users";
 
 export interface NavItem {
   id: NavItemId;

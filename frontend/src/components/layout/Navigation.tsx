@@ -7,7 +7,7 @@ export function Navigation(props: NavigationProps) {
     <>
       {/* Desktop: Navigation Rail */}
       <div className="hidden md:flex">
-        <NavigationRail {...props} />
+        <NavigationRail healthStatus={props.healthStatus} />
       </div>
 
       {/* Mobile: Bottom Navigation */}
