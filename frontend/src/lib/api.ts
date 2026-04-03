@@ -23,8 +23,23 @@ function getCsrfCookie(): string | null {
   return match ? decodeURIComponent(match.split('=', 2)[1]) : null;
 }
 
+// Singleton refresh promise — ensures only one /auth/refresh call is in flight
+// at a time. Concurrent 401s share the same promise so the refresh cookie is
+// not rotated twice (which would invalidate the second caller's session).
+let _refreshInFlight: Promise<string | null> | null = null;
+
 // Standalone refresh function to avoid circular dependencies
 async function refreshAccessToken(): Promise<string | null> {
+  if (_refreshInFlight) {
+    return _refreshInFlight;
+  }
+  _refreshInFlight = _doRefresh().finally(() => {
+    _refreshInFlight = null;
+  });
+  return _refreshInFlight;
+}
+
+async function _doRefresh(): Promise<string | null> {
   try {
     // The /auth/refresh endpoint requires the CSRF token.
     // Read it from the non-httpOnly cookie; if missing, fetch a fresh one.
