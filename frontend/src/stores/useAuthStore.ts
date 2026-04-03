@@ -138,11 +138,12 @@ export const useAuthStore = create<AuthState>()(
           } catch {
             // Refresh also failed — fall through to clear state
           }
-          // Both access token and refresh cookie are invalid
+          // Both access token and refresh cookie are invalid — clear all auth state
           set({
             accessToken: null,
             user: null,
             isAuthenticated: false,
+            isLoading: false,
           });
           setJwtAccessToken(null);
         }

@@ -19,7 +19,8 @@ function getCsrfCookie(): string | null {
   const match = document.cookie
     .split('; ')
     .find(row => row.startsWith('X-CSRF-Token='));
-  return match ? decodeURIComponent(match.split('=')[1]) : null;
+  // Use split with limit=2 so token values containing '=' (base64 padding) are preserved
+  return match ? decodeURIComponent(match.split('=', 2)[1]) : null;
 }
 
 // Standalone refresh function to avoid circular dependencies

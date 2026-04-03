@@ -423,6 +423,9 @@ async def create_session(
     result = await asyncio.to_thread(conn.execute, select_query, (session_id,))
     row = await asyncio.to_thread(result.fetchone)
 
+    if row is None:
+        raise HTTPException(status_code=500, detail="Session was created but could not be retrieved")
+
     return {
         "id": row[0],
         "vault_id": row[1],
@@ -630,6 +633,9 @@ async def add_message(
     result = await asyncio.to_thread(conn.execute, select_query, (message_id,))
     row = await asyncio.to_thread(result.fetchone)
 
+    if row is None:
+        raise HTTPException(status_code=500, detail="Message was created but could not be retrieved")
+
     # Parse sources
     sources = None
     if row[3]:
@@ -679,6 +685,9 @@ async def update_session(
     fetch_query = "SELECT id, vault_id, title, created_at, updated_at FROM chat_sessions WHERE id = ?"
     result = await asyncio.to_thread(conn.execute, fetch_query, (session_id,))
     row = await asyncio.to_thread(result.fetchone)
+
+    if row is None:
+        raise HTTPException(status_code=404, detail="Session not found after update")
 
     return {
         "id": row[0],
