@@ -59,8 +59,8 @@ function OrgsPageContent() {
   const fetchOrgs = useCallback(async () => {
     setLoading(true);
     try {
-      const response = await apiClient.get<Organization[]>("/organizations/");
-      setOrgs(response.data);
+      const response = await apiClient.get<{ organizations: Organization[]; total: number }>("/organizations/");
+      setOrgs(Array.isArray(response.data) ? response.data : response.data.organizations ?? []);
     } catch (err) {
       console.error("Failed to fetch organizations:", err);
       toast.error("Failed to load organizations");
