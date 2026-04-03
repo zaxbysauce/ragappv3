@@ -135,9 +135,11 @@ def stream_chat_response(
                 len(history),
                 type(e).__name__,
                 str(e),
-                exc_info=False,
+                exc_info=True,
             )
-            yield f"data: {json.dumps({'type': 'error', 'message': 'An error occurred while processing your request', 'code': 'INTERNAL_ERROR'})}\n\n"
+            # Include exception type so users can report actionable errors
+            error_msg = f"Chat failed ({type(e).__name__}): {str(e)[:200]}"
+            yield f"data: {json.dumps({'type': 'error', 'message': error_msg, 'code': 'INTERNAL_ERROR'})}\n\n"
             return
 
         # Yield final done event with sources and memories

@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { useChatShellStore } from "@/stores/useChatShellStore";
@@ -15,6 +15,20 @@ import {
 } from "@/components/ui/sheet";
 import { PanelLeft, PanelRight, X } from "lucide-react";
 
+function useIsMobile(breakpoint = 768) {
+  const [isMobile, setIsMobile] = useState(
+    typeof window !== "undefined" ? window.innerWidth < breakpoint : false
+  );
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${breakpoint - 1}px)`);
+    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    mq.addEventListener("change", handler);
+    setIsMobile(mq.matches);
+    return () => mq.removeEventListener("change", handler);
+  }, [breakpoint]);
+  return isMobile;
+}
+
 export default function ChatShell() {
   const { sessionId } = useParams<{ sessionId?: string }>();
   const {
@@ -30,6 +44,18 @@ export default function ChatShell() {
     closeSessionRail,
     closeRightPane,
   } = useChatShellStore();
+
+  const isMobile = useIsMobile();
+  // Mobile Sheet uses its own state, toggled by the same button
+  const [mobileSheetOpen, setMobileSheetOpen] = useState(false);
+
+  const handleToggleSessionRail = () => {
+    if (isMobile) {
+      setMobileSheetOpen((prev) => !prev);
+    } else {
+      toggleSessionRail();
+    }
+  };
 
   useEffect(() => {
     if (sessionId && sessionId !== activeSessionId) {
@@ -80,7 +106,7 @@ export default function ChatShell() {
       </aside>
 
       {/* MOBILE: Session Rail Sheet (slides from left) */}
-      <Sheet open={sessionRailOpen} onOpenChange={(open) => !open && closeSessionRail()}>
+      <Sheet open={mobileSheetOpen} onOpenChange={(open) => !open && setMobileSheetOpen(false)}>
         <SheetContent side="left" className="w-[280px] p-0 md:hidden">
           <SheetHeader className="sr-only">
             <SheetTitle>Chat Sessions</SheetTitle>
@@ -95,9 +121,9 @@ export default function ChatShell() {
       <main className="flex flex-1 flex-col min-w-0 bg-background">
         <header className="flex h-14 items-center justify-between border-b border-border px-4">
           {/* Session rail toggle — mobile only */}
-          <Button variant="ghost" size="icon" onClick={toggleSessionRail}
-            aria-label={sessionRailOpen ? "Hide sessions" : "Show sessions"}
-            aria-pressed={sessionRailOpen} className="md:hidden">
+          <Button variant="ghost" size="icon" onClick={handleToggleSessionRail}
+            aria-label={mobileSheetOpen ? "Hide sessions" : "Show sessions"}
+            aria-pressed={mobileSheetOpen} className="md:hidden">
             <PanelLeft className="h-5 w-5" aria-hidden="true" />
           </Button>
           <div className="flex-1" />

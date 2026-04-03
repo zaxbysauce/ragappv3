@@ -708,10 +708,10 @@ export default function DocumentsPage() {
 
       {/* Confirmation Dialog (H-28) */}
       <Dialog open={confirmDialog.open} onOpenChange={(open) => setConfirmDialog(prev => ({ ...prev, open }))}>
-        <DialogContent>
+        <DialogContent aria-labelledby="confirm-dialog-title" aria-describedby="confirm-dialog-desc">
           <DialogHeader>
-            <DialogTitle>{confirmDialog.title}</DialogTitle>
-            <DialogDescription>{confirmDialog.description}</DialogDescription>
+            <DialogTitle id="confirm-dialog-title">{confirmDialog.title}</DialogTitle>
+            <DialogDescription id="confirm-dialog-desc">{confirmDialog.description}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirmDialog(prev => ({ ...prev, open: false }))}>
