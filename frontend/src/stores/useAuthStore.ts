@@ -126,7 +126,19 @@ export const useAuthStore = create<AuthState>()(
             return;
           }
         } catch {
-          // Token invalid or expired — clear it so we stop retrying
+          // Access token invalid or expired — try to refresh via httpOnly cookie
+          // before giving up and forcing the user to log in again.
+          try {
+            const newToken = await get().refreshToken();
+            if (newToken) {
+              await get().fetchMe();
+              set({ authMode: "jwt", isAuthenticated: true, isLoading: false });
+              return;
+            }
+          } catch {
+            // Refresh also failed — fall through to clear state
+          }
+          // Both access token and refresh cookie are invalid
           set({
             accessToken: null,
             user: null,

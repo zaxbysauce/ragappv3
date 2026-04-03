@@ -14,12 +14,41 @@ export function getJwtAccessToken(): string | null {
   return _jwtAccessToken;
 }
 
+// Read CSRF token from the non-httpOnly cookie set by the server
+function getCsrfCookie(): string | null {
+  const match = document.cookie
+    .split('; ')
+    .find(row => row.startsWith('X-CSRF-Token='));
+  return match ? decodeURIComponent(match.split('=')[1]) : null;
+}
+
 // Standalone refresh function to avoid circular dependencies
 async function refreshAccessToken(): Promise<string | null> {
   try {
+    // The /auth/refresh endpoint requires the CSRF token.
+    // Read it from the non-httpOnly cookie; if missing, fetch a fresh one.
+    let csrfToken = getCsrfCookie();
+    if (!csrfToken) {
+      try {
+        const csrfResp = await fetch(`${API_BASE_URL}/csrf-token`, { credentials: "include" });
+        if (csrfResp.ok) {
+          const csrfData = await csrfResp.json();
+          csrfToken = csrfData.csrf_token ?? null;
+        }
+      } catch {
+        // proceed without CSRF — server will reject if required
+      }
+    }
+
+    const headers: Record<string, string> = {};
+    if (csrfToken) {
+      headers["X-CSRF-Token"] = csrfToken;
+    }
+
     const response = await fetch(`${API_BASE_URL}/auth/refresh`, {
       method: "POST",
       credentials: "include", // Send httpOnly cookie with refresh token
+      headers,
     });
     if (!response.ok) return null;
     const data = await response.json();

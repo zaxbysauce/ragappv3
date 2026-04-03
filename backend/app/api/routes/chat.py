@@ -675,8 +675,9 @@ async def update_session(
     await asyncio.to_thread(conn.execute, update_query, (request.title, session_id))
     await asyncio.to_thread(conn.commit)
 
-    # Get updated session
-    result = await asyncio.to_thread(conn.execute, select_query, (session_id,))
+    # Get updated session (fetch all needed fields)
+    fetch_query = "SELECT id, vault_id, title, created_at, updated_at FROM chat_sessions WHERE id = ?"
+    result = await asyncio.to_thread(conn.execute, fetch_query, (session_id,))
     row = await asyncio.to_thread(result.fetchone)
 
     return {
