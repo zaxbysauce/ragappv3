@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
-import { AlertCircle, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { getSettings, updateSettings, testConnections } from "@/lib/api";
 import type { ConnectionTestResult } from "@/lib/api";
 import { useSettingsStore } from "@/stores/useSettingsStore";
@@ -79,21 +79,45 @@ function SettingsPageContent() {
     };
   }, [setSettings, initializeForm, setError, setLoading]);
 
-  const handleInputChange = (field: keyof SettingsFormData, value: string | boolean | number) => {
-    if (typeof value === "boolean") {
-      updateFormField(field, value);
-    } else if (typeof value === "string" && value === "") {
-      // Handle empty string for optional text fields
-      updateFormField(field as any, value);
-    } else if (typeof value === "number") {
-      updateFormField(field, value);
-    } else {
-      const numValue = parseFloat(value as string);
+  // Fields that should be parsed as numbers
+  const numericFields: Set<keyof SettingsFormData> = new Set([
+    'chunk_size_chars',
+    'chunk_overlap_chars',
+    'retrieval_top_k',
+    'auto_scan_interval_minutes',
+    'max_distance_threshold',
+    'retrieval_window',
+    'embedding_batch_size',
+    'hybrid_alpha',
+    'initial_retrieval_top_k',
+    'reranker_top_n',
+  ]);
+
+const handleInputChange = (field: keyof SettingsFormData, value: string | boolean | number) => {
+  if (typeof value === "boolean") {
+    updateFormField(field, value);
+  } else if (typeof value === "string") {
+    if (value === "") {
+      // Empty string: for numeric fields, set to 0; for string fields, keep as empty string
+      if (numericFields.has(field)) {
+        updateFormField(field, 0);
+      } else {
+        updateFormField(field as any, value);
+      }
+    } else if (numericFields.has(field)) {
+      const numValue = parseFloat(value);
       if (!isNaN(numValue)) {
         updateFormField(field, numValue);
       }
+    } else {
+      // String field - keep as string
+      updateFormField(field, value);
     }
-  };
+  } else {
+    // number
+    updateFormField(field, value);
+  }
+};
 
   const handleSave = async () => {
     if (!validateForm()) {
@@ -239,15 +263,8 @@ function SettingsPageContent() {
             </Card>
           </TabsContent>
 
-          <TabsContent value="advanced" className="space-y-4">
-            <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 p-3 flex items-start gap-2">
-              <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
-              <p className="text-sm text-amber-800 dark:text-amber-200">
-                Note: Settings updates apply to the running session only.
-              </p>
-            </div>
-
-{/* Model Connection Settings */}
+<TabsContent value="advanced" className="space-y-4">
+				{/* Model Connection Settings */}
       <ModelConnectionSettings
         formData={formData}
         errors={errors}

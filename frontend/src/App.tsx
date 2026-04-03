@@ -103,9 +103,36 @@ function App() {
             <Route path="/setup" element={<SetupPage />} />
             <Route path="/register" element={<RegisterPage />} />
             <Route path="/login" element={<LoginPage />} />
-            <Route path="/chat" element={<ProtectedRoute><ChatShell /></ProtectedRoute>} />
-            <Route path="/chat/redesign" element={<ProtectedRoute><ChatPageRedesigned /></ProtectedRoute>} />
-            <Route path="/chat/:sessionId" element={<ProtectedRoute><ChatShell /></ProtectedRoute>} />
+        <Route
+          path="/chat"
+          element={
+            <ProtectedRoute>
+              <MainAppShell>
+                <ChatShell />
+              </MainAppShell>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/chat/redesign"
+          element={
+            <ProtectedRoute>
+              <MainAppShell>
+                <ChatPageRedesigned />
+              </MainAppShell>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/chat/:sessionId"
+          element={
+            <ProtectedRoute>
+              <MainAppShell>
+                <ChatShell />
+              </MainAppShell>
+            </ProtectedRoute>
+          }
+        />
 
             {/* Main app pages with shell */}
             <Route

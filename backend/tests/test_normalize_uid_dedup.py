@@ -145,7 +145,8 @@ class TestNormalizeUidForDedupUnit:
 class TestNormalizeUidForDedupIntegration:
     """Integration tests for _normalize_uid_for_dedup with expand_window."""
 
-    def test_expand_window_dedups_multi_scale(self):
+    @pytest.mark.asyncio
+    async def test_expand_window_dedups_multi_scale(self):
         """expand_window should deduplicate multi-scale and default UIDs referencing same index."""
         # Setup: Create a mock vector store
         mock_vector_store = MagicMock()
@@ -165,7 +166,7 @@ class TestNormalizeUidForDedupIntegration:
         # we might get both "doc1_512_2", "doc1_512_3", "doc1_512_4"
         # AND "doc1_2", "doc1_3", "doc1_4"
         # After dedup, "doc1_512_3" and "doc1_3" should be treated as duplicates
-        def mock_get_chunks_by_uid(uids):
+        async def mock_get_chunks_by_uid(uids):
             chunks = []
             for uid in uids:
                 # Return chunks for various UIDs
@@ -205,7 +206,7 @@ class TestNormalizeUidForDedupIntegration:
         )
 
         # Execute expand_window
-        expanded = service.expand_window(sources)
+        expanded = await service.expand_window(sources)
 
         # Verify no duplicate normalized UIDs
         seen_normalized = set()
@@ -237,7 +238,8 @@ class TestNormalizeUidForDedupIntegration:
             f"number of unique normalized UIDs ({len(seen_normalized)})"
         )
 
-    def test_expand_window_mixed_scales_dedup(self):
+    @pytest.mark.asyncio
+    async def test_expand_window_mixed_scales_dedup(self):
         """expand_window should deduplicate when mixing different scales for same index."""
         mock_vector_store = MagicMock()
 
@@ -257,7 +259,7 @@ class TestNormalizeUidForDedupIntegration:
             ),
         ]
 
-        def mock_get_chunks_by_uid(uids):
+        async def mock_get_chunks_by_uid(uids):
             chunks = []
             for uid in uids:
                 parts = uid.rsplit("_", 2)
@@ -291,7 +293,7 @@ class TestNormalizeUidForDedupIntegration:
             vector_store=mock_vector_store, retrieval_window=1, retrieval_top_k=100
         )
 
-        expanded = service.expand_window(sources)
+        expanded = await service.expand_window(sources)
 
         # Count how many times each (file_id, index) pair appears
         index_counts = {}
@@ -306,7 +308,8 @@ class TestNormalizeUidForDedupIntegration:
                 f"Multi-scale UIDs for same index should be deduplicated."
             )
 
-    def test_expand_window_preserves_original_sources(self):
+    @pytest.mark.asyncio
+    async def test_expand_window_preserves_original_sources(self):
         """expand_window should always include original sources."""
         mock_vector_store = MagicMock()
 
@@ -320,13 +323,16 @@ class TestNormalizeUidForDedupIntegration:
         ]
 
         # Mock returns empty list (no adjacent chunks found)
-        mock_vector_store.get_chunks_by_uid = lambda uids: []
+        async def mock_get_chunks_by_uid(uids):
+            return []
+
+        mock_vector_store.get_chunks_by_uid = mock_get_chunks_by_uid
 
         service = DocumentRetrievalService(
             vector_store=mock_vector_store, retrieval_window=2, retrieval_top_k=100
         )
 
-        expanded = service.expand_window(sources)
+        expanded = await service.expand_window(sources)
 
         # Original source should still be present
         assert len(expanded) >= 1, (
@@ -335,7 +341,8 @@ class TestNormalizeUidForDedupIntegration:
         assert expanded[0].file_id == "test_doc"
         assert expanded[0].metadata.get("chunk_index") == 10
 
-    def test_expand_window_empty_sources(self):
+    @pytest.mark.asyncio
+    async def test_expand_window_empty_sources(self):
         """expand_window should handle empty input gracefully."""
         mock_vector_store = MagicMock()
 
@@ -343,11 +350,12 @@ class TestNormalizeUidForDedupIntegration:
             vector_store=mock_vector_store, retrieval_window=1, retrieval_top_k=100
         )
 
-        result = service.expand_window([])
+        result = await service.expand_window([])
 
         assert result == [], "Empty input should return empty output"
 
-    def test_expand_window_no_vector_store(self):
+    @pytest.mark.asyncio
+    async def test_expand_window_no_vector_store(self):
         """expand_window should return sources unchanged when no vector_store."""
         sources = [
             RAGSource(
@@ -364,7 +372,7 @@ class TestNormalizeUidForDedupIntegration:
             retrieval_top_k=100,
         )
 
-        result = service.expand_window(sources)
+        result = await service.expand_window(sources)
 
         # Should return sources unchanged
         assert result == sources, "Should return sources unchanged when no vector_store"

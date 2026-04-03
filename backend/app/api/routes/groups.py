@@ -5,7 +5,7 @@ import sqlite3
 from collections.abc import Callable
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.deps import (
@@ -83,6 +83,20 @@ class GroupVaultsUpdateRequest(BaseModel):
     """Request model for updating group vault access."""
 
     vault_ids: List[int]
+
+
+@router.options("/", response_model=GroupListResponse)
+async def list_groups_options():
+    """Handle CORS preflight for list groups."""
+    return Response(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": "http://localhost:3000",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Allow-Credentials": "true",
+        },
+    )
 
 
 @router.get("/", response_model=GroupListResponse)
@@ -270,6 +284,20 @@ async def create_group(
         description=row[3] or "",
         created_at=row[4],
         organization_name=row[5],
+    )
+
+
+@router.options("/{group_id}", response_model=GroupResponse)
+async def get_group_options():
+    """Handle CORS preflight for get group."""
+    return Response(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": "http://localhost:3000",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Allow-Credentials": "true",
+        },
     )
 
 

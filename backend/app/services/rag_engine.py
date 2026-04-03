@@ -133,6 +133,12 @@ class RAGEngine:
         vault_id: Optional[int] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """Execute a RAG query: embed, search, build prompt, call LLM."""
+        logger.info(
+            "[query] START: user_input_len=%d, vault_id=%s, stream=%s",
+            len(user_input),
+            vault_id,
+            stream,
+        )
         # Memory intent detection
         try:
             memory_content = self.memory_store.detect_memory_intent(user_input)
@@ -169,6 +175,8 @@ class RAGEngine:
                 )
                 transformed_queries = [user_input]
 
+        logger.debug("[query] transformed_queries=%s", transformed_queries)
+
         # Embed all transformed queries
         query_embeddings: List[List[float]] = []
         for query_text in transformed_queries:
@@ -182,10 +190,19 @@ class RAGEngine:
 
         if not query_embeddings:
             error_msg = "Unable to encode any query variants"
+            logger.error(
+                "[query] No query embeddings produced — all embedding attempts failed"
+            )
             if stream:
                 yield {"type": "error", "message": error_msg, "code": "EMBEDDING_ERROR"}
                 return
             raise RAGEngineError(error_msg)
+
+        logger.info(
+            "[query] query_embeddings: count=%d, dim=%s",
+            len(query_embeddings),
+            len(query_embeddings[0]) if query_embeddings else "N/A",
+        )
 
         # Generate sparse query vector for learned sparse retrieval (feature-flag gated)
         query_sparse: Optional[dict] = None
@@ -231,12 +248,23 @@ class RAGEngine:
                     query_sparse,
                     effective_alpha=effective_alpha,
                 )
+                logger.info(
+                    "[query] _execute_retrieval returned: result_count=%d, first_3_distances=%s",
+                    len(vector_results),
+                    [r.get("_distance") for r in vector_results[:3]]
+                    if vector_results
+                    else "N/A",
+                )
             except Exception as exc:
                 fallback_reason = str(exc)
                 vector_results = []
 
         # Filter relevant chunks using document retrieval service
-        relevant_chunks = self.document_retrieval.filter_relevant(vector_results)
+        relevant_chunks = await self.document_retrieval.filter_relevant(vector_results)
+        logger.info(
+            "[query] After filter_relevant: relevant_chunk_count=%d",
+            len(relevant_chunks),
+        )
 
         # Check if distance filtering removed all results (no_match)
         if not relevant_chunks and self.document_retrieval.no_match:
@@ -255,6 +283,7 @@ class RAGEngine:
 
         if fallback_reason:
             logger.warning("Vector search fallback triggered: %s", fallback_reason)
+            logger.debug("[query] Yielding 'fallback' chunk")
             yield {
                 "type": "fallback",
                 "reason": fallback_reason,
@@ -283,13 +312,23 @@ class RAGEngine:
         # Stream or non-stream LLM response
         if stream:
             async for chunk in self._stream_llm_response(messages):
+                chunk_type = chunk.get("type", "unknown")
+                logger.debug("[query] Yielding '%s' chunk (stream)", chunk_type)
                 yield chunk
         else:
             async for chunk in self._get_llm_response(messages):
+                chunk_type = chunk.get("type", "unknown")
+                logger.debug("[query] Yielding '%s' chunk (non-stream)", chunk_type)
                 yield chunk
 
         # Yield done message with sources
-        yield self._build_done_message(relevant_chunks, memories)
+        done_msg = self._build_done_message(relevant_chunks, memories)
+        logger.info(
+            "[query] Yielding 'done': sources_count=%d, memories_used=%d",
+            len(done_msg.get("sources", [])),
+            len(done_msg.get("memories_used", [])),
+        )
+        yield done_msg
 
     async def _execute_retrieval(
         self,
@@ -309,152 +348,177 @@ class RAGEngine:
         Returns:
             Tuple of (vector_results, relevance_hint)
         """
-        # Stage 1: Initial retrieval
-        fetch_k = (
-            self.initial_retrieval_top_k
-            if self.reranking_enabled
-            else self.retrieval_top_k
-        )
-        top_k_value = fetch_k if fetch_k is not None else self.retrieval_top_k
-
-        # Search with all query embeddings and fuse results
-        all_results: List[List[Dict[str, Any]]] = []
-        for i, embedding in enumerate(query_embeddings):
-            results = await self.vector_store.search(
-                embedding,
-                int(top_k_value) if top_k_value is not None else 10,
-                vault_id=str(vault_id) if vault_id is not None else None,
-                query_text=user_input if i == 0 else "",
-                hybrid=self.hybrid_search_enabled and i == 0,
-                hybrid_alpha=effective_alpha,
-                query_sparse=query_sparse if i == 0 else None,
-            )
-            all_results.append(results)
-
-        # Compute recency scores for tiebreaking in multi-query fusion
-        recency_scores: Optional[Dict[str, float]] = None
-        if settings.retrieval_recency_weight > 0.0 and len(all_results) > 1:
-            dates: Dict[str, float] = {}
-            for result_list in all_results:
-                for record in result_list:
-                    uid = record.get("id", "")
-                    if not uid:
-                        continue
-                    metadata = self._normalize_metadata(record.get("metadata", {}))
-                    proc_at = metadata.get("processed_at") or record.get("processed_at")
-                    if proc_at:
-                        try:
-                            dates[uid] = datetime.fromisoformat(
-                                str(proc_at)
-                            ).timestamp()
-                        except (ValueError, TypeError):
-                            pass
-            if len(dates) > 1:
-                min_ts = min(dates.values())
-                max_ts = max(dates.values())
-                span = max_ts - min_ts or 1.0
-                recency_scores = {
-                    uid: (ts - min_ts) / span for uid, ts in dates.items()
-                }
-
-        # Fuse results from all query variants using RRF
-        if len(all_results) > 1:
-            vector_results = rrf_fuse(
-                all_results,
-                k=60,
-                limit=fetch_k,
-                recency_scores=recency_scores,
-                recency_weight=settings.retrieval_recency_weight,
-            )
-            logger.info(
-                "Fused results from %d query variants: %d results",
-                len(all_results),
-                len(vector_results),
-            )
-        else:
-            vector_results = all_results[0] if all_results else []
-
-        # Log vector search results
         logger.info(
-            "Vector search: vault_id=%s, top_k=%d, results=%d, distances=%s",
+            "[_execute_retrieval] ENTER: vault_id=%s, top_k=%s, query_embeddings=%d",
             vault_id,
-            top_k_value,
-            len(vector_results),
-            [r.get("_distance") for r in vector_results[:3]]
-            if vector_results
-            else "N/A",
+            self.retrieval_top_k,
+            len(query_embeddings),
         )
-
-        # Stage 2: Reranking (if enabled)
-        if self.reranking_enabled and self.reranking_service and vector_results:
-            try:
-                vector_results = await self.reranking_service.rerank(
-                    query=user_input,
-                    chunks=vector_results,
-                    top_n=self.reranker_top_n,
-                )
-            except Exception as e:
-                logger.warning("Reranking failed, using original results: %s", e)
-
-        # Pack context by token budget (feature-flag gated by context_max_tokens > 0)
-        if vector_results and settings.context_max_tokens > 0:
-            temp_sources = [
-                RAGSource(
-                    text=r.get("text", ""),
-                    file_id=str(r.get("file_id", "")),
-                    score=r.get("_distance", 0.0),
-                    metadata=r.get("metadata", {}),
-                )
-                for r in vector_results
-            ]
-            packed_sources = self._pack_context_by_token_budget(
-                temp_sources, settings.context_max_tokens
+        try:
+            # Stage 1: Initial retrieval
+            fetch_k = (
+                self.initial_retrieval_top_k
+                if self.reranking_enabled
+                else self.retrieval_top_k
             )
-            # Filter vector_results to match packed sources
-            packed_texts = {s.text for s in packed_sources}
-            vector_results = [
-                r for r in vector_results if r.get("text") in packed_texts
-            ]
-            logger.info(
-                "Token packing: %d results → %d results (budget=%d tokens)",
-                len(temp_sources),
-                len(packed_sources),
-                settings.context_max_tokens,
-            )
-        else:
-            if vector_results and settings.context_max_tokens <= 0:
+            top_k_value = fetch_k if fetch_k is not None else self.retrieval_top_k
+
+            # Search with all query embeddings and fuse results
+            all_results: List[List[Dict[str, Any]]] = []
+            for i, embedding in enumerate(query_embeddings):
+                results = await self.vector_store.search(
+                    embedding,
+                    int(top_k_value) if top_k_value is not None else 10,
+                    vault_id=str(vault_id) if vault_id is not None else None,
+                    query_text=user_input if i == 0 else "",
+                    hybrid=self.hybrid_search_enabled and i == 0,
+                    hybrid_alpha=effective_alpha,
+                    query_sparse=query_sparse if i == 0 else None,
+                )
+                all_results.append(results)
+                logger.debug(
+                    "[_execute_retrieval] vector_store.search() scale=%d returned %d results",
+                    i,
+                    len(results),
+                )
+
+            # Compute recency scores for tiebreaking in multi-query fusion
+            recency_scores: Optional[Dict[str, float]] = None
+            if settings.retrieval_recency_weight > 0.0 and len(all_results) > 1:
+                dates: Dict[str, float] = {}
+                for result_list in all_results:
+                    for record in result_list:
+                        uid = record.get("id", "")
+                        if not uid:
+                            continue
+                        metadata = self._normalize_metadata(record.get("metadata", {}))
+                        proc_at = metadata.get("processed_at") or record.get(
+                            "processed_at"
+                        )
+                        if proc_at:
+                            try:
+                                dates[uid] = datetime.fromisoformat(
+                                    str(proc_at)
+                                ).timestamp()
+                            except (ValueError, TypeError):
+                                pass
+                if len(dates) > 1:
+                    min_ts = min(dates.values())
+                    max_ts = max(dates.values())
+                    span = max_ts - min_ts or 1.0
+                    recency_scores = {
+                        uid: (ts - min_ts) / span for uid, ts in dates.items()
+                    }
+
+            # Fuse results from all query variants using RRF
+            if len(all_results) > 1:
+                vector_results = rrf_fuse(
+                    all_results,
+                    k=60,
+                    limit=fetch_k,
+                    recency_scores=recency_scores,
+                    recency_weight=settings.retrieval_recency_weight,
+                )
                 logger.info(
-                    "Token packing: disabled (context_max_tokens=%d)",
+                    "Fused results from %d query variants: %d results",
+                    len(all_results),
+                    len(vector_results),
+                )
+            else:
+                vector_results = all_results[0] if all_results else []
+
+            # Log vector search results
+            logger.info(
+                "Vector search: vault_id=%s, top_k=%d, results=%d, distances=%s",
+                vault_id,
+                top_k_value,
+                len(vector_results),
+                [r.get("_distance") for r in vector_results[:3]]
+                if vector_results
+                else "N/A",
+            )
+
+            # Stage 2: Reranking (if enabled)
+            if self.reranking_enabled and self.reranking_service and vector_results:
+                try:
+                    vector_results = await self.reranking_service.rerank(
+                        query=user_input,
+                        chunks=vector_results,
+                        top_n=self.reranker_top_n,
+                    )
+                    logger.info(
+                        "[_execute_retrieval] After reranking: result_count=%d",
+                        len(vector_results),
+                    )
+                except Exception as e:
+                    logger.warning("Reranking failed, using original results: %s", e)
+
+            # Pack context by token budget (feature-flag gated by context_max_tokens > 0)
+            if vector_results and settings.context_max_tokens > 0:
+                temp_sources = [
+                    RAGSource(
+                        text=r.get("text", ""),
+                        file_id=str(r.get("file_id", "")),
+                        score=r.get("_distance", 0.0),
+                        metadata=r.get("metadata", {}),
+                    )
+                    for r in vector_results
+                ]
+                packed_sources = self._pack_context_by_token_budget(
+                    temp_sources, settings.context_max_tokens
+                )
+                # Filter vector_results to match packed sources
+                packed_texts = {s.text for s in packed_sources}
+                vector_results = [
+                    r for r in vector_results if r.get("text") in packed_texts
+                ]
+                logger.info(
+                    "Token packing: %d results → %d results (budget=%d tokens)",
+                    len(temp_sources),
+                    len(packed_sources),
                     settings.context_max_tokens,
                 )
+            else:
+                if vector_results and settings.context_max_tokens <= 0:
+                    logger.info(
+                        "Token packing: disabled (context_max_tokens=%d)",
+                        settings.context_max_tokens,
+                    )
 
-        # Final limit to retrieval_top_k
-        vector_results = vector_results[: self.retrieval_top_k]
+            # Final limit to retrieval_top_k
+            vector_results = vector_results[: self.retrieval_top_k]
 
-        # Retrieval evaluation (CRAG-style self-evaluation)
-        relevance_hint: Optional[str] = None
-        if settings.retrieval_evaluation_enabled and self.llm_client is not None:
-            try:
-                if self._retrieval_evaluator is None:
-                    self._retrieval_evaluator = RetrievalEvaluator(self.llm_client)
-                eval_result = await self._retrieval_evaluator.evaluate(
-                    user_input, vector_results
-                )
-                if eval_result == "NO_MATCH":
-                    if logger.isEnabledFor(logging.DEBUG):
-                        logger.debug(
-                            "Retrieval evaluation: NO_MATCH for query '%s'", user_input
-                        )
-                    relevance_hint = "Note: The retrieved documents may not be directly relevant to your query."
-                elif eval_result == "AMBIGUOUS":
-                    if logger.isEnabledFor(logging.DEBUG):
-                        logger.debug(
-                            "Retrieval evaluation: AMBIGUOUS for query '%s'", user_input
-                        )
-            except Exception as e:
-                logger.warning("Retrieval evaluation failed: %s", e)
+            # Retrieval evaluation (CRAG-style self-evaluation)
+            relevance_hint: Optional[str] = None
+            if settings.retrieval_evaluation_enabled and self.llm_client is not None:
+                try:
+                    if self._retrieval_evaluator is None:
+                        self._retrieval_evaluator = RetrievalEvaluator(self.llm_client)
+                    eval_result = await self._retrieval_evaluator.evaluate(
+                        user_input, vector_results
+                    )
+                    if eval_result == "NO_MATCH":
+                        if logger.isEnabledFor(logging.DEBUG):
+                            logger.debug(
+                                "Retrieval evaluation: NO_MATCH for query '%s'",
+                                user_input,
+                            )
+                        relevance_hint = "Note: The retrieved documents may not be directly relevant to your query."
+                    elif eval_result == "AMBIGUOUS":
+                        if logger.isEnabledFor(logging.DEBUG):
+                            logger.debug(
+                                "Retrieval evaluation: AMBIGUOUS for query '%s'",
+                                user_input,
+                            )
+                except Exception as e:
+                    logger.warning("Retrieval evaluation failed: %s", e)
 
-        return vector_results, relevance_hint
+            return vector_results, relevance_hint
+        except Exception:
+            logger.exception(
+                "[_execute_retrieval] UNHANDLED EXCEPTION in retrieval pipeline"
+            )
+            raise
 
     async def _stream_llm_response(
         self,
@@ -472,6 +536,7 @@ class RAGEngine:
             async for chunk in self.llm_client.chat_completion_stream(messages):
                 yield {"type": "content", "content": chunk}
         except LLMError as exc:
+            logger.error("[_stream_llm_response] LLMError: %s", exc)
             yield {"type": "error", "message": str(exc), "code": "LLM_ERROR"}
 
     async def _get_llm_response(
@@ -543,7 +608,7 @@ class RAGEngine:
             self.prompt_builder = PromptBuilderService()
 
     # Backward compatibility methods - delegate to document_retrieval service
-    def _filter_relevant(
+    async def _filter_relevant(
         self, results: List[Dict[str, Any]], top_k: Optional[int] = None
     ) -> List[RAGSource]:
         """Filter retrieved documents by relevance (backward compatibility).
@@ -561,7 +626,7 @@ class RAGEngine:
         )
         self.document_retrieval.retrieval_top_k = getattr(self, "retrieval_top_k", None)
         self.document_retrieval.retrieval_window = getattr(self, "retrieval_window", 0)
-        return self.document_retrieval.filter_relevant(results, top_k)
+        return await self.document_retrieval.filter_relevant(results, top_k)
 
     def _pack_context_by_token_budget(
         self, chunks: List[RAGSource], max_tokens: int = 6000
@@ -631,7 +696,7 @@ class RAGEngine:
             logger.warning("Supersession check failed (suppressed): %s", exc)
         return None
 
-    def _expand_window(self, sources: List[RAGSource]) -> List[RAGSource]:
+    async def _expand_window(self, sources: List[RAGSource]) -> List[RAGSource]:
         """Expand search results by fetching adjacent chunks (backward compatibility).
 
         Syncs window settings from engine to document_retrieval service
@@ -640,7 +705,7 @@ class RAGEngine:
         self._ensure_services()
         self.document_retrieval.retrieval_window = getattr(self, "retrieval_window", 0)
         self.document_retrieval.retrieval_top_k = getattr(self, "retrieval_top_k", None)
-        return self.document_retrieval.expand_window(sources)
+        return await self.document_retrieval.expand_window(sources)
 
     def _normalize_metadata(self, metadata: Any) -> Dict[str, Any]:
         """Normalize metadata (backward compatibility)."""

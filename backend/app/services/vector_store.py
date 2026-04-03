@@ -373,14 +373,11 @@ class VectorStore:
         else:
             combined_filter = scale_filter
 
-        # Dense vector search with scale filter (run in thread pool)
-        def run_dense_search():
-            query = self.table.search(embedding)
-            if combined_filter:
-                query = query.where(combined_filter)
-            return query.limit(fetch_k).to_list()
-
-        dense_results = await asyncio.to_thread(run_dense_search)
+        # Dense vector search with scale filter
+        query = await self.table.search(embedding)
+        if combined_filter:
+            query = query.where(combined_filter)
+        dense_results = await query.limit(fetch_k).to_list()
 
         # If hybrid disabled, return dense results only
         if not hybrid or not query_text:
@@ -426,27 +423,22 @@ class VectorStore:
             return result_list
         else:
             # Use BM25 FTS (existing code)
-            def run_fts_search():
-                try:
-                    fts_query = self.table.search(query_text)
-                    fts_filter_parts = [scale_filter]
-                    if vault_id:
-                        safe_vault_id = str(vault_id).replace("'", "\\'")
-                        fts_filter_parts.append(f"vault_id = '{safe_vault_id}'")
-                    if filter_expr:
-                        fts_filter_parts.append(f"({filter_expr})")
-                    fts_combined_filter = " AND ".join(
-                        f"({f})" for f in fts_filter_parts
-                    )
-                    fts_query = fts_query.where(fts_combined_filter)
-                    return fts_query.limit(fetch_k).to_list()
-                except Exception as e:
-                    logger.warning(
-                        f"FTS search failed for scale {scale} (falling back to dense-only): {e}"
-                    )
-                    return []
-
-            fts_results = await asyncio.to_thread(run_fts_search)
+            try:
+                fts_query = await self.table.search(query_text)
+                fts_filter_parts = [scale_filter]
+                if vault_id:
+                    safe_vault_id = str(vault_id).replace("'", "\\'")
+                    fts_filter_parts.append(f"vault_id = '{safe_vault_id}'")
+                if filter_expr:
+                    fts_filter_parts.append(f"({filter_expr})")
+                fts_combined_filter = " AND ".join(f"({f})" for f in fts_filter_parts)
+                fts_query = fts_query.where(fts_combined_filter)
+                fts_results = await fts_query.limit(fetch_k).to_list()
+            except Exception as e:
+                logger.warning(
+                    f"FTS search failed for scale {scale} (falling back to dense-only): {e}"
+                )
+                fts_results = []
 
             # RRF Fusion for this scale
             k_rrf = 60
@@ -491,50 +483,45 @@ class VectorStore:
         if self.table is None:
             return []
 
-        def _run_sparse_search():
-            try:
-                filter_parts = ["sparse_embedding IS NOT NULL"]
-                if vault_id is not None:
-                    safe_vault_id = str(vault_id).replace("'", "''")
-                    filter_parts.append(f"vault_id = '{safe_vault_id}'")
-                if scale is not None:
-                    safe_scale = str(scale).replace("'", "''")
-                    filter_parts.append(f"chunk_scale = '{safe_scale}'")
-                if filter_expr:
-                    filter_parts.append(f"({filter_expr})")
-                combined_filter = " AND ".join(filter_parts)
+        try:
+            filter_parts = ["sparse_embedding IS NOT NULL"]
+            if vault_id is not None:
+                safe_vault_id = str(vault_id).replace("'", "''")
+                filter_parts.append(f"vault_id = '{safe_vault_id}'")
+            if scale is not None:
+                safe_scale = str(scale).replace("'", "''")
+                filter_parts.append(f"chunk_scale = '{safe_scale}'")
+            if filter_expr:
+                filter_parts.append(f"({filter_expr})")
+            combined_filter = " AND ".join(filter_parts)
 
-                max_candidates = settings.sparse_search_max_candidates
-                candidates = (
-                    self.table.search()
-                    .where(combined_filter)
-                    .limit(max_candidates)
-                    .to_list()
-                )
+            max_candidates = settings.sparse_search_max_candidates
+            candidates = (
+                await (await self.table.search())
+                .where(combined_filter)
+                .limit(max_candidates)
+                .to_list()
+            )
 
-                scored = []
-                for record in candidates:
-                    sparse_str = record.get("sparse_embedding")
-                    if not sparse_str:
-                        continue
-                    try:
-                        doc_sparse = json.loads(sparse_str)
-                    except (ValueError, TypeError):
-                        continue
-                    score = sum(
-                        query_sparse.get(k, 0.0) * v for k, v in doc_sparse.items()
-                    )
-                    rec = dict(record)
-                    rec["_sparse_score"] = score
-                    scored.append(rec)
+            scored = []
+            for record in candidates:
+                sparse_str = record.get("sparse_embedding")
+                if not sparse_str:
+                    continue
+                try:
+                    doc_sparse = json.loads(sparse_str)
+                except (ValueError, TypeError):
+                    continue
+                score = sum(query_sparse.get(k, 0.0) * v for k, v in doc_sparse.items())
+                rec = dict(record)
+                rec["_sparse_score"] = score
+                scored.append(rec)
 
-                scored.sort(key=lambda r: r["_sparse_score"], reverse=True)
-                return scored[:limit]
-            except Exception as exc:
-                logger.warning("Sparse search failed (returning empty): %s", exc)
-                return []
-
-        return await asyncio.to_thread(_run_sparse_search)
+            scored.sort(key=lambda r: r["_sparse_score"], reverse=True)
+            return scored[:limit]
+        except Exception as exc:
+            logger.warning("Sparse search failed (returning empty): %s", exc)
+            return []
 
     async def search(
         self,
@@ -702,26 +689,23 @@ class VectorStore:
         if self.table is None:
             return []
 
-        # Dense vector search (run in thread pool since LanceDB sync operations may block)
-        def run_dense_search():
-            query = self.table.search(embedding)
+        # Dense vector search
+        query = await self.table.search(embedding)
 
-            # Apply vault filter if specified
-            _filter_expr = filter_expr
-            if vault_id is not None:
-                safe_vault_id = str(vault_id).replace("'", "\\'")
-                vault_filter = f"vault_id = '{safe_vault_id}'"
-                if _filter_expr:
-                    _filter_expr = f"({_filter_expr}) AND ({vault_filter})"
-                else:
-                    _filter_expr = vault_filter
-
+        # Apply vault filter if specified
+        _filter_expr = filter_expr
+        if vault_id is not None:
+            safe_vault_id = str(vault_id).replace("'", "\\'")
+            vault_filter = f"vault_id = '{safe_vault_id}'"
             if _filter_expr:
-                query = query.where(_filter_expr)
+                _filter_expr = f"({_filter_expr}) AND ({vault_filter})"
+            else:
+                _filter_expr = vault_filter
 
-            return query.limit(fetch_k).to_list()
+        if _filter_expr:
+            query = query.where(_filter_expr)
 
-        dense_results = await asyncio.to_thread(run_dense_search)
+        dense_results = await query.limit(fetch_k).to_list()
 
         # If hybrid disabled, return dense results only
         if not hybrid or not query_text:
@@ -745,22 +729,17 @@ class VectorStore:
             )
         else:
             # Use BM25 FTS (existing code)
-            def run_fts_search():
-                try:
-                    fts_query = self.table.search(query_text)  # LanceDB FTS
-                    if vault_id:
-                        fts_query = fts_query.where(f"vault_id = '{vault_id}'")
-                    if filter_expr:
-                        # FTS doesn't support complex filter_expr, apply basic vault filter only
-                        fts_query = fts_query.where(filter_expr)
-                    return fts_query.limit(fetch_k).to_list()
-                except (OSError, RuntimeError, ValueError) as e:
-                    logger.warning(
-                        f"FTS search failed (falling back to dense-only): {e}"
-                    )
-                    return []
-
-            fts_results = await asyncio.to_thread(run_fts_search)
+            try:
+                fts_query = await self.table.search(query_text)  # LanceDB FTS
+                if vault_id:
+                    fts_query = fts_query.where(f"vault_id = '{vault_id}'")
+                if filter_expr:
+                    # FTS doesn't support complex filter_expr, apply basic vault filter only
+                    fts_query = fts_query.where(filter_expr)
+                fts_results = await fts_query.limit(fetch_k).to_list()
+            except (OSError, RuntimeError, ValueError) as e:
+                logger.warning(f"FTS search failed (falling back to dense-only): {e}")
+                fts_results = []
 
             # RRF Fusion using shared utility
             return rrf_fuse([dense_results, fts_results], k=60, limit=limit)

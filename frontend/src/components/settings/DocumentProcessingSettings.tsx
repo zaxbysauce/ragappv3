@@ -80,7 +80,7 @@ export function DocumentProcessingSettings({
             <input
               type="checkbox"
               id="auto_scan_enabled"
-              checked={formData.auto_scan_enabled}
+              checked={formData.auto_scan_enabled || false}
               onChange={(e) => onChange("auto_scan_enabled", e.target.checked)}
               className="h-4 w-4 rounded border-gray-300"
             />

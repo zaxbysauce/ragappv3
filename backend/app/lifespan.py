@@ -108,6 +108,11 @@ def _load_persisted_settings(sqlite_path: str) -> None:
             "hybrid_alpha",
             "reranker_url",
             "reranker_model",
+            "ollama_embedding_url",
+            "ollama_chat_url",
+            "embedding_model",
+            "chat_model",
+            "vector_top_k",
         ]
         for key in NEW_DIRECT_KEYS:
             if key in persisted:

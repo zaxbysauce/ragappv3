@@ -161,6 +161,11 @@ async def non_stream_chat_response(
     Collects all chunks from the RAG engine and returns a complete
     response with content, sources, and memories used.
     """
+    logger.info(
+        "[non_stream_chat_response] ENTER: message_len=%d, vault_id=%s",
+        len(message),
+        vault_id,
+    )
     if rag_engine is None:
         raise HTTPException(status_code=503, detail="RAG engine not available")
 
@@ -173,6 +178,9 @@ async def non_stream_chat_response(
             message, history, stream=False, vault_id=vault_id
         ):
             chunk_type = chunk.get("type")
+            logger.debug(
+                "[non_stream_chat_response] Received chunk type='%s'", chunk_type
+            )
 
             if chunk_type == "content":
                 collected_content.append(chunk.get("content", ""))
@@ -181,6 +189,12 @@ async def non_stream_chat_response(
                 memories_used = chunk.get("memories_used", [])
     except RAGEngineError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
+
+    logger.info(
+        "[non_stream_chat_response] Final: sources_count=%d, memories_used_count=%d",
+        len(sources),
+        len(memories_used),
+    )
 
     full_content = "".join(collected_content)
 
@@ -209,6 +223,12 @@ async def chat(
     Raises:
         HTTPException: If stream=True is requested (use /chat/stream instead)
     """
+    logger.info(
+        "[chat] Request received: message_len=%d, vault_id=%s, stream=%s",
+        len(request.message),
+        request.vault_id,
+        request.stream,
+    )
     if request.stream:
         raise HTTPException(
             status_code=400,
@@ -216,9 +236,13 @@ async def chat(
         )
     if not await evaluate_policy(user, "vault", request.vault_id, "read"):
         raise HTTPException(status_code=403, detail="No read access to this vault")
-    return await non_stream_chat_response(
-        request.message, request.history, rag_engine, vault_id=request.vault_id
-    )
+    try:
+        return await non_stream_chat_response(
+            request.message, request.history, rag_engine, vault_id=request.vault_id
+        )
+    except Exception:
+        logger.exception("[chat] UNHANDLED EXCEPTION during chat processing")
+        raise
 
 
 @router.post("/chat/stream")

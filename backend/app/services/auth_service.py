@@ -36,7 +36,15 @@ def hash_password(plain_password: str) -> str:
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a password against its hash."""
     try:
+        # Try passlib first
         return pwd_context.verify(plain_password, hashed_password)
+    except Exception:
+        pass
+    # Fallback to bcrypt directly if passlib fails (handles bcrypt version issues)
+    try:
+        import bcrypt
+
+        return bcrypt.checkpw(plain_password.encode(), hashed_password.encode())
     except Exception:
         return False
 

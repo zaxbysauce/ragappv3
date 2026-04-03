@@ -200,20 +200,38 @@ async def create_vault(
     Creates a new vault with the given name and description.
     Returns 409 if a vault with the same name already exists.
     """
+    # Insert vault row — IntegrityError here means duplicate name
     try:
         cursor = await asyncio.to_thread(
             conn.execute,
             "INSERT INTO vaults (name, description) VALUES (?, ?)",
             (request.name, request.description),
         )
-        await asyncio.to_thread(conn.commit)
-        vault_id = cursor.lastrowid
-        if vault_id is None:
-            raise HTTPException(status_code=500, detail="Failed to create vault")
     except sqlite3.IntegrityError:
         raise HTTPException(
             status_code=409, detail=f"Vault with name '{request.name}' already exists"
         )
+
+    vault_id = cursor.lastrowid
+    if vault_id is None:
+        raise HTTPException(status_code=500, detail="Failed to create vault")
+
+    # Insert creator as admin member — commit both inserts atomically
+    try:
+        await asyncio.to_thread(
+            conn.execute,
+            "INSERT INTO vault_members (vault_id, user_id, permission) VALUES (?, ?, ?)",
+            (vault_id, user["id"], "admin"),
+        )
+        await asyncio.to_thread(conn.commit)
+    except sqlite3.IntegrityError as e:
+        await asyncio.to_thread(conn.rollback)
+        logger.error(
+            "Unexpected IntegrityError inserting vault_members for vault %d: %s",
+            vault_id,
+            e,
+        )
+        raise HTTPException(status_code=500, detail="Failed to assign vault membership")
 
     vault = await _fetch_vault_with_counts(conn, vault_id)
     return vault

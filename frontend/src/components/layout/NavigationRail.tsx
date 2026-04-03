@@ -67,7 +67,7 @@ export function NavigationRail({ healthStatus }: NavigationRailProps) {
   const activeItem = getActiveItem();
 
   return (
-    <nav className="w-20 min-h-screen bg-card/80 backdrop-blur-sm border-r border-border flex flex-col items-center py-6 gap-2" aria-label="Main navigation">
+    <nav className="w-20 min-h-screen bg-card border-r border-border flex flex-col items-center py-6 gap-2" aria-label="Main navigation">
       {/* App Logo */}
       <div className="mb-8 p-3 rounded-xl bg-primary/10">
         <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">

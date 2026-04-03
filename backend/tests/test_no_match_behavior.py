@@ -38,7 +38,10 @@ class TestNoMatchBehavior:
             )
             return service
 
-    def test_some_results_pass_threshold_no_match_is_false(self, retrieval_service):
+    @pytest.mark.asyncio
+    async def test_some_results_pass_threshold_no_match_is_false(
+        self, retrieval_service
+    ):
         """When some results pass threshold, no_match is False and results are returned."""
         # Input: 3 results, 2 pass threshold (distance < 0.5)
         results = [
@@ -51,7 +54,7 @@ class TestNoMatchBehavior:
             },  # exceeds threshold
         ]
 
-        output = retrieval_service.filter_relevant(results)
+        output = await retrieval_service.filter_relevant(results)
 
         # ASSERTION: no_match is False
         assert retrieval_service.no_match is False, (
@@ -69,7 +72,10 @@ class TestNoMatchBehavior:
             f"Expected correct texts, got {returned_texts}"
         )
 
-    def test_all_results_exceed_threshold_no_match_is_true(self, retrieval_service):
+    @pytest.mark.asyncio
+    async def test_all_results_exceed_threshold_no_match_is_true(
+        self, retrieval_service
+    ):
         """When ALL results exceed threshold, no_match is True and empty list returned."""
         # Input: 3 results, ALL exceed threshold (distance > 0.5)
         results = [
@@ -78,7 +84,7 @@ class TestNoMatchBehavior:
             {"text": "irrelevant doc 3", "file_id": "file3", "_distance": 0.9},
         ]
 
-        output = retrieval_service.filter_relevant(results)
+        output = await retrieval_service.filter_relevant(results)
 
         # ASSERTION: no_match is True
         assert retrieval_service.no_match is True, (
@@ -88,12 +94,13 @@ class TestNoMatchBehavior:
         assert output == [], f"Expected empty list, got {output}"
         assert len(output) == 0, f"Expected 0 results, got {len(output)}"
 
-    def test_empty_input_no_match_is_false(self, retrieval_service):
+    @pytest.mark.asyncio
+    async def test_empty_input_no_match_is_false(self, retrieval_service):
         """When input is empty, no_match is False (no results to filter)."""
         # Input: Empty list
         results = []
 
-        output = retrieval_service.filter_relevant(results)
+        output = await retrieval_service.filter_relevant(results)
 
         # ASSERTION: no_match is False (no results to filter)
         assert retrieval_service.no_match is False, (
@@ -102,13 +109,14 @@ class TestNoMatchBehavior:
         # ASSERTION: Empty list returned
         assert output == [], f"Expected empty list, got {output}"
 
-    def test_no_match_resets_to_false_on_each_call(self, retrieval_service):
+    @pytest.mark.asyncio
+    async def test_no_match_resets_to_false_on_each_call(self, retrieval_service):
         """no_match resets to False at the start of each call (idempotent)."""
         # First call: all results exceed threshold -> no_match=True
         results_all_exceed = [
             {"text": "irrelevant", "file_id": "file1", "_distance": 0.9},
         ]
-        output1 = retrieval_service.filter_relevant(results_all_exceed)
+        output1 = await retrieval_service.filter_relevant(results_all_exceed)
 
         # VERIFY: no_match is True after first call
         assert retrieval_service.no_match is True, (
@@ -120,7 +128,7 @@ class TestNoMatchBehavior:
             {"text": "relevant", "file_id": "file2", "_distance": 0.3},
             {"text": "irrelevant", "file_id": "file3", "_distance": 0.9},
         ]
-        output2 = retrieval_service.filter_relevant(results_some_pass)
+        output2 = await retrieval_service.filter_relevant(results_some_pass)
 
         # ASSERTION: no_match is False after second call (was reset)
         assert retrieval_service.no_match is False, (
@@ -129,7 +137,10 @@ class TestNoMatchBehavior:
         # ASSERTION: One result returned from second call
         assert len(output2) == 1, f"Expected 1 result, got {len(output2)}"
 
-    def test_no_match_flag_accessible_on_service_instance(self, retrieval_service):
+    @pytest.mark.asyncio
+    async def test_no_match_flag_accessible_on_service_instance(
+        self, retrieval_service
+    ):
         """The no_match flag is accessible on the service instance after filter_relevant() call."""
         # Verify initial state
         assert hasattr(retrieval_service, "no_match"), (
@@ -139,27 +150,29 @@ class TestNoMatchBehavior:
 
         # Call with all exceeding threshold
         results = [{"text": "doc", "file_id": "file1", "_distance": 0.9}]
-        retrieval_service.filter_relevant(results)
+        await retrieval_service.filter_relevant(results)
 
         # ASSERTION: Can read no_match from instance
         assert retrieval_service.no_match is True, (
             "no_match should be True and accessible"
         )
 
-    def test_no_match_false_when_zero_distance_results(self, retrieval_service):
+    @pytest.mark.asyncio
+    async def test_no_match_false_when_zero_distance_results(self, retrieval_service):
         """Results with distance=0 should pass threshold and no_match should be False."""
         results = [
             {"text": "perfect match", "file_id": "file1", "_distance": 0.0},
         ]
 
-        output = retrieval_service.filter_relevant(results)
+        output = await retrieval_service.filter_relevant(results)
 
         assert retrieval_service.no_match is False, (
             f"Expected no_match=False for distance=0, got {retrieval_service.no_match}"
         )
         assert len(output) == 1, f"Expected 1 result, got {len(output)}"
 
-    def test_no_match_true_at_threshold_boundary(self, retrieval_service):
+    @pytest.mark.asyncio
+    async def test_no_match_true_at_threshold_boundary(self, retrieval_service):
         """When distance exactly equals threshold, result is filtered out (distance > threshold)."""
         # Using threshold of 0.5, distance of 0.5 exactly should be filtered out
         results = [
@@ -170,7 +183,7 @@ class TestNoMatchBehavior:
             },  # exactly at threshold
         ]
 
-        output = retrieval_service.filter_relevant(results)
+        output = await retrieval_service.filter_relevant(results)
 
         # At threshold (0.5) with threshold 0.5: 0.5 > 0.5 is False, so it passes
         # Actually checking: should_skip = distance > threshold = 0.5 > 0.5 = False
@@ -179,7 +192,8 @@ class TestNoMatchBehavior:
             f"Expected no_match=False when distance equals threshold, got {retrieval_service.no_match}"
         )
 
-    def test_no_match_true_just_above_threshold(self, retrieval_service):
+    @pytest.mark.asyncio
+    async def test_no_match_true_just_above_threshold(self, retrieval_service):
         """When distance is just above threshold, result is filtered and no_match=True if all filtered."""
         results = [
             {
@@ -189,7 +203,7 @@ class TestNoMatchBehavior:
             },  # just above 0.5
         ]
 
-        output = retrieval_service.filter_relevant(results)
+        output = await retrieval_service.filter_relevant(results)
 
         # should_skip = distance > threshold = 0.5001 > 0.5 = True -> filtered out
         assert retrieval_service.no_match is True, (
@@ -197,13 +211,16 @@ class TestNoMatchBehavior:
         )
         assert output == [], f"Expected empty list, got {output}"
 
-    def test_single_result_below_threshold_no_match_false(self, retrieval_service):
+    @pytest.mark.asyncio
+    async def test_single_result_below_threshold_no_match_false(
+        self, retrieval_service
+    ):
         """Single result below threshold should return it and no_match=False."""
         results = [
             {"text": "only result", "file_id": "file1", "_distance": 0.1},
         ]
 
-        output = retrieval_service.filter_relevant(results)
+        output = await retrieval_service.filter_relevant(results)
 
         assert retrieval_service.no_match is False, (
             f"Expected no_match=False for single passing result, got {retrieval_service.no_match}"
@@ -211,20 +228,22 @@ class TestNoMatchBehavior:
         assert len(output) == 1, f"Expected 1 result, got {len(output)}"
         assert output[0].text == "only result"
 
-    def test_single_result_above_threshold_no_match_true(self, retrieval_service):
+    @pytest.mark.asyncio
+    async def test_single_result_above_threshold_no_match_true(self, retrieval_service):
         """Single result above threshold should return empty and no_match=True."""
         results = [
             {"text": "only result", "file_id": "file1", "_distance": 0.9},
         ]
 
-        output = retrieval_service.filter_relevant(results)
+        output = await retrieval_service.filter_relevant(results)
 
         assert retrieval_service.no_match is True, (
             f"Expected no_match=True for single failing result, got {retrieval_service.no_match}"
         )
         assert output == [], f"Expected empty list, got {output}"
 
-    def test_score_field_instead_of_distance(self, retrieval_service):
+    @pytest.mark.asyncio
+    async def test_score_field_instead_of_distance(self, retrieval_service):
         """Results using 'score' field instead of '_distance' should work correctly."""
         # When has_distance is False (no _distance key), score is used
         # and the comparison is flipped (score < threshold for skip)
@@ -241,7 +260,7 @@ class TestNoMatchBehavior:
             },  # filtered (score < threshold is False, so passes)
         ]
 
-        output = retrieval_service.filter_relevant(results)
+        output = await retrieval_service.filter_relevant(results)
 
         # With score field and no _distance: should_skip = score < threshold
         # 0.1 < 0.5 = True -> should_skip = True (filtered)
@@ -254,30 +273,32 @@ class TestNoMatchBehavior:
             f"Expected no_match=False with score field results, got {retrieval_service.no_match}"
         )
 
-    def test_no_match_resets_false_to_false(self, retrieval_service):
+    @pytest.mark.asyncio
+    async def test_no_match_resets_false_to_false(self, retrieval_service):
         """Calling with empty list after empty list keeps no_match as False."""
         # First call: empty input
-        retrieval_service.filter_relevant([])
+        await retrieval_service.filter_relevant([])
         assert retrieval_service.no_match is False, (
             "Expected no_match=False after first empty call"
         )
 
         # Second call: empty input again
-        retrieval_service.filter_relevant([])
+        await retrieval_service.filter_relevant([])
         assert retrieval_service.no_match is False, (
             f"Expected no_match=False after second empty call, got {retrieval_service.no_match}"
         )
 
-    def test_consecutive_calls_with_varying_inputs(self, retrieval_service):
+    @pytest.mark.asyncio
+    async def test_consecutive_calls_with_varying_inputs(self, retrieval_service):
         """Multiple consecutive calls with different inputs properly update no_match."""
         # Call 1: all exceed -> no_match=True
-        retrieval_service.filter_relevant(
+        await retrieval_service.filter_relevant(
             [{"text": "a", "file_id": "f1", "_distance": 0.9}]
         )
         assert retrieval_service.no_match is True, "Call 1: expected no_match=True"
 
         # Call 2: some pass -> no_match=False
-        retrieval_service.filter_relevant(
+        await retrieval_service.filter_relevant(
             [
                 {"text": "a", "file_id": "f1", "_distance": 0.3},
                 {"text": "b", "file_id": "f2", "_distance": 0.9},
@@ -286,11 +307,11 @@ class TestNoMatchBehavior:
         assert retrieval_service.no_match is False, "Call 2: expected no_match=False"
 
         # Call 3: empty -> no_match=False
-        retrieval_service.filter_relevant([])
+        await retrieval_service.filter_relevant([])
         assert retrieval_service.no_match is False, "Call 3: expected no_match=False"
 
         # Call 4: all exceed -> no_match=True
-        retrieval_service.filter_relevant(
+        await retrieval_service.filter_relevant(
             [
                 {"text": "a", "file_id": "f1", "_distance": 0.7},
                 {"text": "b", "file_id": "f2", "_distance": 0.8},

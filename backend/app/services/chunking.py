@@ -215,7 +215,7 @@ class SemanticChunker:
 
                     pending = ProcessedChunk(
                         text=merged_text,
-                        metadata={**pending.metadata, "merged": True},
+                        metadata={**pending.metadata, **chunk.metadata, "merged": True},
                         chunk_index=pending.chunk_index,
                         original_indices=original_indices,
                     )

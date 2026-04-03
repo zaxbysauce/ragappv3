@@ -131,7 +131,7 @@
       radial-gradient(circle at 20% 80%, hsl(30 40% 70% / 0.03) 0%, transparent 50%),
       radial-gradient(circle at 80% 20%, hsl(25 35% 65% / 0.03) 0%, transparent 50%);
     pointer-events: none;
-    z-index: -1;
+    z-index: -999;
   }
   
   /* Headings use Source Serif 4 */

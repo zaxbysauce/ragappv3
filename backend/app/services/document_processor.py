@@ -40,43 +40,47 @@ class ProcessedDocument:
         file_id: The database ID of the processed file
         chunks: List of processed chunks from the document
     """
+
     file_id: int
     chunks: List[ProcessedChunk]
 
 
 class DuplicateFileError(Exception):
     """Exception raised when a file with the same hash already exists and is indexed."""
+
     pass
 
 
 class DocumentProcessingError(Exception):
     """Exception raised when document processing fails due to database errors."""
+
     pass
 
 
 class DocumentParseError(Exception):
     """Exception raised when document parsing fails."""
+
     pass
 
 
 class DocumentParser:
     """
     Parser for extracting text elements from documents using unstructured.io.
-    
+
     Supports various formats: PDF, DOCX, TXT, HTML, and more.
     Uses configurable strategy from settings (default: fast for speed).
     """
-    
+
     def parse(self, file_path: str) -> List[Any]:
         """
         Parse a document and extract text elements.
-        
+
         Args:
             file_path: Path to the document file to parse.
-            
+
         Returns:
             List of extracted text elements from the document.
-            
+
         Raises:
             FileNotFoundError: If the specified file does not exist.
             DocumentParseError: If parsing fails for any reason.
@@ -85,15 +89,14 @@ class DocumentParser:
         path = Path(file_path)
         if not path.exists():
             raise FileNotFoundError(f"Document file not found: {file_path}")
-        
+
         if not path.is_file():
             raise FileNotFoundError(f"Path is not a file: {file_path}")
-        
+
         try:
             # Use unstructured with configured strategy from settings
             elements = partition(
-                filename=str(path),
-                strategy=settings.document_parsing_strategy
+                filename=str(path), strategy=settings.document_parsing_strategy
             )
             return elements
         except Exception as e:
@@ -112,7 +115,7 @@ class DocumentProcessor:
     """
 
     # File extensions that should use SchemaParser instead of DocumentParser
-    SCHEMA_EXTENSIONS = {'.sql', '.ddl'}
+    SCHEMA_EXTENSIONS = {".sql", ".ddl"}
 
     def __init__(
         self,
@@ -120,7 +123,7 @@ class DocumentProcessor:
         chunk_overlap_chars: int = 200,
         vector_store: Optional[VectorStore] = None,
         embedding_service: Optional[EmbeddingService] = None,
-        pool: Optional['SQLiteConnectionPool'] = None,
+        pool: Optional["SQLiteConnectionPool"] = None,
         llm_client: Optional[LLMClient] = None,
         contextual_chunker: Optional[ContextualChunker] = None,
     ):
@@ -138,8 +141,7 @@ class DocumentProcessor:
         """
         self.parser = DocumentParser()
         self.chunker = SemanticChunker(
-            chunk_size_chars=chunk_size_chars,
-            chunk_overlap_chars=chunk_overlap_chars
+            chunk_size_chars=chunk_size_chars, chunk_overlap_chars=chunk_overlap_chars
         )
         self.schema_parser = SchemaParser()
         # Fallback to creating a pool from settings if not provided
@@ -168,8 +170,12 @@ class DocumentProcessor:
             self._contextual_chunker = ContextualChunker(self._llm_client)
         return self._contextual_chunker
 
-    @with_retry(max_attempts=3, retry_exceptions=(sqlite3.Error,), raise_last_exception=True)
-    def _check_duplicate(self, file_hash: str, conn: sqlite3.Connection, vault_id: int = 1) -> Optional[sqlite3.Row]:
+    @with_retry(
+        max_attempts=3, retry_exceptions=(sqlite3.Error,), raise_last_exception=True
+    )
+    def _check_duplicate(
+        self, file_hash: str, conn: sqlite3.Connection, vault_id: int = 1
+    ) -> Optional[sqlite3.Row]:
         """
         Check if a file with the given hash already exists and is indexed.
 
@@ -183,18 +189,20 @@ class DocumentProcessor:
         """
         cursor = conn.execute(
             "SELECT * FROM files WHERE file_hash = ? AND vault_id = ? AND status = 'indexed'",
-            (file_hash, vault_id)
+            (file_hash, vault_id),
         )
         return cursor.fetchone()
 
-    @with_retry(max_attempts=3, retry_exceptions=(sqlite3.Error,), raise_last_exception=True)
+    @with_retry(
+        max_attempts=3, retry_exceptions=(sqlite3.Error,), raise_last_exception=True
+    )
     def _insert_or_get_file_record(
         self,
         file_path: str,
         file_hash: str,
         conn: sqlite3.Connection,
         vault_id: int = 1,
-        source: str = 'upload',
+        source: str = "upload",
         email_subject: Optional[str] = None,
         email_sender: Optional[str] = None,
     ) -> int:
@@ -226,14 +234,13 @@ class DocumentProcessor:
         try:
             # Check if file record already exists by path
             cursor = conn.execute(
-                "SELECT id FROM files WHERE file_path = ?",
-                (path_str,)
+                "SELECT id FROM files WHERE file_path = ?", (path_str,)
             )
             existing = cursor.fetchone()
 
             if existing:
                 # Validate existing row id
-                existing_id = existing['id']
+                existing_id = existing["id"]
                 if existing_id is None:
                     raise DocumentProcessingError(
                         f"Existing file record for '{path_str}' has invalid NULL id"
@@ -248,7 +255,17 @@ class DocumentProcessor:
                            status = 'pending', error_message = NULL,
                            modified_at = ?, processed_at = NULL
                        WHERE id = ?""",
-                    (file_hash, file_size, file_type, vault_id, source, email_subject, email_sender, now, file_id)
+                    (
+                        file_hash,
+                        file_size,
+                        file_type,
+                        vault_id,
+                        source,
+                        email_subject,
+                        email_sender,
+                        now,
+                        file_id,
+                    ),
                 )
             else:
                 # Insert new record
@@ -257,7 +274,19 @@ class DocumentProcessor:
                        (file_path, file_name, file_hash, file_size, file_type, vault_id,
                         source, email_subject, email_sender, status, created_at, modified_at)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)""",
-                    (path_str, file_name, file_hash, file_size, file_type, vault_id, source, email_subject, email_sender, now, now)
+                    (
+                        path_str,
+                        file_name,
+                        file_hash,
+                        file_size,
+                        file_type,
+                        vault_id,
+                        source,
+                        email_subject,
+                        email_sender,
+                        now,
+                        now,
+                    ),
                 )
                 lastrowid = cursor.lastrowid
                 if lastrowid is None:
@@ -277,14 +306,16 @@ class DocumentProcessor:
                 f"Database error while inserting/updating file record for '{path_str}': {str(e)}"
             ) from e
 
-    @with_retry(max_attempts=3, retry_exceptions=(sqlite3.Error,), raise_last_exception=True)
+    @with_retry(
+        max_attempts=3, retry_exceptions=(sqlite3.Error,), raise_last_exception=True
+    )
     def _update_status(
         self,
         file_id: int,
         status: str,
         conn: sqlite3.Connection,
         chunk_count: Optional[int] = None,
-        error_message: Optional[str] = None
+        error_message: Optional[str] = None,
     ) -> None:
         """
         Update the processing status of a file.
@@ -301,26 +332,26 @@ class DocumentProcessor:
         """
         now = datetime.now(UTC).isoformat()
 
-        if status == 'indexed':
+        if status == "indexed":
             conn.execute(
                 """UPDATE files
                    SET status = ?, chunk_count = ?, processed_at = ?, modified_at = ?
                    WHERE id = ?""",
-                (status, chunk_count, now, now, file_id)
+                (status, chunk_count, now, now, file_id),
             )
-        elif status == 'error':
+        elif status == "error":
             conn.execute(
                 """UPDATE files
                    SET status = ?, error_message = ?, modified_at = ?
                    WHERE id = ?""",
-                (status, error_message, now, file_id)
+                (status, error_message, now, file_id),
             )
         else:
             conn.execute(
                 """UPDATE files
                    SET status = ?, modified_at = ?
                    WHERE id = ?""",
-                (status, now, file_id)
+                (status, now, file_id),
             )
         # Note: No commit here - caller manages transactions
 
@@ -351,23 +382,21 @@ class DocumentProcessor:
         processed_chunks = []
         for idx, chunk_data in enumerate(schema_chunks):
             chunk = ProcessedChunk(
-                text=chunk_data['text'],
+                text=chunk_data["text"],
                 metadata={
-                    **chunk_data['metadata'],
-                    'chunk_index': idx,
-                    'total_chunks': len(schema_chunks),
-                    'chunk_scale': 'default'  # Schema files don't use multi-scale
+                    **chunk_data["metadata"],
+                    "chunk_index": idx,
+                    "total_chunks": len(schema_chunks),
+                    "chunk_scale": "default",  # Schema files don't use multi-scale
                 },
-                chunk_index=idx
+                chunk_index=idx,
             )
             processed_chunks.append(chunk)
 
         return processed_chunks
 
     async def _process_document_file(
-        self,
-        file_path: str,
-        file_id: Optional[int] = None
+        self, file_path: str, file_id: Optional[int] = None
     ) -> Tuple[List[ProcessedChunk], str]:
         """
         Process a document file using DocumentParser and SemanticChunker.
@@ -386,7 +415,7 @@ class DocumentProcessor:
         # Check if multi-scale indexing is enabled
         if settings.multi_scale_indexing_enabled:
             # Parse chunk sizes from settings
-            scale_strs = settings.multi_scale_chunk_sizes.split(',')
+            scale_strs = settings.multi_scale_chunk_sizes.split(",")
             scales = [int(s.strip()) for s in scale_strs if s.strip()]
 
             all_chunks = []
@@ -394,19 +423,20 @@ class DocumentProcessor:
                 # Create chunker for this scale
                 chunk_overlap = int(scale * settings.multi_scale_overlap_ratio)
                 scale_chunker = SemanticChunker(
-                    chunk_size_chars=scale,
-                    chunk_overlap_chars=chunk_overlap
+                    chunk_size_chars=scale, chunk_overlap_chars=chunk_overlap
                 )
 
                 # Chunk elements with this scale's chunker
-                scale_chunks = await asyncio.to_thread(scale_chunker.chunk_elements, elements)
+                scale_chunks = await asyncio.to_thread(
+                    scale_chunker.chunk_elements, elements
+                )
 
                 # Add chunk_scale metadata to each chunk
                 for idx, chunk in enumerate(scale_chunks):
-                    chunk.metadata['chunk_scale'] = str(scale)
+                    chunk.metadata["chunk_scale"] = str(scale)
                     # Use scale-aware index format for multi-scale
                     if file_id is not None:
-                        chunk.metadata['chunk_index'] = f"{scale}_{idx}"
+                        chunk.metadata["chunk_index"] = f"{scale}_{idx}"
 
                 all_chunks.extend(scale_chunks)
 
@@ -415,7 +445,7 @@ class DocumentProcessor:
             logger.info(
                 "Multi-scale chunking processed %d chunks across scales %s",
                 total_chunks,
-                scale_list
+                scale_list,
             )
 
             return all_chunks, document_text
@@ -428,7 +458,7 @@ class DocumentProcessor:
         self,
         file_path: str,
         vault_id: int = 1,
-        source: str = 'upload',
+        source: str = "upload",
         email_subject: Optional[str] = None,
         email_sender: Optional[str] = None,
     ) -> ProcessedDocument:
@@ -473,11 +503,17 @@ class DocumentProcessor:
 
             # Insert or get file record (handles its own commit)
             file_id = self._insert_or_get_file_record(
-                file_path, file_hash, conn, vault_id, source, email_subject, email_sender
+                file_path,
+                file_hash,
+                conn,
+                vault_id,
+                source,
+                email_subject,
+                email_sender,
             )
 
             # Update status to processing
-            self._update_status(file_id, 'processing', conn)
+            self._update_status(file_id, "processing", conn)
             conn.commit()
         finally:
             # Release connection before long-running operations
@@ -490,7 +526,9 @@ class DocumentProcessor:
                 chunks = await self._process_schema_file(file_path)
                 document_text = ""
             else:
-                chunks, document_text = await self._process_document_file(file_path, file_id)
+                chunks, document_text = await self._process_document_file(
+                    file_path, file_id
+                )
 
             # Apply contextual chunking if enabled
             if settings.contextual_chunking_enabled and chunks and document_text:
@@ -500,24 +538,24 @@ class DocumentProcessor:
                     logger.info(
                         "Contextual chunking: processing %d chunks for %s",
                         len(chunks),
-                        source_filename
+                        source_filename,
                     )
                     try:
                         await chunker.contextualize_chunks(
                             document_text=document_text,
                             chunks=chunks,
-                            source_filename=source_filename
+                            source_filename=source_filename,
                         )
                         logger.info(
                             "Contextual chunking: completed for %s (%d chunks contextualized)",
                             source_filename,
-                            len(chunks)
+                            len(chunks),
                         )
                     except Exception as e:
                         logger.warning(
                             "Contextual chunking failed for %s: %s",
                             source_filename,
-                            str(e)
+                            str(e),
                         )
                 # else: _get_contextual_chunker already logged a warning if needed
 
@@ -527,11 +565,15 @@ class DocumentProcessor:
                 if chunks:
                     # Extract texts from chunks
                     texts = [c.text for c in chunks]
-                    
+
                     # Check if tri-vector embeddings are supported
-                    use_tri_vector = await self.embedding_service.detect_tri_vector_support()
+                    use_tri_vector = (
+                        await self.embedding_service.detect_tri_vector_support()
+                    )
                     if use_tri_vector:
-                        logger.info("Tri-vector embedding enabled: generating dense + sparse vectors")
+                        logger.info(
+                            "Tri-vector embedding enabled: generating dense + sparse vectors"
+                        )
                         # Generate tri-vector embeddings (dense + sparse + colbert)
                         tri_vectors = await self.embedding_service.embed_multi(texts)
                         # Validate tri-vectors count matches chunks count
@@ -545,7 +587,7 @@ class DocumentProcessor:
                         # Generate standard embeddings (dense only)
                         embeddings = await self.embedding_service.embed_batch(texts)
                         sparse_embeddings = [None] * len(chunks)
-                    
+
                     # Validate embeddings count matches chunks count
                     if len(embeddings) != len(chunks):
                         raise DocumentProcessingError(
@@ -558,54 +600,73 @@ class DocumentProcessor:
                         )
                     # Map chunks to records for vector store
                     records = []
-                    for chunk, embedding, sparse_emb in zip(chunks, embeddings, sparse_embeddings):
+                    for chunk, embedding, sparse_emb in zip(
+                        chunks, embeddings, sparse_embeddings
+                    ):
                         # Determine chunk_scale from metadata (set during chunking)
-                        chunk_scale = chunk.metadata.get('chunk_scale', 'default')
+                        chunk_scale = chunk.metadata.get("chunk_scale", "default")
 
                         # Create chunk_uid for windowing support
                         # Use scale-aware format when multi-scale indexing is enabled
-                        if settings.multi_scale_indexing_enabled and chunk_scale != 'default':
+                        if (
+                            settings.multi_scale_indexing_enabled
+                            and chunk_scale != "default"
+                        ):
                             # Multi-scale: format is {file_id}_{scale}_{index}
-                            chunk_index_value = chunk.metadata.get('chunk_index', chunk.chunk_index)
-                            if isinstance(chunk_index_value, str) and '_' in chunk_index_value:
+                            chunk_index_value = chunk.metadata.get(
+                                "chunk_index", chunk.chunk_index
+                            )
+                            if (
+                                isinstance(chunk_index_value, str)
+                                and "_" in chunk_index_value
+                            ):
                                 # Already formatted as scale_index from _process_document_file
                                 chunk_uid = f"{file_id}_{chunk_index_value}"
                             else:
-                                chunk_uid = f"{file_id}_{chunk_scale}_{chunk.chunk_index}"
+                                chunk_uid = (
+                                    f"{file_id}_{chunk_scale}_{chunk.chunk_index}"
+                                )
                         else:
                             # Standard format: {file_id}_{index}
                             chunk_uid = f"{file_id}_{chunk.chunk_index}"
-                        
+
                         # Add chunk_uid to metadata for adjacent chunk lookups
                         chunk_metadata = chunk.metadata.copy()
-                        chunk_metadata['chunk_uid'] = chunk_uid
-                        chunk_metadata['file_id'] = str(file_id)
-                        chunk_metadata['chunk_count'] = chunk.metadata.get('total_chunks', len(chunks))
+                        chunk_metadata["chunk_uid"] = chunk_uid
+                        chunk_metadata["file_id"] = str(file_id)
+                        chunk_metadata["chunk_count"] = chunk.metadata.get(
+                            "total_chunks", len(chunks)
+                        )
                         # Ensure chunk_scale is included in metadata
-                        chunk_metadata['chunk_scale'] = chunk_scale
-                        
+                        chunk_metadata["chunk_scale"] = chunk_scale
+
                         record = {
                             "id": chunk_uid,
                             "text": chunk.text,
                             "file_id": str(file_id),
                             "chunk_index": chunk.chunk_index,
                             "vault_id": str(vault_id),
+                            "chunk_scale": chunk_scale,
                             "metadata": json.dumps(chunk_metadata),
-                            "embedding": embedding
+                            "embedding": embedding,
                         }
                         # Add sparse embedding if available (tri-vector mode)
                         if sparse_emb is not None:
                             try:
                                 record["sparse_embedding"] = json.dumps(sparse_emb)
                             except (TypeError, ValueError) as e:
-                                logger.warning(f"Failed to serialize sparse embedding: {e}")
+                                logger.warning(
+                                    f"Failed to serialize sparse embedding: {e}"
+                                )
                                 record["sparse_embedding"] = None
                         records.append(record)
-                    
+
                     # Log tri-vector usage
                     if use_tri_vector:
-                        logger.info(f"Tri-vector embedding: stored {len(records)} chunks with sparse vectors")
-                    
+                        logger.info(
+                            f"Tri-vector embedding: stored {len(records)} chunks with sparse vectors"
+                        )
+
                     # Initialize vector table with embedding dimension and add chunks
                     embedding_dim = len(embeddings[0])
                     await self.vector_store.init_table(embedding_dim)
@@ -615,7 +676,7 @@ class DocumentProcessor:
             # Get connection again to update error status
             conn = self.pool.get_connection()
             try:
-                self._update_status(file_id, 'error', conn, error_message=str(e))
+                self._update_status(file_id, "error", conn, error_message=str(e))
                 conn.commit()
             finally:
                 self.pool.release_connection(conn)
@@ -624,7 +685,7 @@ class DocumentProcessor:
         # Phase 3: Final DB operations - update status to indexed
         conn = self.pool.get_connection()
         try:
-            self._update_status(file_id, 'indexed', conn, chunk_count=len(chunks))
+            self._update_status(file_id, "indexed", conn, chunk_count=len(chunks))
             conn.commit()
         finally:
             self.pool.release_connection(conn)

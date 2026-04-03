@@ -83,7 +83,7 @@ class DocumentRetrievalService:
             False  # Flag set when all results exceed distance threshold
         )
 
-    def filter_relevant(
+    async def filter_relevant(
         self,
         results: List[Dict[str, Any]],
         top_k: Optional[int] = None,
@@ -176,7 +176,7 @@ class DocumentRetrievalService:
 
         # Apply window expansion if enabled
         if self.retrieval_window > 0:
-            sources = self.expand_window(sources)
+            sources = await self.expand_window(sources)
 
         # When all results exceed threshold, signal no_match instead of returning top-k
         if input_count > 0 and len(sources) == 0:
@@ -191,7 +191,7 @@ class DocumentRetrievalService:
         logger.debug("Filtering complete: %d results returned", len(sources))
         return sources
 
-    def expand_window(self, sources: List[RAGSource]) -> List[RAGSource]:
+    async def expand_window(self, sources: List[RAGSource]) -> List[RAGSource]:
         """Expand search results by fetching adjacent chunks (N±window).
 
         Args:
@@ -247,7 +247,9 @@ class DocumentRetrievalService:
 
         # Fetch adjacent chunks from vector store
         if chunk_uids_to_fetch:
-            adjacent_chunks = self.vector_store.get_chunks_by_uid(chunk_uids_to_fetch)
+            adjacent_chunks = await self.vector_store.get_chunks_by_uid(
+                chunk_uids_to_fetch
+            )
 
             adjacent_lookup: Dict[str, Dict[str, Any]] = {}
             for chunk in adjacent_chunks:

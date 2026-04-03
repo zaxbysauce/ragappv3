@@ -529,10 +529,10 @@ export function SessionItem({
 
       {/* Delete Confirmation Dialog */}
       <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
-        <DialogContent>
+        <DialogContent aria-labelledby="delete-session-title" aria-describedby="delete-session-desc">
           <DialogHeader>
-            <DialogTitle>Delete Session</DialogTitle>
-            <DialogDescription>
+            <DialogTitle id="delete-session-title">Delete Session</DialogTitle>
+            <DialogDescription id="delete-session-desc">
               Are you sure you want to delete &quot;{displayTitle}&quot;? This action cannot
               be undone.
             </DialogDescription>

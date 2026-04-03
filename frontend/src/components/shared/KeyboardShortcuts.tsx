@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -40,12 +41,15 @@ export function useKeyboardShortcuts() {
 export function KeyboardShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-md" aria-labelledby="keyboard-shortcuts-title" aria-describedby="keyboard-shortcuts-desc">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
+          <DialogTitle id="keyboard-shortcuts-title" className="flex items-center gap-2">
             <Keyboard className="w-5 h-5" />
             Keyboard Shortcuts
           </DialogTitle>
+          <DialogDescription id="keyboard-shortcuts-desc">
+            Available keyboard shortcuts for quick navigation
+          </DialogDescription>
         </DialogHeader>
         <dl className="space-y-3 mt-4">
           {shortcuts.map(({ key, description }) => (

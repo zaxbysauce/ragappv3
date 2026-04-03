@@ -34,7 +34,7 @@ export function MobileBottomNav({ activeItem, onItemSelect }: MobileBottomNavPro
   const [moreOpen, setMoreOpen] = useState(false);
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 bg-card/95 backdrop-blur-sm border-t border-border z-50 md:hidden" aria-label="Mobile navigation">
+    <nav className="fixed bottom-0 left-0 right-0 bg-card border-t border-border z-50 md:hidden" aria-label="Mobile navigation">
       <div className="flex items-center justify-around px-2 py-2" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
         {/* Primary Tabs */}
         {primaryNavItems.map((item) => {

@@ -21,10 +21,10 @@ export function ClearChatDialog({
 }: ClearChatDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent aria-labelledby="clear-chat-title" aria-describedby="clear-chat-desc">
         <DialogHeader>
-          <DialogTitle>Clear Chat</DialogTitle>
-          <DialogDescription>
+          <DialogTitle id="clear-chat-title">Clear Chat</DialogTitle>
+          <DialogDescription id="clear-chat-desc">
             Are you sure you want to clear this conversation? This action cannot be undone.
           </DialogDescription>
         </DialogHeader>

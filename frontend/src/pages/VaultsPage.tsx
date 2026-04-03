@@ -216,13 +216,13 @@ export default function VaultsPage() {
 
       {/* Create Dialog */}
       <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Create New Vault</DialogTitle>
-            <DialogDescription>
-              Add a new knowledge vault to organize your documents and memories.
-            </DialogDescription>
-          </DialogHeader>
+<DialogContent aria-labelledby="create-vault-title" aria-describedby="create-vault-desc">
+        <DialogHeader>
+          <DialogTitle id="create-vault-title">Create New Vault</DialogTitle>
+          <DialogDescription id="create-vault-desc">
+            Add a new knowledge vault to organize your documents and memories.
+          </DialogDescription>
+        </DialogHeader>
           <div className="space-y-4">
             <div>
               <Input
@@ -259,13 +259,13 @@ export default function VaultsPage() {
 
       {/* Edit Dialog */}
       <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Edit Vault</DialogTitle>
-            <DialogDescription>
-              Update vault name or description.
-            </DialogDescription>
-          </DialogHeader>
+<DialogContent aria-labelledby="edit-vault-title" aria-describedby="edit-vault-desc">
+        <DialogHeader>
+          <DialogTitle id="edit-vault-title">Edit Vault</DialogTitle>
+          <DialogDescription id="edit-vault-desc">
+            Update vault name or description.
+          </DialogDescription>
+        </DialogHeader>
           <div className="space-y-4">
             <div>
               <Input
@@ -302,13 +302,13 @@ export default function VaultsPage() {
 
       {/* Delete Confirmation Dialog */}
       <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete Vault</DialogTitle>
-            <DialogDescription>
-              Are you sure you want to delete "{selectedVault?.name}"? This will permanently delete all documents, memories, and chat sessions in this vault. This action cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
+<DialogContent aria-labelledby="delete-vault-title" aria-describedby="delete-vault-desc">
+        <DialogHeader>
+          <DialogTitle id="delete-vault-title">Delete Vault</DialogTitle>
+          <DialogDescription id="delete-vault-desc">
+            Are you sure you want to delete "{selectedVault?.name}"? This will permanently delete all documents, memories, and chat sessions in this vault. This action cannot be undone.
+          </DialogDescription>
+        </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteDialogOpen(false)}>
               Cancel
