@@ -35,6 +35,7 @@ export function useSendMessage(
     sendingRef.current = true;
     if (currentInput.length > MAX_INPUT_LENGTH) {
       setInputError(`Input exceeds maximum length of ${MAX_INPUT_LENGTH} characters`);
+      sendingRef.current = false;
       return;
     }
 
@@ -54,6 +55,7 @@ export function useSendMessage(
       } catch (err) {
         console.error("Failed to create chat session:", err);
         setInputError("Failed to start chat session. Please check your connection.");
+        sendingRef.current = false;
         return;
       }
     }

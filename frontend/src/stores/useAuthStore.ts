@@ -38,7 +38,7 @@ interface AuthState {
   fetchMe: () => Promise<void>;
   checkSetupStatus: () => Promise<void>;
   setAuthMode: (mode: "jwt" | "apikey") => void;
-  updateProfile: (data: { full_name?: string; password?: string }) => Promise<void>;
+  updateProfile: (data: { full_name?: string }) => Promise<void>;
   init: () => Promise<void>;
 
   // Internal
@@ -295,7 +295,7 @@ export const useAuthStore = create<AuthState>()(
         }
       },
 
-      updateProfile: async (data: { full_name?: string; password?: string }) => {
+      updateProfile: async (data: { full_name?: string }) => {
         get()._setLoading(true);
         try {
           const token = get().accessToken || getJwtAccessToken();
@@ -327,12 +327,6 @@ export const useAuthStore = create<AuthState>()(
     }
   )
 );
-
-// Auto-sync: when store hydrates from persist, sync token to api.ts
-const initialState = useAuthStore.getState();
-if (initialState.accessToken) {
-  setJwtAccessToken(initialState.accessToken);
-}
 
 // Subscribe to token changes to keep api.ts in sync
 useAuthStore.subscribe((state, prevState) => {
