@@ -14,12 +14,57 @@ export function getJwtAccessToken(): string | null {
   return _jwtAccessToken;
 }
 
+// Read CSRF token from the non-httpOnly cookie set by the server
+function getCsrfCookie(): string | null {
+  const match = document.cookie
+    .split('; ')
+    .find(row => row.startsWith('X-CSRF-Token='));
+  // Use split with limit=2 so token values containing '=' (base64 padding) are preserved
+  return match ? decodeURIComponent(match.split('=', 2)[1]) : null;
+}
+
+// Singleton refresh promise — ensures only one /auth/refresh call is in flight
+// at a time. Concurrent 401s share the same promise so the refresh cookie is
+// not rotated twice (which would invalidate the second caller's session).
+let _refreshInFlight: Promise<string | null> | null = null;
+
 // Standalone refresh function to avoid circular dependencies
 async function refreshAccessToken(): Promise<string | null> {
+  if (_refreshInFlight) {
+    return _refreshInFlight;
+  }
+  _refreshInFlight = _doRefresh().finally(() => {
+    _refreshInFlight = null;
+  });
+  return _refreshInFlight;
+}
+
+async function _doRefresh(): Promise<string | null> {
   try {
+    // The /auth/refresh endpoint requires the CSRF token.
+    // Read it from the non-httpOnly cookie; if missing, fetch a fresh one.
+    let csrfToken = getCsrfCookie();
+    if (!csrfToken) {
+      try {
+        const csrfResp = await fetch(`${API_BASE_URL}/csrf-token`, { credentials: "include" });
+        if (csrfResp.ok) {
+          const csrfData = await csrfResp.json();
+          csrfToken = csrfData.csrf_token ?? null;
+        }
+      } catch {
+        // proceed without CSRF — server will reject if required
+      }
+    }
+
+    const headers: Record<string, string> = {};
+    if (csrfToken) {
+      headers["X-CSRF-Token"] = csrfToken;
+    }
+
     const response = await fetch(`${API_BASE_URL}/auth/refresh`, {
       method: "POST",
       credentials: "include", // Send httpOnly cookie with refresh token
+      headers,
     });
     if (!response.ok) return null;
     const data = await response.json();
