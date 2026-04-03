@@ -16,7 +16,7 @@ router = APIRouter(prefix="/organizations", tags=["organizations"])
 
 class OrganizationCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
-    description: str = Field(default="", max_length=1000)
+    description: Optional[str] = Field(default="", max_length=1000)
 
 
 class OrganizationUpdateRequest(BaseModel):
@@ -123,7 +123,7 @@ async def create_organization(
             cursor = conn.execute(
                 """INSERT INTO organizations (name, description, slug, created_by)
                    VALUES (?, ?, ?, ?)""",
-                (req.name, req.description, slug, user["id"]),
+                (req.name, req.description or "", slug, user["id"]),
             )
             org_id = cursor.lastrowid
 

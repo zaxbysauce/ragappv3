@@ -62,8 +62,23 @@ if (
         'Generate a secure key with: python -c "import secrets; print(secrets.token_urlsafe(48))"'
     )
 
-# Configure CORS
+# Middleware is applied in reverse order of add_middleware calls:
+# last added = outermost (first to see request, last to modify response).
+# CORSMiddleware MUST be outermost so CORS headers are always present,
+# even on error responses from inner middleware.
 app.add_middleware(LoggingMiddleware)
+# Note: MaintenanceMiddleware is initialized with a lazy getter since
+# maintenance_service is only available after lifespan startup
+app.state._maintenance_service_getter = lambda: getattr(
+    app.state, "maintenance_service", None
+)
+app.add_middleware(
+    MaintenanceMiddleware, service_getter=app.state._maintenance_service_getter
+)
+# Set up rate limiting
+app.state.limiter = limiter
+app.add_middleware(SlowAPIMiddleware)
+# CORSMiddleware outermost — ensures CORS headers on all responses
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.backend_cors_origins,
@@ -79,18 +94,6 @@ if "*" in settings.backend_cors_origins:
         "This configuration is insecure and will be rejected by browsers. "
         "Set BACKEND_CORS_ORIGINS to specific origins (e.g., http://localhost:5173)."
     )
-
-# Set up rate limiting
-app.state.limiter = limiter
-app.add_middleware(SlowAPIMiddleware)
-# Note: MaintenanceMiddleware is initialized with a lazy getter since
-# maintenance_service is only available after lifespan startup
-app.state._maintenance_service_getter = lambda: getattr(
-    app.state, "maintenance_service", None
-)
-app.add_middleware(
-    MaintenanceMiddleware, service_getter=app.state._maintenance_service_getter
-)
 
 app.include_router(health_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")

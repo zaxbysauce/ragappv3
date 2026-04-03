@@ -144,7 +144,7 @@ def get_csrf_manager(request: Request) -> CSRFManager:
 
 def require_scope(scope: str) -> Callable:
     def dependency(
-        authorization: str = Header(None),
+        authorization: str | None = Header(None),
         x_scopes: str = Header(""),
     ) -> dict[str, str]:
         if not authorization:
@@ -192,7 +192,7 @@ def issue_csrf_token(response: Response, csrf_manager: CSRFManager) -> str:
 
 
 def require_auth(
-    authorization: str = Header(None),
+    authorization: str | None = Header(None),
 ) -> dict:
     """Simple Bearer token auth. Requires valid token when admin_secret_token is configured."""
     # Authentication is always required - check if token is configured

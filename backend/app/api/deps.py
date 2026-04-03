@@ -120,7 +120,7 @@ def get_email_service(request: Request) -> EmailIngestionService:
 
 
 async def get_current_active_user(
-    authorization: str = Header(None),
+    authorization: str | None = Header(None),
     access_token: str | None = Cookie(None),
     db: sqlite3.Connection = Depends(get_db),
 ) -> dict:

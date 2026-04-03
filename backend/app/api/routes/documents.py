@@ -91,7 +91,7 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 
 
 async def _optional_current_user(
-    authorization: str = Header(None),
+    authorization: str | None = Header(None),
     db: sqlite3.Connection = Depends(get_db),
 ) -> dict | None:
     """Try to get JWT user, return None if auth is disabled or token invalid."""
