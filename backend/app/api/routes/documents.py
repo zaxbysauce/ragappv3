@@ -297,22 +297,33 @@ def _row_to_document_response(row: sqlite3.Row) -> DocumentResponse:
 @router.get("/", response_model=DocumentListResponse)
 async def list_documents(
     vault_id: Optional[int] = Query(None, description="Filter by vault ID"),
+    page: int = Query(1, ge=1, description="Page number (1-indexed)"),
+    per_page: int = Query(50, ge=1, le=200, description="Items per page"),
     conn: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_active_user),
     evaluate: Callable = Depends(get_evaluate_policy),
 ):
     """
-    List all documents from the files table.
+    List documents from the files table with pagination.
 
-    Returns a list of all files with their id, file_name, file_path, status,
+    Returns a list of files with their id, file_name, file_path, status,
     chunk_count, created_at, and processed_at fields.
-    Optionally filter by vault_id.
+    Optionally filter by vault_id. Supports pagination via page/per_page.
     """
+    offset = (page - 1) * per_page
+
     # Check vault permissions
     if vault_id is not None:
         if not await evaluate(user, "vault", vault_id, "read"):
             raise HTTPException(status_code=403, detail="Access denied to vault")
-        # Query with specific vault_id
+        # Count total
+        count_cursor = await asyncio.to_thread(
+            conn.execute,
+            "SELECT COUNT(*) FROM files WHERE vault_id = ?",
+            (vault_id,),
+        )
+        total = (await asyncio.to_thread(count_cursor.fetchone))[0]
+        # Query with specific vault_id + pagination
         cursor = await asyncio.to_thread(
             conn.execute,
             """
@@ -320,8 +331,9 @@ async def list_documents(
             FROM files
             WHERE vault_id = ?
             ORDER BY created_at DESC
+            LIMIT ? OFFSET ?
             """,
-            (vault_id,),
+            (vault_id, per_page, offset),
         )
     else:
         # For non-admins without vault_id, get accessible vaults
@@ -329,8 +341,15 @@ async def list_documents(
             accessible_vaults = get_user_accessible_vault_ids(user, conn)
             if not accessible_vaults:
                 return DocumentListResponse(documents=[], total=0)
-            # Query with vault_id IN clause
             placeholders = ",".join("?" * len(accessible_vaults))
+            # Count total
+            count_cursor = await asyncio.to_thread(
+                conn.execute,
+                f"SELECT COUNT(*) FROM files WHERE vault_id IN ({placeholders})",
+                tuple(accessible_vaults),
+            )
+            total = (await asyncio.to_thread(count_cursor.fetchone))[0]
+            # Query with vault_id IN clause + pagination
             cursor = await asyncio.to_thread(
                 conn.execute,
                 f"""
@@ -338,24 +357,32 @@ async def list_documents(
                 FROM files
                 WHERE vault_id IN ({placeholders})
                 ORDER BY created_at DESC
+                LIMIT ? OFFSET ?
                 """,
-                tuple(accessible_vaults),
+                tuple(accessible_vaults) + (per_page, offset),
             )
         else:
             # Admins can see all documents
+            count_cursor = await asyncio.to_thread(
+                conn.execute,
+                "SELECT COUNT(*) FROM files",
+            )
+            total = (await asyncio.to_thread(count_cursor.fetchone))[0]
             cursor = await asyncio.to_thread(
                 conn.execute,
                 """
                 SELECT id, file_name, file_path, status, chunk_count, file_size, created_at, processed_at
                 FROM files
                 ORDER BY created_at DESC
+                LIMIT ? OFFSET ?
                 """,
+                (per_page, offset),
             )
     rows = await asyncio.to_thread(cursor.fetchall)
 
     documents = [_row_to_document_response(row) for row in rows]
 
-    return DocumentListResponse(documents=documents, total=len(documents))
+    return DocumentListResponse(documents=documents, total=total)
 
 
 @router.get("/stats", response_model=DocumentStatsResponse)

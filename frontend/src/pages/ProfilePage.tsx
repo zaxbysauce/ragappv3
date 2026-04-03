@@ -1,11 +1,11 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import { useAuthStore } from "@/stores/useAuthStore";
+import { changePassword } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
 import { User, Lock, Loader2, Save } from "lucide-react";
 
 type UserRole = "superadmin" | "admin" | "member" | "viewer";
@@ -65,13 +65,14 @@ function ProfilePageContent() {
     
     setChangingPassword(true);
     try {
-      await updateProfile({ password: newPassword });
+      await changePassword(currentPassword, newPassword);
       toast.success("Password changed successfully");
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
-    } catch (err) {
-      toast.error("Failed to change password");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to change password";
+      toast.error(message);
     } finally {
       setChangingPassword(false);
     }
@@ -171,10 +172,7 @@ function ProfilePageContent() {
   );
 }
 
+// Route-level ProtectedRoute in App.tsx already handles auth guard
 export default function ProfilePage() {
-  return (
-    <ProtectedRoute>
-      <ProfilePageContent />
-    </ProtectedRoute>
-  );
+  return <ProfilePageContent />;
 }

@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import { chatStream, createChatSession, addChatMessage, type ChatMessage } from "@/lib/api";
 import { useChatStore } from "@/stores/useChatStore";
 
@@ -25,9 +25,14 @@ export function useSendMessage(
     updateMessage,
   } = useChatStore();
 
+  // H-4 fix: Atomic guard to prevent double-send on rapid clicks
+  const sendingRef = useRef(false);
+
   const handleSend = useCallback(async () => {
+    if (sendingRef.current) return;
     const { input: currentInput, isStreaming: currentIsStreaming } = useChatStore.getState();
     if (!currentInput.trim() || currentIsStreaming) return;
+    sendingRef.current = true;
     if (currentInput.length > MAX_INPUT_LENGTH) {
       setInputError(`Input exceeds maximum length of ${MAX_INPUT_LENGTH} characters`);
       return;
@@ -74,6 +79,11 @@ export function useSendMessage(
       { role: "user", content: userMessage.content },
     ];
 
+    // CR-1 fix: Add messages to store BEFORE starting the stream
+    // so that onMessage/onSources can find them by ID immediately.
+    addMessage(userMessage);
+    addMessage(assistantMessage);
+
     const abort = chatStream(
       chatMessages,
       {
@@ -92,10 +102,12 @@ export function useSendMessage(
           updateMessage(assistantMessageId, { error: error.message });
           setIsStreaming(false);
           setAbortFn(null);
+          sendingRef.current = false;
         },
         onComplete: async () => {
           setIsStreaming(false);
           setAbortFn(null);
+          sendingRef.current = false;
           // Save messages to API
           try {
             // Save user message
@@ -123,8 +135,6 @@ export function useSendMessage(
     );
 
     setAbortFn(abort);
-    addMessage(userMessage);
-    addMessage(assistantMessage);
 
     setInput("");
     setInputError(null);

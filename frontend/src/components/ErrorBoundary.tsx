@@ -35,19 +35,14 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
       }
 
       return (
-        <div style={{ padding: '20px', textAlign: 'center' }}>
-          <h2>Something went wrong</h2>
+        <div className="flex flex-col items-center justify-center min-h-[50vh] p-8 text-center">
+          <h2 className="text-xl font-semibold text-foreground mb-4">Something went wrong</h2>
+          <p className="text-sm text-muted-foreground mb-6 max-w-md">
+            An unexpected error occurred. Please try again.
+          </p>
           <button
             onClick={this.handleRetry}
-            style={{
-              padding: '10px 20px',
-              fontSize: '16px',
-              cursor: 'pointer',
-              backgroundColor: '#007bff',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px'
-            }}
+            className="px-5 py-2.5 text-sm font-medium rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 transition-colors"
           >
             Try Again
           </button>

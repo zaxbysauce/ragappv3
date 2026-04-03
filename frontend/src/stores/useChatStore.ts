@@ -131,3 +131,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({ activeChatId: null, messages: [], expandedSources: new Set() });
   },
 }));
+
+// H-27: Granular selectors to avoid unnecessary re-renders
+export const useChatMessages = () => useChatStore((s) => s.messages);
+export const useChatInput = () => useChatStore((s) => s.input);
+export const useChatIsStreaming = () => useChatStore((s) => s.isStreaming);
+export const useChatInputError = () => useChatStore((s) => s.inputError);
+export const useChatActiveChatId = () => useChatStore((s) => s.activeChatId);

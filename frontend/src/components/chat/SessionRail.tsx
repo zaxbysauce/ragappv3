@@ -2,6 +2,7 @@
 // SessionRail component with full business logic for chat session management
 
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { useDebounce } from "@/hooks/useDebounce";
 import { useNavigate } from "react-router-dom";
 import {
   MessageSquare,
@@ -659,6 +660,9 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // H-7 fix: Debounce search to avoid firing API calls per keystroke
+  const [debouncedSearchQuery] = useDebounce(sessionSearchQuery, 300);
+
   // Fetch sessions on mount and when vaultId changes
   useEffect(() => {
     const fetchSessions = async () => {
@@ -684,20 +688,19 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
   // Fetch session details for first message content when needed for search
   useEffect(() => {
     const fetchSessionDetails = async () => {
-      if (!sessionSearchQuery.trim()) {
+      if (!debouncedSearchQuery.trim()) {
         setSessionDetails(new Map());
         fetchedIdsRef.current.clear();
         return;
       }
 
-      // Clear fetched IDs when search query changes to refetch as needed
       // Only fetch details for sessions we don't already have
       const sessionsNeedingDetails = sessions.filter((s) => !fetchedIdsRef.current.has(s.id));
-      
+
       if (sessionsNeedingDetails.length === 0) return;
 
       const newDetails = new Map(sessionDetails);
-      
+
       await Promise.all(
         sessionsNeedingDetails.slice(0, 10).map(async (session) => {
           try {
@@ -714,7 +717,7 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
     };
 
     fetchSessionDetails();
-  }, [sessionSearchQuery, sessions]);
+  }, [debouncedSearchQuery, sessions]);
 
   // Filter sessions based on search query (title + first message content)
   const filteredSessions = useMemo(() => {

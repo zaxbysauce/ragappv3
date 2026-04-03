@@ -1,5 +1,4 @@
 import { Navigate, useLocation } from "react-router-dom";
-import { useAuth } from "@/contexts/AuthContext";
 import { useAuthStore } from "@/stores/useAuthStore";
 import { Loader2 } from "lucide-react";
 
@@ -10,16 +9,8 @@ interface ProtectedRouteProps {
 export function ProtectedRoute({ children }: ProtectedRouteProps) {
   const location = useLocation();
 
-  // Check both legacy AuthContext and new JWT auth store
-  const { isAuthenticated: contextAuth, isLoading: contextLoading } = useAuth();
-  const {
-    isAuthenticated: storeAuth,
-    isLoading: storeLoading,
-    needsSetup,
-  } = useAuthStore();
-
-  const isAuthenticated = contextAuth || storeAuth;
-  const isLoading = contextLoading || storeLoading;
+  // H-10 fix: Use only the JWT auth store — legacy AuthContext OR removed
+  const { isAuthenticated, isLoading, needsSetup } = useAuthStore();
 
   // Show loading while auth state or setup check is still initializing
   if (isLoading || needsSetup === null) {

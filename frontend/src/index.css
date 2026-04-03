@@ -9,8 +9,7 @@
  *   Material 3 Theme with Warm Neutral Palette
  */
 
-/* Google Fonts Import */
-@import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,200..900;1,8..60,200..900&family=Spline+Sans:wght@300..700&display=swap');
+/* Google Fonts — preloaded via <link> in index.html for non-blocking load */
 
 @tailwind base;
 @tailwind components;
@@ -118,7 +117,17 @@
     background-attachment: fixed;
     min-height: 100vh;
   }
-  
+
+  /* Dark mode gradient override */
+  .dark body {
+    background: linear-gradient(
+      135deg,
+      hsl(var(--background)) 0%,
+      hsl(30 12% 12%) 50%,
+      hsl(25 10% 11%) 100%
+    );
+  }
+
   /* Subtle pattern overlay */
   body::before {
     content: '';
@@ -127,22 +136,39 @@
     left: 0;
     right: 0;
     bottom: 0;
-    background-image: 
+    background-image:
       radial-gradient(circle at 20% 80%, hsl(30 40% 70% / 0.03) 0%, transparent 50%),
       radial-gradient(circle at 80% 20%, hsl(25 35% 65% / 0.03) 0%, transparent 50%);
     pointer-events: none;
     z-index: -999;
   }
-  
+
+  /* Dark mode overlay */
+  .dark body::before {
+    background-image:
+      radial-gradient(circle at 20% 80%, hsl(30 40% 30% / 0.05) 0%, transparent 50%),
+      radial-gradient(circle at 80% 20%, hsl(25 35% 25% / 0.05) 0%, transparent 50%);
+  }
+
   /* Headings use Source Serif 4 */
   h1, h2, h3, h4, h5, h6 {
     font-family: 'Source Serif 4', Georgia, serif;
     font-weight: 600;
   }
-  
+
   /* Selection color */
   ::selection {
     background: hsl(var(--accent) / 0.3);
     color: hsl(var(--foreground));
+  }
+}
+
+/* Respect user motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

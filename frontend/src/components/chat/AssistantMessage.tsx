@@ -309,7 +309,7 @@ function ActionBar({
   }, [feedback, externalFeedback, onFeedback, saveFeedbackToStorage]);
 
   return (
-    <div className="flex items-center gap-1 mt-3 opacity-0 group-hover:opacity-100 transition-opacity">
+    <div className="flex items-center gap-1 mt-3 opacity-0 group-hover:opacity-100 focus-within:opacity-100 sm:max-md:opacity-100 transition-opacity">
       <TooltipProvider>
         {showCopy && (
           <Tooltip>

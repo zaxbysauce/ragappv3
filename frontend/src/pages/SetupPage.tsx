@@ -71,8 +71,8 @@ export default function SetupPage() {
         formData.password,
         formData.full_name || undefined
       );
-      // Navigate to login page on success
-      navigate("/login");
+      // Navigate to home page on success (user is already authenticated)
+      navigate("/");
     } catch {
       // Error is handled by the store, we just prevent navigation
     }

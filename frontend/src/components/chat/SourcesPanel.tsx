@@ -149,10 +149,10 @@ interface SourceCardProps {
 function SourceCard({ source, isExpanded, onToggle, index }: SourceCardProps) {
   return (
     <Card className="border-border/50">
-      <div
-        className="p-3 cursor-pointer hover:bg-muted/50 transition-colors"
+      <button
+        type="button"
+        className="w-full p-3 cursor-pointer hover:bg-muted/50 transition-colors text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
         onClick={onToggle}
-        role="listitem"
         aria-expanded={isExpanded}
       >
         <div className="flex items-center justify-between">
@@ -178,7 +178,7 @@ function SourceCard({ source, isExpanded, onToggle, index }: SourceCardProps) {
             )}
           </div>
         </div>
-      </div>
+      </button>
       {isExpanded && (
         <div className="px-3 pb-3">
           <div className="pt-2 border-t border-border/50">

@@ -61,9 +61,10 @@ export function ChatHistory({
         ) : (
           <div className="space-y-4">
             {chatHistory.map((session) => (
-              <div
+              <button
                 key={session.id}
-                className="flex items-center gap-4 p-3 rounded-lg hover:bg-muted/50 cursor-pointer transition-colors"
+                type="button"
+                className="flex items-center gap-4 p-3 rounded-lg hover:bg-muted/50 cursor-pointer transition-colors w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 onClick={() => handleLoadChat(session)}
               >
                 <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
@@ -74,7 +75,7 @@ export function ChatHistory({
                   <p className="text-sm text-muted-foreground">Last active {new Date(session.updated_at).toLocaleString()}</p>
                 </div>
                 <span className="text-xs text-muted-foreground">{session.message_count ?? 0} messages</span>
-              </div>
+              </button>
             ))}
           </div>
         )}

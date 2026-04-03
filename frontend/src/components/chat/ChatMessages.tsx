@@ -54,10 +54,14 @@ export function ChatMessages({ toggleCanvasCollapse, canvasCollapsed }: ChatMess
     }
   };
 
-  // Auto-scroll to bottom on new messages
+  // H-5 fix: Only auto-scroll when user is near the bottom (within 150px)
+  // so reading history isn't yanked away on every streaming token.
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    const el = scrollRef.current;
+    if (!el) return;
+    const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 150;
+    if (isNearBottom) {
+      el.scrollTop = el.scrollHeight;
     }
   }, [messages]);
 

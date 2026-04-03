@@ -118,48 +118,38 @@ export const useAuthStore = create<AuthState>()(
       init: async () => {
         const state = get();
         set({ isLoading: true });
+
+        // Try in-memory token first, then attempt httpOnly cookie refresh
         try {
-          // Check if we have an existing session by calling /auth/me
           if (state.accessToken) {
             await get().fetchMe();
             set({ authMode: "jwt", isAuthenticated: true, isLoading: false });
             return;
           }
-        } catch {
-          // Access token invalid or expired — try to refresh via httpOnly cookie
-          // before giving up and forcing the user to log in again.
-          try {
-            const newToken = await get().refreshToken();
-            if (newToken) {
-              await get().fetchMe();
-              set({ authMode: "jwt", isAuthenticated: true, isLoading: false });
-              return;
-            }
-          } catch {
-            // Refresh also failed — fall through to clear state
+          // No in-memory token — attempt refresh via httpOnly cookie (H-7 fix)
+          const newToken = await get().refreshToken();
+          if (newToken) {
+            await get().fetchMe();
+            set({ authMode: "jwt", isAuthenticated: true, isLoading: false });
+            return;
           }
-          // Both access token and refresh cookie are invalid — clear all auth state
+        } catch {
+          // Token invalid and refresh failed — clear all auth state
           set({
             accessToken: null,
             user: null,
             isAuthenticated: false,
-            isLoading: false,
           });
           setJwtAccessToken(null);
         }
+
         try {
-          // Check setup status
           await get().checkSetupStatus();
         } catch {
-          // Backend unreachable — auth mode unknown
+          // Backend unreachable
         }
-        // Check if API key auth is active
-        const apiKey = localStorage.getItem("kv_api_key");
-        if (apiKey) {
-          set({ authMode: "apikey", isAuthenticated: true, isLoading: false });
-        } else {
-          set({ authMode: "jwt", isLoading: false });
-        }
+
+        set({ authMode: "jwt", isLoading: false });
       },
 
       checkSetupStatus: async () => {
@@ -327,9 +317,10 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: "auth-storage",
+      // H-11 fix: Do NOT persist accessToken to localStorage (XSS risk).
+      // The httpOnly refresh cookie handles session persistence.
       partialize: (state) => ({
         user: state.user,
-        accessToken: state.accessToken,
         authMode: state.authMode,
         needsSetup: state.needsSetup,
       }),

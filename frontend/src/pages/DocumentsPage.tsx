@@ -8,6 +8,14 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { FileText, Upload, Search, Trash2, ScanLine, AlertCircle, Loader2, X, RotateCcw, Trash } from "lucide-react";
 import { listDocuments, scanDocuments, deleteDocument, deleteDocuments, deleteAllDocumentsInVault, getDocumentStats, type Document, type DocumentStatsResponse } from "@/lib/api";
 import { formatFileSize, formatDate } from "@/lib/formatters";
@@ -32,6 +40,14 @@ export default function DocumentsPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [isBulkDeletingAll, setIsBulkDeletingAll] = useState(false);
+  // H-28 fix: Replace window.confirm with Dialog
+  const [confirmDialog, setConfirmDialog] = useState<{
+    open: boolean;
+    title: string;
+    description: string;
+    onConfirm: () => void;
+    variant?: "destructive" | "default";
+  }>({ open: false, title: "", description: "", onConfirm: () => {} });
   const [filenameColWidth, setFilenameColWidth] = useState<number>(250);
   const dragState = useRef<{ startX: number; startWidth: number }>({ startX: 0, startWidth: 0 });
 
@@ -149,14 +165,8 @@ export default function DocumentsPage() {
     });
   }, []);
 
-  const handleBulkDelete = useCallback(async () => {
-    if (selectedIds.size === 0) return;
-    
-    const confirmMsg = `Are you sure you want to delete ${selectedIds.size} document${selectedIds.size > 1 ? 's' : ''}?`;
-    if (!window.confirm(confirmMsg)) return;
-
+  const executeBulkDelete = useCallback(async () => {
     setIsBulkDeleting(true);
-
     try {
       const result = await deleteDocuments(Array.from(selectedIds));
       if (result.deleted_count > 0) {
@@ -164,11 +174,9 @@ export default function DocumentsPage() {
         setDocuments(prev => prev.filter(doc => !selectedIds.has(doc.id)));
         setStats(prev => prev ? { ...prev, total_documents: Math.max(0, (prev.total_documents ?? 0) - result.deleted_count) } : prev);
       }
-
       if (result.failed_ids.length > 0) {
         toast.error(`Failed to delete ${result.failed_ids.length} document${result.failed_ids.length > 1 ? 's' : ''}`);
       }
-
       setSelectedIds(new Set());
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to delete documents");
@@ -177,18 +185,20 @@ export default function DocumentsPage() {
     }
   }, [selectedIds]);
 
-  const handleDeleteAllInVault = useCallback(async () => {
-    if (!documents || documents.length === 0) return;
-    if (!activeVaultId) {
-      toast.error("No vault selected");
-      return;
-    }
+  const handleBulkDelete = useCallback(() => {
+    if (selectedIds.size === 0) return;
+    setConfirmDialog({
+      open: true,
+      title: "Delete Selected Documents",
+      description: `Are you sure you want to delete ${selectedIds.size} document${selectedIds.size > 1 ? 's' : ''}? This action cannot be undone.`,
+      onConfirm: executeBulkDelete,
+      variant: "destructive",
+    });
+  }, [selectedIds, executeBulkDelete]);
 
-    const confirmMsg = `Are you sure you want to delete ALL documents in this vault? This action cannot be undone.`;
-    if (!window.confirm(confirmMsg)) return;
-
+  const executeDeleteAllInVault = useCallback(async () => {
+    if (!activeVaultId) return;
     setIsBulkDeletingAll(true);
-
     try {
       const result = await deleteAllDocumentsInVault(activeVaultId);
       if (result.deleted_count > 0) {
@@ -201,7 +211,22 @@ export default function DocumentsPage() {
     } finally {
       setIsBulkDeletingAll(false);
     }
-  }, [documents.length, activeVaultId]);
+  }, [activeVaultId]);
+
+  const handleDeleteAllInVault = useCallback(() => {
+    if (!documents || documents.length === 0) return;
+    if (!activeVaultId) {
+      toast.error("No vault selected");
+      return;
+    }
+    setConfirmDialog({
+      open: true,
+      title: "Delete All Documents in Vault",
+      description: "Are you sure you want to delete ALL documents in this vault? This action cannot be undone.",
+      onConfirm: executeDeleteAllInVault,
+      variant: "destructive",
+    });
+  }, [documents.length, activeVaultId, executeDeleteAllInVault]);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles.length === 0) return;
@@ -245,15 +270,22 @@ export default function DocumentsPage() {
     }
   };
 
-  const handleDeleteDocument = async (docId: string) => {
-    if (!confirm("Are you sure you want to delete this document? This will also remove all associated chunks.")) return;
-    try {
-      await deleteDocument(docId);
-      toast.success("Document deleted successfully");
-      await Promise.all([fetchDocuments(), fetchStats()]);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to delete document");
-    }
+  const handleDeleteDocument = (docId: string) => {
+    setConfirmDialog({
+      open: true,
+      title: "Delete Document",
+      description: "Are you sure you want to delete this document? This will also remove all associated chunks.",
+      onConfirm: async () => {
+        try {
+          await deleteDocument(docId);
+          toast.success("Document deleted successfully");
+          await Promise.all([fetchDocuments(), fetchStats()]);
+        } catch (err) {
+          toast.error(err instanceof Error ? err.message : "Failed to delete document");
+        }
+      },
+      variant: "destructive",
+    });
   };
 
   const filteredDocuments = useMemo(
@@ -673,6 +705,30 @@ export default function DocumentsPage() {
            </div>
         </>
       )}
+
+      {/* Confirmation Dialog (H-28) */}
+      <Dialog open={confirmDialog.open} onOpenChange={(open) => setConfirmDialog(prev => ({ ...prev, open }))}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{confirmDialog.title}</DialogTitle>
+            <DialogDescription>{confirmDialog.description}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmDialog(prev => ({ ...prev, open: false }))}>
+              Cancel
+            </Button>
+            <Button
+              variant={confirmDialog.variant === "destructive" ? "destructive" : "default"}
+              onClick={() => {
+                setConfirmDialog(prev => ({ ...prev, open: false }));
+                confirmDialog.onConfirm();
+              }}
+            >
+              Confirm
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -415,63 +415,45 @@ describe("useAuthStore", () => {
       expect(state.user).toEqual(mockUser);
     });
 
-    it("should set apikey mode when no JWT but API key exists", async () => {
+    it("should default to jwt mode after failed refresh when no token exists", async () => {
       useAuthStore.setState({
         accessToken: null,
       });
 
       const { init } = useAuthStore.getState();
-      
-      // Mock /auth/me failure
-      mockGet?.mockRejectedValueOnce(new Error("Unauthorized"));
+
+      // Mock refresh token failure (no httpOnly cookie)
+      mockPostFn?.mockRejectedValueOnce(new Error("Unauthorized"));
       // Mock setup-status success
       mockGet?.mockResolvedValueOnce({
         data: { needs_setup: false },
       });
-      // Mock localStorage returning API key
-      Object.defineProperty(window, "localStorage", {
-        value: {
-          getItem: vi.fn().mockReturnValue("key123"),
-          setItem: vi.fn(),
-          removeItem: vi.fn(),
-          clear: vi.fn(),
-        },
-        writable: true,
-      });
 
       await init();
 
       const state = useAuthStore.getState();
-      expect(state.authMode).toBe("apikey");
-      expect(state.isAuthenticated).toBe(true);
+      // After auth consolidation (H-10), always defaults to jwt
+      expect(state.authMode).toBe("jwt");
+      expect(state.isAuthenticated).toBe(false);
     });
 
-    it("should set unknown mode when no auth methods available", async () => {
+    it("should default to jwt mode when no auth methods available", async () => {
       useAuthStore.setState({
         accessToken: null,
       });
 
       const { init } = useAuthStore.getState();
-      
-      // Mock /auth/me failure
-      mockGet?.mockRejectedValueOnce(new Error("Unauthorized"));
+
+      // Mock refresh token failure (no access token, cookie-based refresh fails)
+      mockPostFn?.mockRejectedValueOnce(new Error("Unauthorized"));
       // Mock setup-status failure
       mockGet?.mockRejectedValueOnce(new Error("Network error"));
-      // Mock localStorage returning null
-      Object.defineProperty(window, "localStorage", {
-        value: {
-          getItem: vi.fn().mockReturnValue(null),
-          setItem: vi.fn(),
-          removeItem: vi.fn(),
-          clear: vi.fn(),
-        },
-        writable: true,
-      });
 
       await init();
 
       const state = useAuthStore.getState();
-      expect(state.authMode).toBe("unknown");
+      // After auth consolidation (H-10), we always default to jwt mode
+      expect(state.authMode).toBe("jwt");
       expect(state.isAuthenticated).toBe(false);
     });
 

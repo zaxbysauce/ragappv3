@@ -1,4 +1,6 @@
-import { MessageSquare, FileText, Brain, Settings, Database, Sparkles, Users, UserCog } from "lucide-react";
+import { MessageSquare, FileText, Brain, Settings, Database, Sparkles, Users, UserCog, Building2, UserCircle, Sun, Moon } from "lucide-react";
+import { motion } from "framer-motion";
+import { useThemeStore } from "@/stores/useThemeStore";
 import { cn } from "@/lib/utils";
 import { NavLink, useLocation } from "react-router-dom";
 import type { NavItemId, NavigationProps } from "./navigationTypes";
@@ -23,6 +25,8 @@ const navItems: NavConfigItem[] = [
   { id: "settings", label: "Settings", icon: Settings, to: "/settings" },
   { id: "groups", label: "Groups", icon: Users, to: "/admin/groups" },
   { id: "users", label: "Users", icon: UserCog, to: "/admin/users" },
+  { id: "organizations", label: "Orgs", icon: Building2, to: "/admin/organizations" },
+  { id: "profile", label: "Profile", icon: UserCircle, to: "/profile" },
 ];
 
 function StatusIndicator({ isUp, label, loading }: { isUp: boolean; label: string; loading?: boolean }) {
@@ -48,6 +52,7 @@ interface NavigationRailProps {
 export function NavigationRail({ healthStatus }: NavigationRailProps) {
   const location = useLocation();
   const pathname = location.pathname;
+  const { theme, setTheme } = useThemeStore();
 
   // Determine active item based on current pathname
   const getActiveItem = (): NavItemId | null => {
@@ -61,6 +66,8 @@ export function NavigationRail({ healthStatus }: NavigationRailProps) {
     if (pathname.startsWith("/chat/")) return "chat";
     if (pathname.startsWith("/admin/groups")) return "groups";
     if (pathname.startsWith("/admin/users")) return "users";
+    if (pathname.startsWith("/admin/organizations")) return "organizations";
+    if (pathname.startsWith("/profile")) return "profile";
     return null;
   };
 
@@ -105,11 +112,15 @@ export function NavigationRail({ healthStatus }: NavigationRailProps) {
                   isNewChat && "bg-gradient-to-br from-purple-500 to-pink-500 text-white shadow-lg shadow-purple-500/25"
                 )}
               >
-                <Icon className={cn("w-5 h-5", isNewChat && "animate-pulse")} />
+                <Icon className="w-5 h-5" />
 
-                {/* Active Indicator */}
+                {/* Active Indicator — animated sliding pill */}
                 {isActive && !isNewChat && (
-                  <span className="absolute -right-1 top-1/2 -translate-y-1/2 w-1 h-4 bg-primary rounded-full" />
+                  <motion.span
+                    layoutId="nav-active-indicator"
+                    className="absolute -right-1 top-1/2 -translate-y-1/2 w-1 h-4 bg-primary rounded-full"
+                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                  />
                 )}
 
                 {/* New Badge */}
@@ -142,6 +153,20 @@ export function NavigationRail({ healthStatus }: NavigationRailProps) {
 
       {/* Bottom Spacer */}
       <div className="mt-auto" />
+
+      {/* Theme Toggle (H-30) */}
+      <button
+        type="button"
+        onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+        className="p-2 rounded-lg hover:bg-secondary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+      >
+        {theme === "dark" ? (
+          <Sun className="w-4 h-4 text-muted-foreground" />
+        ) : (
+          <Moon className="w-4 h-4 text-muted-foreground" />
+        )}
+      </button>
 
       {/* Health Status Footer */}
       <div className="w-full px-2 pb-4">
