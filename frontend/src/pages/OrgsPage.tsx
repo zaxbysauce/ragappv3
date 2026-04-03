@@ -100,7 +100,7 @@ function OrgsPageContent() {
     try {
       const response = await apiClient.post<Organization>("/organizations/", {
         name: newOrgName.trim(),
-        description: newOrgDescription.trim() || null,
+        description: newOrgDescription.trim() || "",
       });
       setOrgs((prev) => [...prev, response.data]);
       toast.success("Organization created successfully");
