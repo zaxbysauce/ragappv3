@@ -30,7 +30,7 @@ class Settings(BaseSettings):
 
     # Model configuration
     embedding_model: str = "nomic-embed-text"
-    chat_model: str = "qwen2.5:32b"
+    chat_model: str = "gemma-4-26b-a4b-it-apex"
 
     # Embedding dimension (auto-detected from model, but can be overridden)
     embedding_dim: int = 768

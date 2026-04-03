@@ -136,21 +136,35 @@ async def create_user(
 async def list_users(
     skip: int = 0,
     limit: int = 100,
+    q: str | None = None,
     user: dict = Depends(require_role("admin")),
 ):
-    """List all users (admin/superadmin only)."""
+    """List all users (admin/superadmin only). Optional ?q= search filter."""
     pool = get_pool(str(settings.sqlite_path))
     conn = pool.get_connection()
 
     try:
-        count_cursor = conn.execute("SELECT COUNT(*) FROM users")
-        total = count_cursor.fetchone()[0]
-
-        cursor = conn.execute(
-            """SELECT id, username, full_name, role, is_active, created_at
-               FROM users ORDER BY id LIMIT ? OFFSET ?""",
-            (limit, skip),
-        )
+        if q:
+            search_pattern = f"%{q}%"
+            count_cursor = conn.execute(
+                "SELECT COUNT(*) FROM users WHERE username LIKE ? OR full_name LIKE ?",
+                (search_pattern, search_pattern),
+            )
+            total = count_cursor.fetchone()[0]
+            cursor = conn.execute(
+                """SELECT id, username, full_name, role, is_active, created_at
+                   FROM users WHERE username LIKE ? OR full_name LIKE ?
+                   ORDER BY id LIMIT ? OFFSET ?""",
+                (search_pattern, search_pattern, limit, skip),
+            )
+        else:
+            count_cursor = conn.execute("SELECT COUNT(*) FROM users")
+            total = count_cursor.fetchone()[0]
+            cursor = conn.execute(
+                """SELECT id, username, full_name, role, is_active, created_at
+                   FROM users ORDER BY id LIMIT ? OFFSET ?""",
+                (limit, skip),
+            )
         rows = cursor.fetchall()
 
         users = []
@@ -530,6 +544,114 @@ async def delete_user(
         conn.commit()
 
         return {"message": "User deleted", "user_id": user_id}
+    finally:
+        pool.release_connection(conn)
+
+
+@router.get("/{user_id}/organizations")
+async def get_user_organizations(
+    user_id: int,
+    user: dict = Depends(require_role("admin")),
+):
+    """Get all organizations a user belongs to (admin/superadmin only)."""
+    pool = get_pool(str(settings.sqlite_path))
+    conn = pool.get_connection()
+    try:
+        cursor = conn.execute("SELECT id FROM users WHERE id = ?", (user_id,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="User not found")
+
+        cursor = conn.execute(
+            """SELECT o.id, o.name, o.description, om.role, om.joined_at
+               FROM org_members om JOIN organizations o ON om.org_id = o.id
+               WHERE om.user_id = ? ORDER BY o.name""",
+            (user_id,),
+        )
+        orgs = []
+        for row in cursor.fetchall():
+            orgs.append({
+                "id": row[0],
+                "name": row[1],
+                "description": row[2] or "",
+                "role": row[3],
+                "joined_at": row[4],
+            })
+        return {"organizations": orgs}
+    finally:
+        pool.release_connection(conn)
+
+
+@router.put("/{user_id}/organizations")
+async def update_user_organizations(
+    user_id: int,
+    body: dict,
+    user: dict = Depends(require_role("admin")),
+):
+    """Replace user's organization memberships (admin/superadmin only).
+
+    Body: { "org_ids": [1, 2], "role": "member" }
+    """
+    pool = get_pool(str(settings.sqlite_path))
+    conn = pool.get_connection()
+    try:
+        cursor = conn.execute("SELECT id FROM users WHERE id = ?", (user_id,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="User not found")
+
+        org_ids = body.get("org_ids", [])
+        role = body.get("role", "member")
+        if role not in ("owner", "admin", "member"):
+            raise HTTPException(status_code=400, detail="Invalid role")
+
+        # Validate all org_ids exist
+        if org_ids:
+            placeholders = ",".join("?" * len(org_ids))
+            cursor = conn.execute(
+                f"SELECT id FROM organizations WHERE id IN ({placeholders})",
+                tuple(org_ids),
+            )
+            found = {row[0] for row in cursor.fetchall()}
+            missing = set(org_ids) - found
+            if missing:
+                raise HTTPException(status_code=400, detail=f"Organizations not found: {sorted(missing)}")
+
+        # Delete existing memberships (except owner roles to protect org ownership)
+        conn.execute(
+            "DELETE FROM org_members WHERE user_id = ? AND role != 'owner'",
+            (user_id,),
+        )
+
+        # Insert new memberships
+        for org_id in org_ids:
+            # Check if already exists (as owner)
+            cursor = conn.execute(
+                "SELECT 1 FROM org_members WHERE org_id = ? AND user_id = ?",
+                (org_id, user_id),
+            )
+            if not cursor.fetchone():
+                conn.execute(
+                    "INSERT INTO org_members (org_id, user_id, role) VALUES (?, ?, ?)",
+                    (org_id, user_id, role),
+                )
+        conn.commit()
+
+        # Return updated list
+        cursor = conn.execute(
+            """SELECT o.id, o.name, o.description, om.role, om.joined_at
+               FROM org_members om JOIN organizations o ON om.org_id = o.id
+               WHERE om.user_id = ? ORDER BY o.name""",
+            (user_id,),
+        )
+        orgs = []
+        for row in cursor.fetchall():
+            orgs.append({
+                "id": row[0],
+                "name": row[1],
+                "description": row[2] or "",
+                "role": row[3],
+                "joined_at": row[4],
+            })
+        return {"organizations": orgs}
     finally:
         pool.release_connection(conn)
 

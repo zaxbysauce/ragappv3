@@ -43,6 +43,7 @@ import {
   Pencil,
   KeyRound,
   Plus,
+  Building2,
 } from "lucide-react";
 
 type UserRole = "superadmin" | "admin" | "member" | "viewer";
@@ -60,6 +61,14 @@ interface Group {
   id: number;
   name: string;
   description: string | null;
+}
+
+interface OrgItem {
+  id: number;
+  name: string;
+  description: string;
+  role?: string;
+  joined_at?: string;
 }
 
 const ROLE_OPTIONS: { value: UserRole; label: string }[] = [
@@ -100,6 +109,15 @@ function AdminUsersPageContent() {
   const [groupsSearchQuery, setGroupsSearchQuery] = useState("");
   const [isLoadingGroups, setIsLoadingGroups] = useState(false);
   const [isSavingGroups, setIsSavingGroups] = useState(false);
+
+  // Manage Organizations Sheet State
+  const [orgsSheetOpen, setOrgsSheetOpen] = useState(false);
+  const [userForOrgs, setUserForOrgs] = useState<User | null>(null);
+  const [allOrgs, setAllOrgs] = useState<OrgItem[]>([]);
+  const [selectedOrgIds, setSelectedOrgIds] = useState<number[]>([]);
+  const [orgsSearchQuery, setOrgsSearchQuery] = useState("");
+  const [isLoadingOrgs, setIsLoadingOrgs] = useState(false);
+  const [isSavingOrgs, setIsSavingOrgs] = useState(false);
 
   // Create User Dialog State
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
@@ -306,6 +324,75 @@ function AdminUsersPageContent() {
     }
   };
 
+  // Manage Organizations Handlers
+  const fetchAllOrgs = async () => {
+    try {
+      const response = await apiClient.get<{ organizations: OrgItem[]; total: number }>("/organizations/");
+      setAllOrgs(Array.isArray(response.data) ? response.data : response.data.organizations ?? []);
+    } catch (err) {
+      console.error("Failed to fetch organizations:", err);
+      toast.error("Failed to load organizations");
+    }
+  };
+
+  const fetchUserOrgs = async (userId: number) => {
+    try {
+      const response = await apiClient.get<{ organizations: OrgItem[] }>(`/users/${userId}/organizations`);
+      setSelectedOrgIds(response.data.organizations.map((o) => o.id));
+    } catch (err) {
+      console.error("Failed to fetch user organizations:", err);
+      toast.error("Failed to load user organizations");
+    }
+  };
+
+  const openOrgsSheet = async (user: User) => {
+    setUserForOrgs(user);
+    setOrgsSheetOpen(true);
+    setIsLoadingOrgs(true);
+    setOrgsSearchQuery("");
+    await Promise.all([fetchAllOrgs(), fetchUserOrgs(user.id)]);
+    setIsLoadingOrgs(false);
+  };
+
+  const closeOrgsSheet = () => {
+    setOrgsSheetOpen(false);
+    setUserForOrgs(null);
+    setAllOrgs([]);
+    setSelectedOrgIds([]);
+    setOrgsSearchQuery("");
+  };
+
+  const toggleOrg = useCallback((orgId: number) => {
+    setSelectedOrgIds((prev) =>
+      prev.includes(orgId) ? prev.filter((id) => id !== orgId) : [...prev, orgId]
+    );
+  }, []);
+
+  const handleSaveOrgs = async () => {
+    if (!userForOrgs) return;
+    setIsSavingOrgs(true);
+    try {
+      await apiClient.put(`/users/${userForOrgs.id}/organizations`, {
+        org_ids: selectedOrgIds,
+        role: "member",
+      });
+      toast.success("Organizations updated successfully");
+      closeOrgsSheet();
+    } catch (err) {
+      toast.error("Failed to update organizations");
+    } finally {
+      setIsSavingOrgs(false);
+    }
+  };
+
+  const filteredOrgs = allOrgs.filter((org) => {
+    const searchLower = orgsSearchQuery.toLowerCase();
+    return (
+      org.name.toLowerCase().includes(searchLower) ||
+      (org.description && org.description.toLowerCase().includes(searchLower))
+    );
+  });
+
 const handleCreateUser = async () => {
  if (!createUsername.trim() || createUsername.length < 3) {
  toast.error("Username must be at least 3 characters");
@@ -496,6 +583,15 @@ const handleCreateUser = async () => {
                         <div className="flex items-center justify-end gap-1">
                           {canManageUser(user) && (
                             <>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => openOrgsSheet(user)}
+                                aria-label={`Manage organizations for ${user.username}`}
+                                title="Manage Organizations"
+                              >
+                                <Building2 className="w-4 h-4" />
+                              </Button>
                               <Button
                                 variant="ghost"
                                 size="icon"
@@ -805,6 +901,124 @@ const handleCreateUser = async () => {
               aria-label="Save group changes"
             >
               {isSavingGroups ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
+                  Saving...
+                </>
+              ) : (
+                "Save Changes"
+              )}
+            </Button>
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
+
+      {/* Manage Organizations Sheet */}
+      <Sheet open={orgsSheetOpen} onOpenChange={setOrgsSheetOpen}>
+        <SheetContent
+          className="sm:max-w-[400px] flex flex-col"
+          aria-labelledby="orgs-title"
+          aria-describedby="orgs-desc"
+        >
+          <SheetHeader>
+            <SheetTitle id="orgs-title" className="flex items-center gap-2">
+              <Building2 className="h-5 w-5" aria-hidden="true" />
+              Manage Organizations
+            </SheetTitle>
+            <SheetDescription id="orgs-desc">
+              Manage organization memberships for <strong>{userForOrgs?.username}</strong>. Select organizations
+              to add or remove from this user.
+            </SheetDescription>
+          </SheetHeader>
+
+          <div className="flex-1 flex flex-col py-4 min-h-0">
+            <div className="relative mb-4">
+              <Search
+                className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+                aria-hidden="true"
+              />
+              <Input
+                placeholder="Search organizations..."
+                value={orgsSearchQuery}
+                onChange={(e) => setOrgsSearchQuery(e.target.value)}
+                className="pl-10"
+                aria-label="Search organizations"
+                disabled={isLoadingOrgs}
+              />
+            </div>
+
+            <ScrollArea className="flex-1 -mx-6 px-6">
+              {isLoadingOrgs ? (
+                <div className="space-y-3">
+                  {Array.from({ length: 5 }).map((_, i) => (
+                    <div key={i} className="flex items-center gap-3 p-3 rounded-md border">
+                      <Skeleton className="h-4 w-4" />
+                      <div className="flex-1 space-y-2">
+                        <Skeleton className="h-4 w-32" />
+                        <Skeleton className="h-3 w-24" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : filteredOrgs.length === 0 ? (
+                <div
+                  className="text-center py-8 text-muted-foreground"
+                  role="status"
+                  aria-live="polite"
+                >
+                  {orgsSearchQuery ? "No organizations match your search" : "No organizations available"}
+                </div>
+              ) : (
+                <div className="space-y-2 pr-4">
+                  {filteredOrgs.map((org) => (
+                    <div
+                      key={org.id}
+                      className="flex items-start space-x-3 rounded-md border p-3 hover:bg-muted/50 transition-colors"
+                    >
+                      <Checkbox
+                        id={`org-${org.id}`}
+                        checked={selectedOrgIds.includes(org.id)}
+                        onCheckedChange={() => toggleOrg(org.id)}
+                        aria-label={`Select ${org.name}`}
+                        disabled={isSavingOrgs}
+                      />
+                      <Label
+                        htmlFor={`org-${org.id}`}
+                        className="flex-1 cursor-pointer space-y-1"
+                      >
+                        <div className="font-medium">{org.name}</div>
+                        {org.description && (
+                          <div className="text-sm text-muted-foreground">{org.description}</div>
+                        )}
+                      </Label>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </ScrollArea>
+
+            <div className="mt-4 text-sm text-muted-foreground">
+              {selectedOrgIds.length} organization{selectedOrgIds.length !== 1 ? "s" : ""} selected
+            </div>
+          </div>
+
+          <SheetFooter className="flex-col gap-2 sm:flex-row border-t pt-4">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={closeOrgsSheet}
+              disabled={isSavingOrgs}
+              className="w-full sm:w-auto"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleSaveOrgs}
+              disabled={isSavingOrgs || isLoadingOrgs}
+              className="w-full sm:w-auto"
+              aria-label="Save organization changes"
+            >
+              {isSavingOrgs ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
                   Saving...

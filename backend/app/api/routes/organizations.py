@@ -72,23 +72,36 @@ def _is_org_admin_or_owner(conn: sqlite3.Connection, org_id: int, user_id: int) 
 
 @router.get("/")
 async def list_organizations(user: dict = Depends(require_role("member"))):
-    """List organizations where current user is a member."""
+    """List organizations. Superadmin/admin see all; others see their own."""
     pool = get_pool(str(settings.sqlite_path))
     conn = pool.get_connection()
     try:
-        cursor = conn.execute(
-            """SELECT o.id, o.name, o.description, o.created_at, o.updated_at,
-                      COUNT(DISTINCT om2.user_id) as member_count,
-                      COUNT(DISTINCT v.id) as vault_count
-               FROM organizations o
-               JOIN org_members om ON o.id = om.org_id
-               LEFT JOIN org_members om2 ON o.id = om2.org_id
-               LEFT JOIN vaults v ON v.org_id = o.id
-               WHERE om.user_id = ?
-               GROUP BY o.id
-               ORDER BY o.name""",
-            (user["id"],),
-        )
+        user_role = user.get("role", "")
+        if user_role in ("superadmin", "admin"):
+            cursor = conn.execute(
+                """SELECT o.id, o.name, o.description, o.created_at, o.updated_at,
+                          COUNT(DISTINCT om.user_id) as member_count,
+                          COUNT(DISTINCT v.id) as vault_count
+                   FROM organizations o
+                   LEFT JOIN org_members om ON o.id = om.org_id
+                   LEFT JOIN vaults v ON v.org_id = o.id
+                   GROUP BY o.id
+                   ORDER BY o.name""",
+            )
+        else:
+            cursor = conn.execute(
+                """SELECT o.id, o.name, o.description, o.created_at, o.updated_at,
+                          COUNT(DISTINCT om2.user_id) as member_count,
+                          COUNT(DISTINCT v.id) as vault_count
+                   FROM organizations o
+                   JOIN org_members om ON o.id = om.org_id
+                   LEFT JOIN org_members om2 ON o.id = om2.org_id
+                   LEFT JOIN vaults v ON v.org_id = o.id
+                   WHERE om.user_id = ?
+                   GROUP BY o.id
+                   ORDER BY o.name""",
+                (user["id"],),
+            )
         rows = cursor.fetchall()
         organizations = []
         for row in rows:
@@ -325,6 +338,56 @@ async def update_organization(
             "member_count": row[6] or 0,
             "vault_count": row[7] or 0,
         }
+    finally:
+        pool.release_connection(conn)
+
+
+@router.get("/{org_id}/members")
+async def list_org_members(
+    org_id: int,
+    user: dict = Depends(require_role("member")),
+):
+    """List members of an organization."""
+    pool = get_pool(str(settings.sqlite_path))
+    conn = pool.get_connection()
+    try:
+        # Check organization exists
+        cursor = conn.execute("SELECT id FROM organizations WHERE id = ?", (org_id,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Organization not found")
+
+        # Check user is member (or superadmin/admin who can see all)
+        user_role = user.get("role", "")
+        if user_role not in ("superadmin", "admin"):
+            cursor = conn.execute(
+                "SELECT 1 FROM org_members WHERE org_id = ? AND user_id = ?",
+                (org_id, user["id"]),
+            )
+            if not cursor.fetchone():
+                raise HTTPException(
+                    status_code=403,
+                    detail="Access denied: not a member of this organization",
+                )
+
+        # Fetch members
+        cursor = conn.execute(
+            """SELECT u.id, u.username, u.full_name, om.role, om.joined_at
+               FROM org_members om JOIN users u ON om.user_id = u.id
+               WHERE om.org_id = ? ORDER BY om.role DESC, u.username""",
+            (org_id,),
+        )
+        members = []
+        for row in cursor.fetchall():
+            members.append(
+                {
+                    "user_id": row[0],
+                    "username": row[1],
+                    "full_name": row[2] or "",
+                    "role": row[3],
+                    "joined_at": row[4],
+                }
+            )
+        return {"members": members}
     finally:
         pool.release_connection(conn)
 

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import { useAuthStore } from "@/stores/useAuthStore";
 import apiClient from "@/lib/api";
@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AdminGuard } from "@/components/auth/RoleGuard";
-import { Building2, Plus, Trash2, Users, Vault, ChevronDown, ChevronUp, Loader2, UserPlus, UserX } from "lucide-react";
+import { Building2, Plus, Trash2, Users, Vault, ChevronDown, ChevronUp, Loader2, UserPlus, UserX, Search } from "lucide-react";
 
 type OrgRole = "admin" | "member";
 
@@ -18,6 +18,14 @@ interface OrgMember {
   full_name: string;
   role: OrgRole;
   joined_at: string;
+}
+
+interface UserResult {
+  id: number;
+  username: string;
+  full_name: string;
+  role: string;
+  is_active: boolean;
 }
 
 interface Organization {
@@ -46,14 +54,63 @@ function OrgsPageContent() {
   const [newOrgName, setNewOrgName] = useState("");
   const [newOrgDescription, setNewOrgDescription] = useState("");
   const [addingMember, setAddingMember] = useState(false);
-  const [newMemberUserId, setNewMemberUserId] = useState("");
+  const [selectedUser, setSelectedUser] = useState<UserResult | null>(null);
+  const [userSearchQuery, setUserSearchQuery] = useState("");
+  const [userSearchResults, setUserSearchResults] = useState<UserResult[]>([]);
+  const [showUserDropdown, setShowUserDropdown] = useState(false);
+  const [searchingUsers, setSearchingUsers] = useState(false);
+  const userSearchRef = useRef<HTMLDivElement>(null);
+  const searchTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
   const [newMemberRole, setNewMemberRole] = useState<OrgRole>("member");
   const [updatingMemberId, setUpdatingMemberId] = useState<number | null>(null);
   const [removeMemberDialogOpen, setRemoveMemberDialogOpen] = useState(false);
   const [memberToRemove, setMemberToRemove] = useState<OrgMember | null>(null);
   const [orgForMemberAction, setOrgForMemberAction] = useState<number | null>(null);
-  
+
   const currentUser = useAuthStore((state) => state.user);
+
+  // Close user dropdown when clicking outside
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (userSearchRef.current && !userSearchRef.current.contains(e.target as Node)) {
+        setShowUserDropdown(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  // Debounced user search
+  const searchUsers = useCallback(async (query: string) => {
+    if (!query.trim()) {
+      setUserSearchResults([]);
+      setShowUserDropdown(false);
+      return;
+    }
+    setSearchingUsers(true);
+    try {
+      const response = await apiClient.get<{ users: UserResult[] }>("/users/", { params: { q: query, limit: 10 } });
+      setUserSearchResults(response.data.users.filter((u) => u.is_active));
+      setShowUserDropdown(true);
+    } catch {
+      setUserSearchResults([]);
+    } finally {
+      setSearchingUsers(false);
+    }
+  }, []);
+
+  const handleUserSearchChange = (value: string) => {
+    setUserSearchQuery(value);
+    setSelectedUser(null);
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    searchTimeoutRef.current = setTimeout(() => searchUsers(value), 300);
+  };
+
+  const selectUser = (user: UserResult) => {
+    setSelectedUser(user);
+    setUserSearchQuery(`${user.full_name || user.username} (${user.username})`);
+    setShowUserDropdown(false);
+  };
   const isSuperAdmin = currentUser?.role === "superadmin";
 
   const fetchOrgs = useCallback(async () => {
@@ -129,21 +186,21 @@ function OrgsPageContent() {
 
   const handleAddMember = async (e: React.FormEvent, orgId: number) => {
     e.preventDefault();
-    if (!newMemberUserId.trim()) return;
-    const userId = parseInt(newMemberUserId, 10);
-    if (isNaN(userId)) { toast.error("Please enter a valid user ID"); return; }
+    if (!selectedUser) { toast.error("Please search and select a user"); return; }
     setAddingMember(true);
     setOrgForMemberAction(orgId);
     try {
-      await apiClient.post(`/organizations/${orgId}/members`, { user_id: userId, role: newMemberRole });
-      toast.success("Member added to organization");
-      setNewMemberUserId("");
+      await apiClient.post(`/organizations/${orgId}/members`, { user_id: selectedUser.id, role: newMemberRole });
+      toast.success(`${selectedUser.full_name || selectedUser.username} added to organization`);
+      setSelectedUser(null);
+      setUserSearchQuery("");
+      setUserSearchResults([]);
       setNewMemberRole("member");
       fetchOrgMembers(orgId);
-      // Update member count
       setOrgs((prev) => prev.map((o) => o.id === orgId ? { ...o, member_count: o.member_count + 1 } : o));
-    } catch (err) {
-      toast.error("Failed to add member");
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail || "Failed to add member";
+      toast.error(detail);
     } finally {
       setAddingMember(false);
       setOrgForMemberAction(null);
@@ -251,9 +308,50 @@ function OrgsPageContent() {
               {expandedOrgId === org.id && (
                 <CardContent className="border-t pt-4">
                   <form onSubmit={(e) => handleAddMember(e, org.id)} className="flex gap-2 items-end mb-4">
-                    <div className="flex-1 space-y-2">
-                      <label htmlFor={`org-member-userid-${org.id}`} className="text-sm font-medium">User ID</label>
-                      <Input id={`org-member-userid-${org.id}`} placeholder="Enter user ID..." value={newMemberUserId} onChange={(e) => setNewMemberUserId(e.target.value)} disabled={addingMember && orgForMemberAction === org.id} aria-label="User ID to add as organization member" />
+                    <div className="flex-1 space-y-2 relative" ref={userSearchRef}>
+                      <label htmlFor={`org-member-search-${org.id}`} className="text-sm font-medium">Search User</label>
+                      <div className="relative">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                        <Input
+                          id={`org-member-search-${org.id}`}
+                          placeholder="Search by name or username..."
+                          value={userSearchQuery}
+                          onChange={(e) => handleUserSearchChange(e.target.value)}
+                          onFocus={() => { if (userSearchResults.length > 0) setShowUserDropdown(true); }}
+                          disabled={addingMember && orgForMemberAction === org.id}
+                          aria-label="Search for user to add as organization member"
+                          className="pl-10"
+                          autoComplete="off"
+                        />
+                        {searchingUsers && <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-muted-foreground" />}
+                      </div>
+                      {showUserDropdown && userSearchResults.length > 0 && (
+                        <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-popover border rounded-md shadow-md max-h-48 overflow-y-auto">
+                          {userSearchResults.map((u) => {
+                            const alreadyMember = org.members?.some((m) => m.user_id === u.id);
+                            return (
+                              <button
+                                key={u.id}
+                                type="button"
+                                className={`w-full text-left px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground flex items-center justify-between ${alreadyMember ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+                                onClick={() => { if (!alreadyMember) selectUser(u); }}
+                                disabled={alreadyMember}
+                              >
+                                <div>
+                                  <span className="font-medium">{u.full_name || u.username}</span>
+                                  <span className="text-muted-foreground ml-2">@{u.username}</span>
+                                </div>
+                                {alreadyMember && <Badge variant="secondary" className="text-xs">Already member</Badge>}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                      {showUserDropdown && userSearchQuery.trim() && !searchingUsers && userSearchResults.length === 0 && (
+                        <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-popover border rounded-md shadow-md px-3 py-2 text-sm text-muted-foreground">
+                          No users found
+                        </div>
+                      )}
                     </div>
                     <div className="space-y-2">
                       <label htmlFor={`org-member-role-${org.id}`} className="text-sm font-medium">Role</label>
@@ -261,7 +359,7 @@ function OrgsPageContent() {
                         {ROLE_OPTIONS.map((opt) => (<option key={opt.value} value={opt.value}>{opt.label}</option>))}
                       </select>
                     </div>
-                    <Button type="submit" disabled={addingMember && orgForMemberAction === org.id || !newMemberUserId.trim()}>
+                    <Button type="submit" disabled={addingMember && orgForMemberAction === org.id || !selectedUser}>
                       {addingMember && orgForMemberAction === org.id ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <UserPlus className="w-4 h-4 mr-2" />}
                       Add
                     </Button>
