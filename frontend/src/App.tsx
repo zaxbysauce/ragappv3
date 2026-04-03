@@ -6,6 +6,7 @@ import { PageShell } from "@/components/layout/PageShell";
 import { useHealthCheck } from "@/hooks/useHealthCheck";
 import { useEffect, lazy, Suspense } from "react";
 import { useAuthStore } from "@/stores/useAuthStore";
+import type { NavItemId } from "@/components/layout/navigationTypes";
 import { Loader2 } from "lucide-react";
 
 // H-16 fix: Lazy-load all page components for code splitting
@@ -39,7 +40,7 @@ function MainAppShell({ children }: { children: React.ReactNode }) {
   const location = useLocation();
 
   // Determine active nav item from current route
-  const getActiveItemFromPath = (pathname: string): string => {
+  const getActiveItemFromPath = (pathname: string): NavItemId => {
     if (pathname.startsWith("/chat/redesign")) return "chatNew";
     if (pathname.startsWith("/chat")) return "chat";
     if (pathname.startsWith("/documents")) return "documents";
