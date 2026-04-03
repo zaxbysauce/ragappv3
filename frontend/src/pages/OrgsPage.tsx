@@ -80,6 +80,13 @@ function OrgsPageContent() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  // Clean up search timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    };
+  }, []);
+
   // Debounced user search
   const searchUsers = useCallback(async (query: string) => {
     if (!query.trim()) {

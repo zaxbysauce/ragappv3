@@ -45,6 +45,17 @@ class CreateUserRequest(BaseModel):
     role: str = Field(default="member")
 
 
+class UserOrgsUpdateRequest(BaseModel):
+    org_ids: List[int]
+    role: str = Field(default="member")
+
+    @classmethod
+    def validate_role(cls, v: str) -> str:
+        if v not in ("admin", "member"):
+            raise ValueError("Role must be 'admin' or 'member'")
+        return v
+
+
 class UserGroupsUpdateRequest(BaseModel):
     group_ids: List[int]
 
@@ -584,13 +595,10 @@ async def get_user_organizations(
 @router.put("/{user_id}/organizations")
 async def update_user_organizations(
     user_id: int,
-    body: dict,
+    body: UserOrgsUpdateRequest,
     user: dict = Depends(require_role("admin")),
 ):
-    """Replace user's organization memberships (admin/superadmin only).
-
-    Body: { "org_ids": [1, 2], "role": "member" }
-    """
+    """Replace user's organization memberships (admin/superadmin only)."""
     pool = get_pool(str(settings.sqlite_path))
     conn = pool.get_connection()
     try:
@@ -598,10 +606,8 @@ async def update_user_organizations(
         if not cursor.fetchone():
             raise HTTPException(status_code=404, detail="User not found")
 
-        org_ids = body.get("org_ids", [])
-        role = body.get("role", "member")
-        if role not in ("owner", "admin", "member"):
-            raise HTTPException(status_code=400, detail="Invalid role")
+        org_ids = body.org_ids
+        role = body.role
 
         # Validate all org_ids exist
         if org_ids:
