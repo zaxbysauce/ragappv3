@@ -2,17 +2,18 @@
 Semantic chunking service using unstructured.chunking.title.chunk_by_title.
 Preserves tables and code blocks while creating semantically meaningful chunks.
 """
+from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Any, Optional
+from typing import List, Any, Optional, TYPE_CHECKING
 import math
 import logging
 import enum
 
-logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from unstructured.documents.elements import Element
 
-from unstructured.chunking.title import chunk_by_title
-from unstructured.documents.elements import Element
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -143,6 +144,9 @@ class SemanticChunker:
         """
         if not elements:
             return []
+
+        # Lazy import to avoid blocking startup (unstructured downloads models)
+        from unstructured.chunking.title import chunk_by_title
 
         # Use unstructured's chunk_by_title for semantic chunking
         # This respects document structure (titles, headers) when creating chunks

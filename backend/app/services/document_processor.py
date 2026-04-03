@@ -15,8 +15,6 @@ from datetime import datetime, UTC
 from pathlib import Path
 from typing import List, Any, Optional, Tuple
 
-from unstructured.partition.auto import partition
-
 from ..config import settings
 from ..models.database import SQLiteConnectionPool, get_pool
 from ..utils.file_utils import compute_file_hash
@@ -94,6 +92,10 @@ class DocumentParser:
             raise FileNotFoundError(f"Path is not a file: {file_path}")
 
         try:
+            # Lazy import: unstructured can hang at module level when it
+            # tries to download models or reach a network resource.
+            from unstructured.partition.auto import partition
+
             # Use unstructured with configured strategy from settings
             elements = partition(
                 filename=str(path), strategy=settings.document_parsing_strategy
