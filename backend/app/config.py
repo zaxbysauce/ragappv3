@@ -240,7 +240,7 @@ class Settings(BaseSettings):
     }
 
     # CORS settings
-    backend_cors_origins: list[str] = ["http://localhost:5173"]
+    backend_cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
 
     # Helper validation functions (consolidated validators)
     @staticmethod

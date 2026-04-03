@@ -89,12 +89,17 @@ authClient.interceptors.request.use(async (config) => {
   return config;
 });
 
-// If a 403 CSRF error occurs, clear the stale token so it gets refreshed on retry
+// If a 403 CSRF error occurs, clear the stale token and auto-retry once
 authClient.interceptors.response.use(
   (resp) => resp,
   async (error) => {
-    if (error.response?.status === 403) {
+    if (error.response?.status === 403 && !error.config._csrfRetry) {
       csrfToken = null; // force refresh on next request
+      error.config._csrfRetry = true;
+      // Re-fetch CSRF token and retry the request
+      const newToken = await ensureCsrfToken();
+      error.config.headers["X-CSRF-Token"] = newToken;
+      return authClient(error.config);
     }
     return Promise.reject(error);
   }
