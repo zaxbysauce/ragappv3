@@ -132,6 +132,9 @@ class Settings(BaseSettings):
     sparse_search_max_candidates: int = 1000
     """Maximum candidate records to scan during learned sparse dot-product search."""
 
+    sparse_embedding_timeout: float = 2.0
+    """Timeout in seconds for sparse embedding API calls. Previous default of 0.2s was too aggressive."""
+
     # ── Retrieval recency configuration ──────────────────────────
     retrieval_recency_weight: float = 0.1
     """Weight for recency score blending in RRF fusion (0.0 = disabled, 1.0 = fully recency-based)."""

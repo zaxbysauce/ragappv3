@@ -967,7 +967,7 @@ class EmbeddingService:
             else text
         )
         try:
-            async with asyncio.timeout(0.2):
+            async with asyncio.timeout(settings.sparse_embedding_timeout):
                 embed_url = urljoin(self._flag_base_url, "/embed")
                 response = await self._client.post(
                     embed_url,
