@@ -860,6 +860,39 @@ class VectorStore:
         await self.table.delete(f"vault_id = '{safe_vault_id}'")
         return count_before
 
+    async def _safe_table_to_pandas(self, table, operation_name: str):
+        """Load a LanceDB table into pandas with OOM protection.
+
+        Checks row count first and warns for large tables. For very large
+        tables (>500k rows), raises an error instead of risking OOM.
+        For tables up to 500k rows, proceeds with the load but logs a
+        warning above 100k rows.
+        """
+        try:
+            row_count = await table.count_rows()
+        except Exception:
+            row_count = -1  # Unknown — proceed cautiously
+
+        if row_count > 500_000:
+            raise VectorStoreError(
+                f"{operation_name}: table has {row_count} rows. "
+                f"Loading into memory would risk OOM. "
+                f"Please run this migration with a dedicated script that processes in batches."
+            )
+        if row_count > 100_000:
+            logger.warning(
+                "%s: loading %d rows into memory. "
+                "This may use significant RAM.",
+                operation_name, row_count,
+            )
+        elif row_count > 0:
+            logger.info(
+                "%s: loading %d rows for migration.",
+                operation_name, row_count,
+            )
+
+        return await table.to_pandas()
+
     async def migrate_add_vault_id(self) -> int:
         """
         Migration: Backfill vault_id='1' on existing chunks that lack it.
@@ -901,7 +934,7 @@ class VectorStore:
         if "vault_id" in field_names:
             # Column exists — check if any rows have null vault_id
             try:
-                df = await table.to_pandas()
+                df = await self._safe_table_to_pandas(table, "vault_id migration")
                 null_count = df["vault_id"].isna().sum()
                 if null_count == 0:
                     logger.info("LanceDB vault_id migration: no migration needed")
@@ -928,7 +961,7 @@ class VectorStore:
         else:
             # Column doesn't exist — add it to all records
             try:
-                df = await table.to_pandas()
+                df = await self._safe_table_to_pandas(table, "vault_id migration (add column)")
                 if len(df) == 0:
                     # Empty table — just drop and recreate with new schema
                     # Try to get embedding_dim from existing schema before dropping
@@ -1018,7 +1051,7 @@ class VectorStore:
         if "chunk_scale" in field_names:
             # Column exists — check if any rows have null chunk_scale
             try:
-                df = await table.to_pandas()
+                df = await self._safe_table_to_pandas(table, "chunk_scale migration")
                 null_count = df["chunk_scale"].isna().sum()
                 if null_count == 0:
                     logger.info("LanceDB chunk_scale migration: no migration needed")
@@ -1047,7 +1080,7 @@ class VectorStore:
         else:
             # Column doesn't exist — add it to all records
             try:
-                df = await table.to_pandas()
+                df = await self._safe_table_to_pandas(table, "chunk_scale migration (add column)")
                 if len(df) == 0:
                     # Empty table — just drop and recreate with new schema
                     # Try to get embedding_dim from existing schema before dropping
@@ -1140,7 +1173,7 @@ class VectorStore:
 
         # Column doesn't exist — add it to all records (default None/null)
         try:
-            df = await table.to_pandas()
+            df = await self._safe_table_to_pandas(table, "sparse_embedding migration")
             if len(df) == 0:
                 # Empty table — just drop and recreate with new schema
                 if self._embedding_dim is None:
