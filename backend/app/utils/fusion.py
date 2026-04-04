@@ -1,6 +1,9 @@
 """Fusion utilities for combining search results."""
 
+import logging
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 def rrf_fuse(
@@ -70,5 +73,13 @@ def rrf_fuse(
         record = dict(id_to_record[uid])
         record["_rrf_score"] = final_scores[uid]
         fused.append(record)
+
+    if logger.isEnabledFor(logging.DEBUG):
+        list_sizes = [len(r) for r in result_lists]
+        logger.debug(
+            "RRF fused %d lists (sizes=%s) → %d results (k=%d, recency_weight=%.2f, weights=%s)",
+            len(result_lists), list_sizes, len(fused), k, recency_weight,
+            weights or "uniform",
+        )
 
     return fused

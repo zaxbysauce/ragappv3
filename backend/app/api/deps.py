@@ -6,11 +6,29 @@ import secrets
 import sqlite3
 from collections.abc import Callable
 from contextlib import contextmanager
+from enum import IntEnum
 from typing import TYPE_CHECKING
 
 from fastapi import Request, Depends, Header, HTTPException, Cookie
 
 from app.config import Settings, settings
+
+
+class UserRole(IntEnum):
+    """Canonical role hierarchy used for all authorization checks."""
+
+    VIEWER = 1
+    MEMBER = 2
+    ADMIN = 3
+    SUPERADMIN = 4
+
+    @classmethod
+    def level(cls, role_name: str) -> int:
+        """Get numeric level for a role string, defaulting to 0 for unknown roles."""
+        try:
+            return cls[role_name.upper()].value
+        except (KeyError, AttributeError):
+            return 0
 from app.services.auth_service import decode_access_token
 from app.models.database import get_pool, SQLiteConnectionPool
 from app.security import get_csrf_manager
@@ -356,22 +374,16 @@ def require_role(role: str):
     """
     FastAPI dependency to require a specific role or higher.
 
-    Role hierarchy: superadmin(4) > admin(3) > member(2) > viewer(1)
+    Uses UserRole enum for canonical hierarchy:
+    superadmin(4) > admin(3) > member(2) > viewer(1)
 
     Usage: Depends(require_role("admin"))
     """
-    role_hierarchy = {
-        "superadmin": 4,
-        "admin": 3,
-        "member": 2,
-        "viewer": 1,
-    }
-
-    required_level = role_hierarchy.get(role, 0)
+    required_level = UserRole.level(role)
 
     async def _check_role(user: dict = Depends(get_current_active_user)) -> dict:
         user_role = user.get("role", "viewer")
-        user_level = role_hierarchy.get(user_role, 0)
+        user_level = UserRole.level(user_role)
 
         if user_level < required_level:
             raise HTTPException(
@@ -386,13 +398,11 @@ def require_role(role: str):
 
 async def require_admin_role(user: dict = Depends(get_current_active_user)) -> dict:
     """
-    Dependency that requires the user to have admin role.
-    Validates that the user's role is 'superadmin' or 'admin'.
-    Raises 403 if not authorized.
-    Returns the user dict if authorized.
+    Dependency that requires the user to have admin or superadmin role.
+    Uses UserRole enum for canonical hierarchy check.
     """
     user_role = user.get("role", "")
-    if user_role not in ("superadmin", "admin"):
+    if UserRole.level(user_role) < UserRole.ADMIN:
         raise HTTPException(
             status_code=403,
             detail="Admin access required",
