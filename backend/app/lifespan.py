@@ -175,7 +175,10 @@ async def _safe_await(coro, name, timeout=10):
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown events."""
     # Startup: Initialize database and services
-    run_migrations(str(settings.sqlite_path))
+    try:
+        run_migrations(str(settings.sqlite_path))
+    except Exception as e:
+        logger.error("Database migration failed: %s — app will start with degraded database state", e)
     _load_persisted_settings(str(settings.sqlite_path))
 
     # Migrate uploads to per-vault directories (run before accepting requests)

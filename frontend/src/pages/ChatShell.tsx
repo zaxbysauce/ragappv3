@@ -41,7 +41,6 @@ export default function ChatShell() {
     toggleRightPane,
     setRightPaneWidth,
     setActiveSessionId,
-    closeSessionRail,
     closeRightPane,
   } = useChatShellStore();
 

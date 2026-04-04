@@ -25,6 +25,8 @@ interface AssistantMessageProps {
   message: Message;
   /** Whether this message is currently streaming */
   isStreaming?: boolean;
+  /** Whether to show the debug button in the action bar */
+  showDebug?: boolean;
   /** Callback when a source citation is clicked */
   onSourceClick?: (source: Source) => void;
   /** Callback when "View all sources" is clicked */
@@ -423,6 +425,7 @@ function ActionBar({
 export function AssistantMessage({
   message,
   isStreaming = false,
+  showDebug,
   onSourceClick,
   onViewAllSources,
   onCopy,
@@ -573,6 +576,7 @@ export function AssistantMessage({
         {!isStreaming && (
           <ActionBar
             content={message.content}
+            showDebug={showDebug}
             onCopy={onCopy}
             onRetry={onRetry}
             onDebugToggle={handleDebugToggle}

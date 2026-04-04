@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { MessageSquare, FileText, Brain, MoreHorizontal, Database, Settings, Users, UserCircle, X } from "lucide-react";
+import { MessageSquare, FileText, Brain, MoreHorizontal, Database, Settings, Users, X } from "lucide-react";
 import {
   Sheet,
   SheetContent,
