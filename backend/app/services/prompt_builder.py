@@ -69,7 +69,9 @@ class PromptBuilderService:
         messages: List[Dict[str, str]] = [
             {"role": "system", "content": self.system_prompt},
         ]
-        for entry in chat_history:
+        # Truncate history to last N messages to prevent context overflow
+        max_history = 20
+        for entry in chat_history[-max_history:]:
             messages.append(entry)
 
         context = "\n\n".join(filter(None, context_sections))

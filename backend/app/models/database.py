@@ -343,6 +343,18 @@ def run_migrations(sqlite_path: str) -> None:
     migrate_vault_paths(sqlite_path)
     migrate_add_org_slug_column(sqlite_path)
 
+    # Add partial unique index for duplicate hash detection (HIGH-10)
+    conn = sqlite3.connect(sqlite_path)
+    try:
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_files_hash_vault_indexed
+            ON files(file_hash, vault_id)
+            WHERE file_hash IS NOT NULL AND status = 'indexed'
+        """)
+        conn.commit()
+    finally:
+        conn.close()
+
 
 def migrate_add_vaults(sqlite_path: str) -> None:
     """

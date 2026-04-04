@@ -751,7 +751,8 @@ class VectorStore:
             try:
                 fts_query = await self.table.search(query_text, query_type="fts")
                 if vault_id:
-                    fts_query = fts_query.where(f"vault_id = '{vault_id}'")
+                    safe_vault_id = _lance_escape(vault_id)
+                    fts_query = fts_query.where(f"vault_id = '{safe_vault_id}'")
                 if filter_expr:
                     # FTS doesn't support complex filter_expr, apply basic vault filter only
                     fts_query = fts_query.where(filter_expr)

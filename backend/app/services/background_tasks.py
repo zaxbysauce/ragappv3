@@ -99,6 +99,7 @@ class TaskItem:
     source: str = 'upload'
     email_subject: Optional[str] = None
     email_sender: Optional[str] = None
+    vault_id: int = 1
 
 
 class BackgroundProcessor:
@@ -214,6 +215,7 @@ class BackgroundProcessor:
         source: str = 'upload',
         email_subject: Optional[str] = None,
         email_sender: Optional[str] = None,
+        vault_id: int = 1,
     ) -> None:
         """
         Add a file to the processing queue.
@@ -238,6 +240,7 @@ class BackgroundProcessor:
             source=source,
             email_subject=email_subject,
             email_sender=email_sender,
+            vault_id=vault_id,
         )
         await self.queue.put(task)
         logger.debug(f"Enqueued file: {file_path}")
@@ -299,6 +302,7 @@ class BackgroundProcessor:
                 source=task.source,
                 email_subject=task.email_subject,
                 email_sender=task.email_sender,
+                vault_id=task.vault_id,
             )
             logger.info(f"Successfully processed: {task.file_path}")
 
@@ -339,6 +343,7 @@ class BackgroundProcessor:
                 source=task.source,
                 email_subject=task.email_subject,
                 email_sender=task.email_sender,
+                vault_id=task.vault_id,
             )
             await self.queue.put(new_task)
         else:

@@ -44,7 +44,7 @@ def rrf_fuse(
             )
         weight = weights[i] if weights else 1.0
         for rank, record in enumerate(results):
-            uid = record.get("id", f"rank_{rank}")
+            uid = record.get("id", f"list_{i}_rank_{rank}")
             # RRF formula: weight * 1 / (k + rank + 1)
             score = weight * 1.0 / (k + rank + 1)
             rrf_scores[uid] = rrf_scores.get(uid, 0.0) + score

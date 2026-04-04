@@ -8,7 +8,7 @@ for new files and enqueues them for processing via BackgroundProcessor.
 import asyncio
 import logging
 from pathlib import Path
-from typing import Optional, Set
+from typing import Dict, Optional, Set
 
 from ..config import settings
 from ..models.database import SQLiteConnectionPool
@@ -108,8 +108,8 @@ class FileWatcher:
         enqueued_count = 0
         # Scan vault-specific upload directories + library
         provider = UploadPathProvider()
-        directories = [settings.library_dir]
-        
+        dir_vault_map: Dict[Path, int] = {settings.library_dir: 1}
+
         # Add each vault's upload directory
         try:
             from app.models.database import get_pool
@@ -123,13 +123,13 @@ class FileWatcher:
                     # Sanitize vault name for filesystem
                     safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in vault_name)
                     vault_upload_dir = settings.vaults_dir / safe_name / "uploads"
-                    directories.append(vault_upload_dir)
+                    dir_vault_map[vault_upload_dir] = vault_id
             finally:
                 pool.release_connection(conn)
         except Exception as e:
             logger.warning(f"Failed to get vault directories: {e}")
 
-        for directory in directories:
+        for directory, vault_id in dir_vault_map.items():
             if not directory.exists():
                 logger.debug(f"Directory does not exist, skipping: {directory}")
                 continue
@@ -137,7 +137,7 @@ class FileWatcher:
             try:
                 new_files = self._find_new_files(directory)
                 for file_path in new_files:
-                    await self.processor.enqueue(str(file_path))
+                    await self.processor.enqueue(str(file_path), vault_id=vault_id)
                     enqueued_count += 1
                     logger.info(f"Enqueued new file for processing: {file_path}")
             except Exception as e:
@@ -175,7 +175,10 @@ class FileWatcher:
                 self.pool = get_pool(str(settings.sqlite_path), max_size=2)
             conn = self.pool.get_connection()
             try:
-                cursor = conn.execute("SELECT file_path FROM files")
+                cursor = conn.execute(
+                    "SELECT file_path FROM files WHERE file_path LIKE ?",
+                    (f"{str(directory)}%",)
+                )
                 for row in cursor.fetchall():
                     files_in_db.add(row["file_path"])
             finally:

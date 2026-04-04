@@ -124,7 +124,13 @@ def stream_chat_response(
                     yield f"data: {json.dumps({'type': 'content', 'content': content})}\n\n"
                 elif chunk_type == "error":
                     yield f"data: {json.dumps({'type': 'error', 'message': chunk.get('message', 'Chat stream failed'), 'code': chunk.get('code', 'UNKNOWN_ERROR')})}\n\n"
+                    yield f"data: {json.dumps({'type': 'done', 'sources': [], 'memories_used': []})}\n\n"
                     return
+                elif chunk_type == "fallback":
+                    content = chunk.get("content", "")
+                    if content:
+                        collected_content.append(content)
+                        yield f"data: {json.dumps({'type': 'content', 'content': content})}\n\n"
                 elif chunk_type == "done":
                     sources = chunk.get("sources", [])
                     memories_used = chunk.get("memories_used", [])
@@ -576,8 +582,8 @@ async def add_message(
     if session_row is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    if not await evaluate_policy(user, "vault", session_row[2], "read"):
-        raise HTTPException(status_code=403, detail="No read access to this vault")
+    if not await evaluate_policy(user, "vault", session_row[2], "write"):
+        raise HTTPException(status_code=403, detail="No write access to this vault")
 
     # Check if this is the first message
     count_query = "SELECT COUNT(*) FROM chat_messages WHERE session_id = ?"

@@ -327,8 +327,9 @@ class EmbeddingService:
             self.embedding_query_prefix + text if self.embedding_query_prefix else text
         )
 
-        # Check cache using hash of the text as key
-        cache_key = hashlib.md5(text_to_embed.encode("utf-8")).hexdigest()
+        # Check cache using hash of the text as key (include URL fingerprint so model changes invalidate cache)
+        url_fingerprint = hashlib.md5(self.embeddings_url.encode("utf-8")).hexdigest()[:8]
+        cache_key = f"{url_fingerprint}_{hashlib.md5(text_to_embed.encode('utf-8')).hexdigest()}"
         cached = self._embed_cache.get(cache_key)
         if cached is not None:
             return cached
@@ -478,9 +479,13 @@ class EmbeddingService:
         # Call FlagEmbedding /embed endpoint
         try:
             embed_url = urljoin(self.embeddings_url, "/embed")
+            texts_to_embed = [
+                self.embedding_doc_prefix + t if self.embedding_doc_prefix else t
+                for t in texts
+            ]
             response = await self._client.post(
                 embed_url,
-                json={"input": texts},
+                json={"input": texts_to_embed},
                 headers={"Content-Type": "application/json"},
             )
             response.raise_for_status()

@@ -96,8 +96,9 @@ class MemoryStore:
         if not query or not query.strip():
             return []
 
-        # Sanitize query to prevent FTS5 syntax injection
-        sanitized_query = ' '.join(re.findall(r'\w+', query))
+        # Strip FTS5 special operators but preserve technical chars (+, ., -, #, @)
+        sanitized_query = re.sub(r'["\'^*(){}[\]|&~<>]', ' ', query)
+        sanitized_query = ' '.join(sanitized_query.split())
 
         if not sanitized_query.strip():
             return []

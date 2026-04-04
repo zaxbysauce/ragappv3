@@ -143,13 +143,14 @@ class RAGEngine:
         try:
             memory_content = self.memory_store.detect_memory_intent(user_input)
             if memory_content:
-                memory = self.memory_store.add_memory(
-                    memory_content, source="chat", vault_id=vault_id
+                memory = await asyncio.to_thread(
+                    self.memory_store.add_memory, memory_content, source="chat", vault_id=vault_id
                 )
                 yield {
                     "type": "content",
                     "content": f"Memory stored: {memory.content}",
                 }
+                yield {"type": "done"}
                 return
         except Exception as exc:
             logger.error("Memory intent detection/add failed (%s): %s", type(exc).__name__, exc)

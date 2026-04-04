@@ -90,5 +90,5 @@ class RetrievalEvaluator:
                 return "CONFIDENT"
                 
         except Exception as e:
-            logger.warning("Retrieval evaluation failed: %s, defaulting to CONFIDENT", e)
-            return "CONFIDENT"
+            logger.warning("Retrieval evaluation failed: %s, defaulting to AMBIGUOUS", e)
+            return "AMBIGUOUS"

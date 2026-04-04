@@ -301,6 +301,13 @@ class DocumentProcessor:
             conn.commit()
             return file_id
 
+        except sqlite3.IntegrityError as e:
+            conn.rollback()
+            if "file_hash" in str(e).lower() or "unique" in str(e).lower():
+                raise DuplicateFileError(
+                    f"A file with the same content already exists in this vault"
+                ) from e
+            raise DocumentProcessingError(f"Database integrity error: {e}") from e
         except sqlite3.Error as e:
             # Rollback on error and wrap in DocumentProcessingError
             conn.rollback()
@@ -569,6 +576,12 @@ class DocumentProcessor:
                         )
                 # else: _get_contextual_chunker already logged a warning if needed
 
+            if not chunks:
+                raise DocumentProcessingError(
+                    "No extractable content found in document. "
+                    "The file may be empty, encrypted, or in an unsupported format."
+                )
+
             # Generate embeddings and store in vector store
             if self.embedding_service is not None and self.vector_store is not None:
                 # Skip embedding/indexing if no chunks (status indexed with 0 chunks is acceptable)
@@ -604,11 +617,17 @@ class DocumentProcessor:
                         raise DocumentProcessingError(
                             f"Embedding count mismatch: expected {len(chunks)}, got {len(embeddings)}"
                         )
-                    # Validate first embedding is a non-empty list
-                    if not embeddings[0] or not isinstance(embeddings[0], list):
-                        raise DocumentProcessingError(
-                            "First embedding is empty or not a list"
-                        )
+                    # Validate all embeddings are non-empty lists with consistent dimension
+                    expected_dim = len(embeddings[0]) if embeddings[0] else 0
+                    for i, emb in enumerate(embeddings):
+                        if not emb or not isinstance(emb, list):
+                            raise DocumentProcessingError(
+                                f"Embedding {i} is empty or not a list"
+                            )
+                        if len(emb) != expected_dim:
+                            raise DocumentProcessingError(
+                                f"Embedding {i} has dimension {len(emb)}, expected {expected_dim}"
+                            )
                     # Map chunks to records for vector store
                     records = []
                     for chunk, embedding, sparse_emb in zip(
@@ -681,6 +700,8 @@ class DocumentProcessor:
                     # Initialize vector table with embedding dimension and add chunks
                     embedding_dim = len(embeddings[0])
                     await self.vector_store.init_table(embedding_dim)
+                    # Delete any previously orphaned chunks for idempotency on retry
+                    await self.vector_store.delete_by_file(str(file_id))
                     await self.vector_store.add_chunks(records)
         except Exception as e:
             # Phase 3: Update status to error on failure

@@ -232,7 +232,12 @@ class DocumentRetrievalService:
                 file_id = group_key
                 chunk_scale = "default"
 
-            indices = [int(s.metadata.get("chunk_index", 0)) for s in file_sources]
+            def _parse_chunk_index(raw) -> int:
+                """Parse chunk_index that may be in 'scale_idx' format."""
+                s = str(raw)
+                return int(s.rsplit("_", 1)[-1]) if "_" in s else int(s)
+
+            indices = [_parse_chunk_index(s.metadata.get("chunk_index", 0)) for s in file_sources]
 
             for chunk_index in indices:
                 start_idx = max(0, chunk_index - window)

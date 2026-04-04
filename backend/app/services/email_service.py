@@ -402,6 +402,7 @@ class EmailIngestionService:
                 source='email',
                 email_subject=subject,
                 email_sender=sender,
+                vault_id=vault_id,
             )
             processed_attachments += 1
             logger.info(f"Enqueued attachment for processing: {file_path}")

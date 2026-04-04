@@ -347,6 +347,10 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
     try:
+        await app.state.reranking_service.close()
+    except Exception:
+        pass
+    try:
         app.state.vector_store.close()
     except Exception:
         pass

@@ -276,17 +276,17 @@ class ContextualChunker:
                 else:
                     logger.warning(f"Empty context response for chunk {chunk_index}")
 
+                chunk.metadata["contextualized"] = True  # Only on success
             except LLMError as e:
                 logger.warning(
                     f"LLM error generating context for chunk {chunk_index}: {e}"
                 )
+                chunk.metadata["contextualized"] = False
             except Exception as e:
                 logger.warning(
                     f"Unexpected error generating context for chunk {chunk_index}: {e}"
                 )
+                chunk.metadata["contextualized"] = False
                 # Re-raise to avoid silent suppression (LLMError re-raised from inner handler
                 # can still reach here if raised in same function scope)
                 raise
-            finally:
-                # Always mark as contextualized, even on failure
-                chunk.metadata["contextualized"] = True

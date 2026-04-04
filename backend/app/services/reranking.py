@@ -56,6 +56,7 @@ class RerankingService:
         self.reranker_url = reranker_url.rstrip("/") if reranker_url else ""
         self.reranker_model = reranker_model
         self.top_n = top_n
+        self._http_client: Optional[httpx.AsyncClient] = None
 
     async def rerank(
         self,
@@ -117,18 +118,25 @@ class RerankingService:
             "top_n": top_n,
             "truncate": True,
         }
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            try:
-                response = await reranking_cb(client.post)(url, json=payload)
-                response.raise_for_status()
-                data = response.json()
-            except CircuitBreakerError:
-                raise
+        if self._http_client is None:
+            self._http_client = httpx.AsyncClient(timeout=30.0)
+        try:
+            response = await reranking_cb(self._http_client.post)(url, json=payload)
+            response.raise_for_status()
+            data = response.json()
+        except CircuitBreakerError:
+            raise
 
         # data is list of {"index": int, "score": float}
         # Sort by score descending before slicing to ensure correct results
         sorted_data = sorted(data, key=lambda x: x.get("score", 0), reverse=True)
         return [(item["index"], item["score"]) for item in sorted_data[:top_n]]
+
+    async def close(self):
+        """Close the persistent HTTP client."""
+        if self._http_client is not None:
+            await self._http_client.aclose()
+            self._http_client = None
 
     async def _rerank_local(
         self, query: str, texts: List[str], top_n: int

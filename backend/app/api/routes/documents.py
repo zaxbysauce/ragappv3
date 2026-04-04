@@ -137,7 +137,7 @@ async def retry_document(
 ) -> dict:
     try:
         cursor = await asyncio.to_thread(
-            conn.execute, "SELECT file_path FROM files WHERE id = ?", (file_id,)
+            conn.execute, "SELECT file_path, vault_id FROM files WHERE id = ?", (file_id,)
         )
         row = await asyncio.to_thread(cursor.fetchone)
         if not row:
@@ -147,7 +147,7 @@ async def retry_document(
         if not background_processor.is_running:
             await background_processor.start()
 
-        await background_processor.enqueue(row["file_path"])
+        await background_processor.enqueue(row["file_path"], vault_id=row["vault_id"])
 
         user_id = (
             str(current_user["id"])
@@ -572,14 +572,18 @@ async def _do_upload(
     # Generate safe file path
     file_path = upload_dir / file_name
 
-    # Handle duplicate file names
-    counter = 1
+    # Handle duplicate file names atomically (avoid TOCTTOU race)
+    counter = 0
     original_path = file_path
-    while file_path.exists():
-        stem = original_path.stem
-        suffix = original_path.suffix
-        file_path = upload_dir / f"{stem}_{counter}{suffix}"
-        counter += 1
+    while True:
+        try:
+            # O_EXCL ensures atomic create — fails if file exists
+            fd = os.open(str(file_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
+            break
+        except FileExistsError:
+            counter += 1
+            file_path = upload_dir / f"{original_path.stem}_{counter}{original_path.suffix}"
 
     # Path safety: ensure file_path is within upload_dir
     try:
