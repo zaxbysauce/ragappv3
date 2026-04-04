@@ -34,10 +34,12 @@ export function UploadIndicator() {
         )}
       >
         {/* Header - always visible */}
-        <button
-          type="button"
+        <div
+          role="button"
+          tabIndex={0}
           className="w-full flex items-center justify-between p-3 cursor-pointer hover:bg-muted/50"
           onClick={() => setIsExpanded(!isExpanded)}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setIsExpanded(!isExpanded); } }}
           aria-expanded={isExpanded}
           aria-label="Toggle upload details"
         >
@@ -77,7 +79,7 @@ export function UploadIndicator() {
               <X className="w-3 h-3" />
             </Button>
           </div>
-        </button>
+        </div>
 
         {/* Progress bar - always visible if uploading */}
         {currentUpload && (

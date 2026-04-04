@@ -344,6 +344,8 @@ def run_migrations(sqlite_path: str) -> None:
     migrate_add_org_slug_column(sqlite_path)
 
     # Add partial unique index for duplicate hash detection (HIGH-10)
+    # Wrapped in IntegrityError handler: existing databases may have duplicate
+    # (file_hash, vault_id) pairs that prevent index creation.
     conn = sqlite3.connect(sqlite_path)
     try:
         conn.execute("""
@@ -352,6 +354,13 @@ def run_migrations(sqlite_path: str) -> None:
             WHERE file_hash IS NOT NULL AND status = 'indexed'
         """)
         conn.commit()
+    except sqlite3.IntegrityError as e:
+        logger.warning(
+            "Could not create unique file-hash index (duplicate indexed records exist): %s. "
+            "The index will not be created until duplicates are removed.",
+            e,
+        )
+        conn.rollback()
     finally:
         conn.close()
 

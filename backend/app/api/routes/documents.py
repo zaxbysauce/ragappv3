@@ -586,12 +586,17 @@ async def _do_upload(
             file_path = upload_dir / f"{original_path.stem}_{counter}{original_path.suffix}"
 
     # Path safety: ensure file_path is within upload_dir
+    # Clean up the atomically-created file if the safety check fails
     try:
         resolved_path = file_path.resolve()
         resolved_upload_dir = upload_dir.resolve()
         if not str(resolved_path).startswith(str(resolved_upload_dir)):
+            file_path.unlink(missing_ok=True)
             raise HTTPException(status_code=400, detail="Invalid file path")
+    except HTTPException:
+        raise
     except (OSError, ValueError):
+        file_path.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail="Invalid file path")
 
     temp_file_path = None
