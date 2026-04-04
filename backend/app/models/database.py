@@ -338,6 +338,7 @@ def run_migrations(sqlite_path: str) -> None:
     init_db(sqlite_path)
     migrate_add_vaults(sqlite_path)
     migrate_add_email_columns(sqlite_path)
+    migrate_add_file_metadata_columns(sqlite_path)
     migrate_add_user_org_tables(sqlite_path)
     migrate_add_vault_permission_columns(sqlite_path)
     migrate_vault_paths(sqlite_path)
@@ -466,6 +467,44 @@ def migrate_add_email_columns(sqlite_path: str) -> None:
         # Add email_sender column (nullable)
         if not _column_exists("files", "email_sender"):
             conn.execute("ALTER TABLE files ADD COLUMN email_sender TEXT")
+
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def migrate_add_file_metadata_columns(sqlite_path: str) -> None:
+    """
+    Migration: Add file metadata columns to files table.
+
+    Adds file_size, file_type, and modified_at columns that were added to the
+    schema but never had ALTER TABLE migrations. Existing rows get safe defaults.
+
+    Args:
+        sqlite_path: Path to the SQLite database file.
+    """
+    conn = sqlite3.connect(sqlite_path)
+    try:
+        conn.execute("PRAGMA foreign_keys = ON;")
+
+        def _column_exists(table: str, column: str) -> bool:
+            cursor = conn.execute(f"PRAGMA table_info({table})")
+            return any(row[1] == column for row in cursor.fetchall())
+
+        if not _column_exists("files", "file_size"):
+            conn.execute("ALTER TABLE files ADD COLUMN file_size INTEGER DEFAULT 0")
+
+        if not _column_exists("files", "file_type"):
+            conn.execute("ALTER TABLE files ADD COLUMN file_type TEXT")
+
+        if not _column_exists("files", "modified_at"):
+            conn.execute(
+                "ALTER TABLE files ADD COLUMN modified_at TIMESTAMP DEFAULT NULL"
+            )
+            # Backfill existing rows: use created_at as a reasonable modified_at proxy
+            conn.execute(
+                "UPDATE files SET modified_at = created_at WHERE modified_at IS NULL"
+            )
 
         conn.commit()
     finally:
