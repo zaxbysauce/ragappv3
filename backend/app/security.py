@@ -19,15 +19,34 @@ CSRF_COOKIE_NAME = "X-CSRF-Token"
 
 
 class _InMemoryCSRFStore:
-    """Thread-safe in-memory fallback for CSRF tokens when Redis is unavailable."""
+    """Thread-safe in-memory fallback for CSRF tokens when Redis is unavailable.
+
+    Includes max-size eviction and lazy cleanup to prevent unbounded memory growth.
+    """
+
+    MAX_SIZE = 10_000
 
     def __init__(self, ttl: int = 900) -> None:
         self.ttl = ttl
         self._store: Dict[str, float] = {}
         self._lock = threading.Lock()
 
+    def _cleanup_expired(self) -> None:
+        """Remove expired tokens. Must be called with lock held."""
+        now = time.time()
+        expired = [k for k, exp in self._store.items() if now > exp]
+        for k in expired:
+            del self._store[k]
+
     def setex(self, key: str, ttl: int, value: str) -> None:
         with self._lock:
+            # Periodic cleanup on write to prevent unbounded growth
+            if len(self._store) >= self.MAX_SIZE:
+                self._cleanup_expired()
+            # If still at capacity after cleanup, evict oldest entry
+            if len(self._store) >= self.MAX_SIZE:
+                oldest_key = min(self._store, key=self._store.get)
+                del self._store[oldest_key]
             self._store[key] = time.time() + ttl
 
     def get(self, key: str) -> str | None:

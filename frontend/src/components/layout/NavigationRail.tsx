@@ -38,9 +38,10 @@ function StatusIndicator({ isUp, label, loading }: { isUp: boolean; label: strin
           loading ? "bg-yellow-500 animate-pulse" : isUp ? "bg-green-500" : "bg-red-500"
         )}
       />
-      <span className="text-[9px] text-muted-foreground truncate">
+      <span className="text-xs text-muted-foreground truncate">
         {loading ? "Checking" : label}
       </span>
+      <span className="sr-only">{label}: {isUp ? "online" : "offline"}</span>
     </div>
   );
 }
@@ -134,7 +135,7 @@ export function NavigationRail({ healthStatus }: NavigationRailProps) {
               {/* Label */}
               <span
                 className={cn(
-                  "text-[10px] font-medium transition-colors duration-200",
+                  "text-xs font-medium transition-colors duration-200",
                   isActive
                     ? "text-primary"
                     : "text-muted-foreground group-hover:text-foreground",

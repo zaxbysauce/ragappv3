@@ -2,6 +2,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Brain, Plus, Search, Trash2, Loader2 } from "lucide-react";
@@ -73,8 +74,9 @@ export default function MemoryPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
-              <label className="text-sm font-medium">Content *</label>
+              <Label htmlFor="memory-content">Content *</Label>
               <Textarea
+                id="memory-content"
                 placeholder="Enter memory content..."
                 className={`min-h-[100px] ${contentError ? "border-destructive focus-visible:ring-destructive" : ""}`}
                 value={newMemory.content}
@@ -92,16 +94,18 @@ export default function MemoryPage() {
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <label className="text-sm font-medium">Category</label>
+                <Label htmlFor="memory-category">Category</Label>
                 <Input
+                  id="memory-category"
                   placeholder="e.g., facts, preferences"
                   value={newMemory.category}
                   onChange={(e) => setNewMemory({ ...newMemory, category: e.target.value })}
                 />
               </div>
               <div className="space-y-2">
-                <label className="text-sm font-medium">Source</label>
+                <Label htmlFor="memory-source">Source</Label>
                 <Input
+                  id="memory-source"
                   placeholder="e.g., user input, document"
                   value={newMemory.source}
                   onChange={(e) => setNewMemory({ ...newMemory, source: e.target.value })}
@@ -109,8 +113,9 @@ export default function MemoryPage() {
               </div>
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-medium">Tags</label>
+              <Label htmlFor="memory-tags">Tags</Label>
               <Input
+                id="memory-tags"
                 placeholder="Enter tags separated by commas..."
                 value={newMemory.tags}
                 onChange={(e) => setNewMemory({ ...newMemory, tags: e.target.value })}

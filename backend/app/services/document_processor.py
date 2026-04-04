@@ -410,7 +410,15 @@ class DocumentProcessor:
         Returns:
             Tuple of (List of ProcessedChunk objects, document text as string)
         """
-        elements = await asyncio.to_thread(self.parser.parse, file_path)
+        try:
+            elements = await asyncio.wait_for(
+                asyncio.to_thread(self.parser.parse, file_path),
+                timeout=settings.document_parse_timeout,
+            )
+        except asyncio.TimeoutError:
+            raise DocumentProcessingError(
+                f"Document parsing timed out after {settings.document_parse_timeout}s: {file_path}"
+            )
         # Join all element texts for use as context in contextual chunking
         document_text = "\n".join([str(e) for e in elements])
 
@@ -572,6 +580,7 @@ class DocumentProcessor:
                     use_tri_vector = (
                         await self.embedding_service.detect_tri_vector_support()
                     )
+                    logger.debug("Tri-vector embedding support: result=%s", use_tri_vector)
                     if use_tri_vector:
                         logger.info(
                             "Tri-vector embedding enabled: generating dense + sparse vectors"

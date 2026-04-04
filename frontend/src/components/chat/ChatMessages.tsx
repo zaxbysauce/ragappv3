@@ -1,4 +1,4 @@
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, memo } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { MessageBubble } from "./MessageBubble";
 import { ChatInput } from "./ChatInput";
@@ -10,6 +10,8 @@ import { VaultSelector } from "@/components/vault/VaultSelector";
 import { useVaultStore } from "@/stores/useVaultStore";
 import { useChatHistory } from "@/hooks/useChatHistory";
 import { cn } from "@/lib/utils";
+
+const MemoMessageBubble = memo(MessageBubble);
 
 interface ChatMessagesProps {
   toggleCanvasCollapse: () => void;
@@ -114,7 +116,7 @@ export function ChatMessages({ toggleCanvasCollapse, canvasCollapsed }: ChatMess
             </div>
           ) : (
             messages.map((message, idx) => (
-              <MessageBubble
+              <MemoMessageBubble
                 key={message.id}
                 message={message}
                 isStreaming={

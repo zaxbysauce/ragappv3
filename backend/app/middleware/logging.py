@@ -8,6 +8,8 @@ from typing import Iterable
 from fastapi import FastAPI, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
+from app.utils.request_context import request_id_var
+
 SCRUB_FIELDS = {
     "message",
     "content",
@@ -44,8 +46,13 @@ class LoggingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
         request.state.request_id = request_id
+        # Propagate request_id to service-layer loggers via contextvar
+        token = request_id_var.set(request_id)
         start = time.time()
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        finally:
+            request_id_var.reset(token)
         duration = time.time() - start
         sanitized_query = _sanitize_query(request.url.query)
         logger.info(

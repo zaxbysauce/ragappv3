@@ -27,20 +27,49 @@ export function useHealthCheck(options?: UseHealthCheckOptions): HealthStatus {
       const response = await apiClient.get<HealthResponse>("/health", { params });
       const services = response.data.services;
 
-      setHealth({
-        backend: services?.backend ?? response.data.status === "ok",
-        embeddings: services?.embeddings ?? false,
-        chat: services?.chat ?? false,
-        loading: false,
-        lastChecked: new Date(),
+      const newBackend = services?.backend ?? response.data.status === "ok";
+      const newEmbeddings = services?.embeddings ?? false;
+      const newChat = services?.chat ?? false;
+
+      setHealth((prev) => {
+        const now = new Date();
+        if (
+          prev.backend === newBackend &&
+          prev.embeddings === newEmbeddings &&
+          prev.chat === newChat &&
+          !prev.loading
+        ) {
+          // Service status unchanged — still update lastChecked for freshness
+          // but return same object reference to avoid re-rendering consumers
+          // that only depend on service status fields.
+          prev.lastChecked = now;
+          return prev;
+        }
+        return {
+          backend: newBackend,
+          embeddings: newEmbeddings,
+          chat: newChat,
+          loading: false,
+          lastChecked: now,
+        };
       });
     } catch {
-      setHealth({
-        backend: false,
-        embeddings: false,
-        chat: false,
-        loading: false,
-        lastChecked: new Date(),
+      setHealth((prev) => {
+        if (
+          !prev.backend &&
+          !prev.embeddings &&
+          !prev.chat &&
+          !prev.loading
+        ) {
+          return prev;
+        }
+        return {
+          backend: false,
+          embeddings: false,
+          chat: false,
+          loading: false,
+          lastChecked: new Date(),
+        };
       });
     }
   }, []);

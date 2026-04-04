@@ -78,7 +78,7 @@ const MARKDOWN_COMPONENTS = {
 
 export const MarkdownContent = React.memo(function MarkdownContent({ content }: { content: string }) {
   return (
-    <div className="prose prose-sm dark:prose-invert max-w-none">
+    <div className="prose prose-sm dark:prose-invert max-w-prose">
       <ReactMarkdown
         components={MARKDOWN_COMPONENTS}
         remarkPlugins={[remarkGfm]}

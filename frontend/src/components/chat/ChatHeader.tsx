@@ -54,7 +54,7 @@ export function ChatHeader({
             <Button size="sm" onClick={onSaveTitle}>Save</Button>
           </div>
         ) : (
-          <h1 className="text-3xl font-bold tracking-tight">Chat</h1>
+          <h1 className="text-2xl font-bold">Chat</h1>
         )}
         <p className="text-muted-foreground mt-1">Ask questions and get AI-powered answers</p>
       </div>

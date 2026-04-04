@@ -42,6 +42,8 @@ class Settings(BaseSettings):
     """Character-based overlap between chunks. Default 120 chars (~30 tokens)."""
     document_parsing_strategy: str = "fast"
     """Document parsing strategy for unstructured.io: 'fast' (fastest), 'hi_res' (best quality), 'auto' (automatic selection)."""
+    document_parse_timeout: float = 300.0
+    """Timeout in seconds for document parsing. Prevents worker threads from being blocked indefinitely by complex documents."""
     retrieval_top_k: int | None = None
     """Number of top chunks to retrieve (unifies max_context_chunks and vector_top_k)."""
     vector_metric: str = "cosine"
@@ -132,6 +134,9 @@ class Settings(BaseSettings):
     # ── Sparse search configuration ──────────────────────────────────
     sparse_search_max_candidates: int = 1000
     """Maximum candidate records to scan during learned sparse dot-product search."""
+
+    sparse_embedding_timeout: float = 2.0
+    """Timeout in seconds for sparse embedding API calls. Previous default of 0.2s was too aggressive."""
 
     # ── Retrieval recency configuration ──────────────────────────
     retrieval_recency_weight: float = 0.1
@@ -395,10 +400,15 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def reject_insecure_defaults(self) -> "Settings":
-        """Refuse startup if admin_secret_token equals the default empty string."""
+        """Refuse startup if security-critical secrets use default values."""
         if self.users_enabled and not self.admin_secret_token:
             raise ValueError(
                 "ADMIN_SECRET_TOKEN must be set when USERS_ENABLED=True. "
+                'Generate one with: python -c "import secrets; print(secrets.token_urlsafe(48))"'
+            )
+        if self.users_enabled and self.jwt_secret_key == "change-me-to-a-random-64-char-string":
+            raise ValueError(
+                "JWT_SECRET_KEY must be changed from the default when USERS_ENABLED=True. "
                 'Generate one with: python -c "import secrets; print(secrets.token_urlsafe(48))"'
             )
         return self

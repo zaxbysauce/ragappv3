@@ -4,6 +4,7 @@ LanceDB vector store service for semantic search.
 
 import asyncio
 import json
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, cast
 import lancedb
@@ -24,6 +25,14 @@ _MULTI_SCALE_CONCURRENCY = 4
 VECTOR_INDEX_MIN_ROWS = 256
 
 
+def _lance_escape(value) -> str:
+    """Escape a value for use in LanceDB SQL-like where clauses.
+
+    Uses SQL-standard doubled single-quote escaping consistently.
+    """
+    return str(value).replace("'", "''")
+
+
 class VectorStoreError(Exception):
     """Custom exception for vector store errors."""
 
@@ -38,6 +47,12 @@ class VectorStoreConnectionError(VectorStoreError):
 
 class VectorStoreValidationError(VectorStoreError):
     """Exception raised when record validation fails."""
+
+    pass
+
+
+class VectorIndexCreationError(VectorStoreError):
+    """Exception raised when vector index creation fails."""
 
     pass
 
@@ -221,6 +236,7 @@ class VectorStore:
             return
 
         # Create the index
+        t0 = time.monotonic()
         try:
             await self.table.create_index(
                 column="embedding",
@@ -232,6 +248,9 @@ class VectorStore:
                     num_sub_vectors=96,
                 ),
                 replace=True,
+            )
+            logger.info(
+                "Vector index creation completed in %.2fs", time.monotonic() - t0
             )
             logger.info(
                 "Vector index created with metric=%s (%d rows)",
@@ -355,12 +374,12 @@ class VectorStore:
             return []
 
         # Build scale filter
-        safe_scale = str(scale).replace("'", "\\'")
+        safe_scale = _lance_escape(scale)
         scale_filter = f"chunk_scale = '{safe_scale}'"
 
         # Combine with vault filter if present
         if vault_id is not None:
-            safe_vault_id = str(vault_id).replace("'", "\\'")
+            safe_vault_id = _lance_escape(vault_id)
             vault_filter = f"vault_id = '{safe_vault_id}'"
             if filter_expr:
                 combined_filter = (
@@ -427,7 +446,7 @@ class VectorStore:
                 fts_query = await self.table.search(query_text, query_type="fts")
                 fts_filter_parts = [scale_filter]
                 if vault_id:
-                    safe_vault_id = str(vault_id).replace("'", "\\'")
+                    safe_vault_id = _lance_escape(vault_id)
                     fts_filter_parts.append(f"vault_id = '{safe_vault_id}'")
                 if filter_expr:
                     fts_filter_parts.append(f"({filter_expr})")
@@ -486,10 +505,10 @@ class VectorStore:
         try:
             filter_parts = ["sparse_embedding IS NOT NULL"]
             if vault_id is not None:
-                safe_vault_id = str(vault_id).replace("'", "''")
+                safe_vault_id = _lance_escape(vault_id)
                 filter_parts.append(f"vault_id = '{safe_vault_id}'")
             if scale is not None:
-                safe_scale = str(scale).replace("'", "''")
+                safe_scale = _lance_escape(scale)
                 filter_parts.append(f"chunk_scale = '{safe_scale}'")
             if filter_expr:
                 filter_parts.append(f"({filter_expr})")
@@ -695,7 +714,7 @@ class VectorStore:
         # Apply vault filter if specified
         _filter_expr = filter_expr
         if vault_id is not None:
-            safe_vault_id = str(vault_id).replace("'", "\\'")
+            safe_vault_id = _lance_escape(vault_id)
             vault_filter = f"vault_id = '{safe_vault_id}'"
             if _filter_expr:
                 _filter_expr = f"({_filter_expr}) AND ({vault_filter})"
@@ -843,7 +862,7 @@ class VectorStore:
         if self.table is None:
             return 0
 
-        safe_vault_id = str(vault_id).replace("'", "\\'")
+        safe_vault_id = _lance_escape(vault_id)
         try:
             count_before = await self.table.count_rows(f"vault_id = '{safe_vault_id}'")
         except (OSError, RuntimeError, ValueError):
@@ -851,6 +870,39 @@ class VectorStore:
 
         await self.table.delete(f"vault_id = '{safe_vault_id}'")
         return count_before
+
+    async def _safe_table_to_pandas(self, table, operation_name: str):
+        """Load a LanceDB table into pandas with OOM protection.
+
+        Checks row count first and warns for large tables. For very large
+        tables (>500k rows), raises an error instead of risking OOM.
+        For tables up to 500k rows, proceeds with the load but logs a
+        warning above 100k rows.
+        """
+        try:
+            row_count = await table.count_rows()
+        except Exception:
+            row_count = -1  # Unknown — proceed cautiously
+
+        if row_count > 500_000:
+            raise VectorStoreError(
+                f"{operation_name}: table has {row_count} rows. "
+                f"Loading into memory would risk OOM. "
+                f"Please run this migration with a dedicated script that processes in batches."
+            )
+        if row_count > 100_000:
+            logger.warning(
+                "%s: loading %d rows into memory. "
+                "This may use significant RAM.",
+                operation_name, row_count,
+            )
+        elif row_count > 0:
+            logger.info(
+                "%s: loading %d rows for migration.",
+                operation_name, row_count,
+            )
+
+        return await table.to_pandas()
 
     async def migrate_add_vault_id(self) -> int:
         """
@@ -893,7 +945,7 @@ class VectorStore:
         if "vault_id" in field_names:
             # Column exists — check if any rows have null vault_id
             try:
-                df = await table.to_pandas()
+                df = await self._safe_table_to_pandas(table, "vault_id migration")
                 null_count = df["vault_id"].isna().sum()
                 if null_count == 0:
                     logger.info("LanceDB vault_id migration: no migration needed")
@@ -920,7 +972,7 @@ class VectorStore:
         else:
             # Column doesn't exist — add it to all records
             try:
-                df = await table.to_pandas()
+                df = await self._safe_table_to_pandas(table, "vault_id migration (add column)")
                 if len(df) == 0:
                     # Empty table — just drop and recreate with new schema
                     # Try to get embedding_dim from existing schema before dropping
@@ -1010,7 +1062,7 @@ class VectorStore:
         if "chunk_scale" in field_names:
             # Column exists — check if any rows have null chunk_scale
             try:
-                df = await table.to_pandas()
+                df = await self._safe_table_to_pandas(table, "chunk_scale migration")
                 null_count = df["chunk_scale"].isna().sum()
                 if null_count == 0:
                     logger.info("LanceDB chunk_scale migration: no migration needed")
@@ -1039,7 +1091,7 @@ class VectorStore:
         else:
             # Column doesn't exist — add it to all records
             try:
-                df = await table.to_pandas()
+                df = await self._safe_table_to_pandas(table, "chunk_scale migration (add column)")
                 if len(df) == 0:
                     # Empty table — just drop and recreate with new schema
                     # Try to get embedding_dim from existing schema before dropping
@@ -1132,7 +1184,7 @@ class VectorStore:
 
         # Column doesn't exist — add it to all records (default None/null)
         try:
-            df = await table.to_pandas()
+            df = await self._safe_table_to_pandas(table, "sparse_embedding migration")
             if len(df) == 0:
                 # Empty table — just drop and recreate with new schema
                 if self._embedding_dim is None:
@@ -1228,7 +1280,7 @@ class VectorStore:
             # Build IN clause for chunk_uids
             # Each uid is in format "{file_id}_{chunk_index}"
             # Escape single quotes in uids for SQL-like syntax
-            escaped_uids = [uid.replace("'", "''") for uid in chunk_uids]
+            escaped_uids = [_lance_escape(uid) for uid in chunk_uids]
             quoted_uids = [f"'{uid}'" for uid in escaped_uids]
             uid_list = ", ".join(quoted_uids)
 

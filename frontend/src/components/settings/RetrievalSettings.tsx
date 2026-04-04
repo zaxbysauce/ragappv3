@@ -1,5 +1,7 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import type { SettingsFormData, SettingsErrors } from "@/stores/useSettingsStore";
 
 export interface RetrievalSettingsProps {
@@ -25,16 +27,14 @@ export function RetrievalSettings({
           {/* Enable Reranking Toggle */}
           <div className="space-y-2">
             <div className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                id="reranking_enabled"
+              <Checkbox
+                id="reranking-enabled"
                 checked={formData.reranking_enabled || false}
-                onChange={(e) => onChange("reranking_enabled", e.target.checked)}
-                className="h-4 w-4 rounded border-gray-300"
+                onCheckedChange={(checked) => onChange("reranking_enabled", checked as boolean)}
               />
-              <label htmlFor="reranking_enabled" className="text-sm font-medium">
+              <Label htmlFor="reranking-enabled">
                 Enable Reranking
-              </label>
+              </Label>
             </div>
             <p className="text-xs text-muted-foreground">
               Apply reranking to improve the relevance of retrieved documents
@@ -43,8 +43,9 @@ export function RetrievalSettings({
 
           {/* Reranker URL */}
           <div className="space-y-2">
-            <label className="text-sm font-medium">Reranker URL</label>
+            <Label htmlFor="reranker-url">Reranker URL</Label>
             <Input
+              id="reranker-url"
               type="text"
               value={formData.reranker_url || ""}
               onChange={(e) => onChange("reranker_url", e.target.value)}
@@ -61,8 +62,9 @@ export function RetrievalSettings({
 
           {/* Reranker Model */}
           <div className="space-y-2">
-            <label className="text-sm font-medium">Reranker Model</label>
+            <Label htmlFor="reranker-model">Reranker Model</Label>
             <Input
+              id="reranker-model"
               type="text"
               value={formData.reranker_model || ""}
               onChange={(e) => onChange("reranker_model", e.target.value)}
@@ -79,8 +81,9 @@ export function RetrievalSettings({
 
           {/* Initial Retrieval Top-K */}
           <div className="space-y-2">
-            <label className="text-sm font-medium">Initial Retrieval Top-K</label>
+            <Label htmlFor="initial-retrieval-top-k">Initial Retrieval Top-K</Label>
             <Input
+              id="initial-retrieval-top-k"
               type="number"
               min={5}
               max={100}
@@ -98,8 +101,9 @@ export function RetrievalSettings({
 
           {/* Reranker Top-N */}
           <div className="space-y-2">
-            <label className="text-sm font-medium">Reranker Top-N</label>
+            <Label htmlFor="reranker-top-n">Reranker Top-N</Label>
             <Input
+              id="reranker-top-n"
               type="number"
               min={1}
               max={20}
@@ -127,16 +131,14 @@ export function RetrievalSettings({
           {/* Enable Hybrid Search Toggle */}
           <div className="space-y-2">
             <div className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                id="hybrid_search_enabled"
+              <Checkbox
+                id="hybrid-search-enabled"
                 checked={formData.hybrid_search_enabled || false}
-                onChange={(e) => onChange("hybrid_search_enabled", e.target.checked)}
-                className="h-4 w-4 rounded border-gray-300"
+                onCheckedChange={(checked) => onChange("hybrid_search_enabled", checked as boolean)}
               />
-              <label htmlFor="hybrid_search_enabled" className="text-sm font-medium">
+              <Label htmlFor="hybrid-search-enabled">
                 Enable Hybrid Search
-              </label>
+              </Label>
             </div>
             <p className="text-xs text-muted-foreground">
               Combine vector similarity search with keyword-based search
@@ -145,9 +147,10 @@ export function RetrievalSettings({
 
           {/* Hybrid Alpha */}
           <div className="space-y-2">
-            <label className="text-sm font-medium">Hybrid Alpha</label>
+            <Label htmlFor="hybrid-alpha">Hybrid Alpha</Label>
             <div className="flex items-center gap-4">
               <Input
+                id="hybrid-alpha"
                 type="number"
                 min={0}
                 max={1}

@@ -58,6 +58,21 @@ async def _llm_keepalive_task(llm_client: LLMClient, interval: int = 30):
             logger.debug("LLM keep-alive ping failed (model may be unloaded): %s", e)
 
 
+def _validate_setting_value(key: str, value) -> bool:
+    """Validate a single setting value through Pydantic field validation.
+
+    Returns True if the value is valid, False otherwise.
+    """
+    try:
+        current = settings.model_dump()
+        current[key] = value
+        type(settings).model_validate(current)
+        return True
+    except Exception as e:
+        logger.warning("Persisted setting %s=%r failed validation: %s", key, value, e)
+        return False
+
+
 def _load_persisted_settings(sqlite_path: str) -> None:
     """Load user-configurable settings from DB if they were previously saved."""
     import json
@@ -82,11 +97,15 @@ def _load_persisted_settings(sqlite_path: str) -> None:
             if key in persisted:
                 try:
                     if expected_type == bool:
-                        setattr(settings, key, bool(json.loads(persisted[key])))
+                        converted = bool(json.loads(persisted[key]))
                     elif expected_type == int:
-                        setattr(settings, key, int(json.loads(persisted[key])))
+                        converted = int(json.loads(persisted[key]))
                     elif expected_type == float:
-                        setattr(settings, key, float(json.loads(persisted[key])))
+                        converted = float(json.loads(persisted[key]))
+                    else:
+                        converted = persisted[key]
+                    if _validate_setting_value(key, converted):
+                        setattr(settings, key, converted)
                 except Exception as e:
                     logger.warning(f"Failed to restore persisted setting {key}: {e}")
 
@@ -123,23 +142,21 @@ def _load_persisted_settings(sqlite_path: str) -> None:
                     expected_type = type(getattr(settings, key))
                     raw = persisted[key]
                     if expected_type == type(None):  # NoneType - just set as string
-                        setattr(settings, key, raw)
+                        converted = raw
                     elif expected_type == bool:
-                        setattr(
-                            settings,
-                            key,
-                            str(raw).lower() in ("true", "1", "yes", "on"),
-                        )
+                        converted = str(raw).lower() in ("true", "1", "yes", "on")
                     elif expected_type == int:
-                        setattr(settings, key, int(raw))
+                        converted = int(raw)
                     elif expected_type == float:
-                        setattr(settings, key, float(raw))
+                        converted = float(raw)
                     else:
-                        setattr(settings, key, raw)
+                        converted = raw
+                    if _validate_setting_value(key, converted):
+                        setattr(settings, key, converted)
                 except Exception as e:
                     logger.warning(f"Failed to restore persisted setting {key}: {e}")
     except sqlite3.OperationalError:
-        pass  # Table doesn't exist yet on first run
+        logger.debug("Settings table not yet created; skipping persisted settings load (expected on first startup)")
     finally:
         conn.close()
 

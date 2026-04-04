@@ -37,8 +37,9 @@ class MaintenanceMiddleware(BaseHTTPMiddleware):
         flag = service.get_flag()
         if flag.enabled and request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}:
             return Response(
-                content='{"error": "maintenance"}',
+                content='{"error": "maintenance", "retry_after": 300}',
                 status_code=503,
-                media_type="application/json"
+                media_type="application/json",
+                headers={"Retry-After": "300"},
             )
         return await call_next(request)

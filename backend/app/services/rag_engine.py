@@ -152,7 +152,7 @@ class RAGEngine:
                 }
                 return
         except Exception as exc:
-            logger.error("Memory intent detection/add failed: %s", exc)
+            logger.error("Memory intent detection/add failed (%s): %s", type(exc).__name__, exc)
 
         # Query transformation for broader retrieval (if enabled)
         transformed_queries: List[str] = [user_input]
@@ -171,22 +171,26 @@ class RAGEngine:
                     )
             except Exception as e:
                 logger.warning(
-                    "Query transformation failed: %s, using original query only", e
+                    "Query transformation failed (%s): %s, using original query only", type(e).__name__, e
                 )
                 transformed_queries = [user_input]
 
         logger.debug("[query] transformed_queries=%s", transformed_queries)
 
-        # Embed all transformed queries
+        # Embed all transformed queries concurrently
         query_embeddings: List[List[float]] = []
-        for query_text in transformed_queries:
-            try:
-                embedding = await self.embedding_service.embed_single(query_text)
-                query_embeddings.append(embedding)
-            except EmbeddingError as exc:
+        embed_results = await asyncio.gather(
+            *[self.embedding_service.embed_single(q) for q in transformed_queries],
+            return_exceptions=True,
+        )
+        for i, result in enumerate(embed_results):
+            if isinstance(result, BaseException):
                 logger.warning(
-                    "Failed to embed query variant '%s': %s", query_text, exc
+                    "Query embedding failure [%d/%d]: query='%.50s', error=%s",
+                    i + 1, len(transformed_queries), transformed_queries[i], result,
                 )
+            else:
+                query_embeddings.append(result)
 
         if not query_embeddings:
             error_msg = "Unable to encode any query variants"
@@ -363,24 +367,37 @@ class RAGEngine:
             )
             top_k_value = fetch_k if fetch_k is not None else self.retrieval_top_k
 
-            # Search with all query embeddings and fuse results
-            all_results: List[List[Dict[str, Any]]] = []
-            for i, embedding in enumerate(query_embeddings):
-                results = await self.vector_store.search(
+            # Search with all query embeddings concurrently and fuse results
+            _top_k = int(top_k_value) if top_k_value is not None else 10
+            _vault = str(vault_id) if vault_id is not None else None
+            search_tasks = [
+                self.vector_store.search(
                     embedding,
-                    int(top_k_value) if top_k_value is not None else 10,
-                    vault_id=str(vault_id) if vault_id is not None else None,
+                    _top_k,
+                    vault_id=_vault,
                     query_text=user_input if i == 0 else "",
                     hybrid=self.hybrid_search_enabled and i == 0,
                     hybrid_alpha=effective_alpha,
                     query_sparse=query_sparse if i == 0 else None,
                 )
-                all_results.append(results)
-                logger.debug(
-                    "[_execute_retrieval] vector_store.search() scale=%d returned %d results",
-                    i,
-                    len(results),
-                )
+                for i, embedding in enumerate(query_embeddings)
+            ]
+            gather_results = await asyncio.gather(*search_tasks, return_exceptions=True)
+            all_results = []
+            for i, result in enumerate(gather_results):
+                if isinstance(result, BaseException):
+                    logger.warning(
+                        "[_execute_retrieval] vector search variant=%d failed: %s",
+                        i, result,
+                    )
+                    all_results.append([])  # Degrade gracefully — use empty result for failed variant
+                else:
+                    all_results.append(result)
+                    logger.debug(
+                        "[_execute_retrieval] vector_store.search() variant=%d returned %d results",
+                        i,
+                        len(result),
+                    )
 
             # Compute recency scores for tiebreaking in multi-query fusion
             recency_scores: Optional[Dict[str, float]] = None
@@ -514,9 +531,12 @@ class RAGEngine:
                     logger.warning("Retrieval evaluation failed: %s", e)
 
             return vector_results, relevance_hint
-        except Exception:
+        except Exception as exc:
             logger.exception(
-                "[_execute_retrieval] UNHANDLED EXCEPTION in retrieval pipeline"
+                "[_execute_retrieval] UNHANDLED EXCEPTION in retrieval pipeline: %s, query=%.100s, vault_id=%s",
+                type(exc).__name__,
+                user_input,
+                vault_id,
             )
             raise
 
@@ -643,7 +663,9 @@ class RAGEngine:
         """
         packed, token_count = [], 0
         for chunk in chunks:
-            chunk_tokens = len(chunk.text) // 4
+            # ~3.5 chars/token for English; errs on the side of overestimation
+            # to prevent context overflow (safer than the previous len//4 undercount)
+            chunk_tokens = max(1, int(len(chunk.text) / 3.5))
             if token_count + chunk_tokens > max_tokens and packed:
                 break
             packed.append(chunk)
