@@ -382,13 +382,22 @@ class RAGEngine:
                 )
                 for i, embedding in enumerate(query_embeddings)
             ]
-            all_results = list(await asyncio.gather(*search_tasks))
-            for i, results in enumerate(all_results):
-                logger.debug(
-                    "[_execute_retrieval] vector_store.search() variant=%d returned %d results",
-                    i,
-                    len(results),
-                )
+            gather_results = await asyncio.gather(*search_tasks, return_exceptions=True)
+            all_results = []
+            for i, result in enumerate(gather_results):
+                if isinstance(result, BaseException):
+                    logger.warning(
+                        "[_execute_retrieval] vector search variant=%d failed: %s",
+                        i, result,
+                    )
+                    all_results.append([])  # Degrade gracefully — use empty result for failed variant
+                else:
+                    all_results.append(result)
+                    logger.debug(
+                        "[_execute_retrieval] vector_store.search() variant=%d returned %d results",
+                        i,
+                        len(result),
+                    )
 
             # Compute recency scores for tiebreaking in multi-query fusion
             recency_scores: Optional[Dict[str, float]] = None

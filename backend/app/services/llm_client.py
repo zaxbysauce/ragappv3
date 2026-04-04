@@ -184,13 +184,15 @@ class LLMClient:
             "max_tokens": max_tokens,
         }
 
-        # Check circuit breaker state before attempting stream connection
-        if llm_cb.current_state == CircuitBreakerState.OPEN:
-            llm_cb._check_timeout()  # Allow transition to HALF_OPEN if timeout elapsed
+        # Check circuit breaker state before attempting stream connection.
+        # Use the lock to avoid race conditions with concurrent requests.
+        async with llm_cb._lock:
             if llm_cb.current_state == CircuitBreakerState.OPEN:
-                raise LLMError(
-                    "LLM service is currently unavailable (circuit breaker open)"
-                )
+                llm_cb._check_timeout()
+                if llm_cb.current_state == CircuitBreakerState.OPEN:
+                    raise LLMError(
+                        "LLM service is currently unavailable (circuit breaker open)"
+                    )
 
         stream_succeeded = False
         try:
@@ -253,22 +255,28 @@ class LLMClient:
                     stream_succeeded = True
                     raise
         except LLMError:
-            llm_cb.record_failure()
+            # Don't record LLMError as transport failure — it may come from
+            # the chat_completion() fallback path and represent an app-level error,
+            # not a service-unavailability signal.
             raise
         except httpx.TimeoutException as e:
-            llm_cb.record_failure()
+            async with llm_cb._lock:
+                llm_cb.record_failure()
             raise LLMError(f"Streaming request timed out after {self.timeout}s") from e
         except httpx.HTTPStatusError as e:
-            llm_cb.record_failure()
+            async with llm_cb._lock:
+                llm_cb.record_failure()
             raise LLMError(
                 f"HTTP error {e.response.status_code}: {e.response.text}"
             ) from e
         except httpx.RequestError as e:
-            llm_cb.record_failure()
+            async with llm_cb._lock:
+                llm_cb.record_failure()
             raise LLMError(f"Streaming request failed: {str(e)}") from e
         finally:
             if stream_succeeded:
-                llm_cb.record_success()
+                async with llm_cb._lock:
+                    llm_cb.record_success()
 
         # Log connection pool metrics after streaming completes
         self._log_pool_stats()

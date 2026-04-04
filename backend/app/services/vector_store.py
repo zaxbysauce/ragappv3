@@ -4,6 +4,7 @@ LanceDB vector store service for semantic search.
 
 import asyncio
 import json
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, cast
 import lancedb
@@ -235,7 +236,6 @@ class VectorStore:
             return
 
         # Create the index
-        import time
         t0 = time.monotonic()
         try:
             await self.table.create_index(
