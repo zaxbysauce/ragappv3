@@ -424,7 +424,7 @@ class VectorStore:
         else:
             # Use BM25 FTS (existing code)
             try:
-                fts_query = await self.table.search(query_text)
+                fts_query = await self.table.search(query_text, query_type="fts")
                 fts_filter_parts = [scale_filter]
                 if vault_id:
                     safe_vault_id = str(vault_id).replace("'", "\\'")
@@ -730,7 +730,7 @@ class VectorStore:
         else:
             # Use BM25 FTS (existing code)
             try:
-                fts_query = await self.table.search(query_text)  # LanceDB FTS
+                fts_query = await self.table.search(query_text, query_type="fts")
                 if vault_id:
                     fts_query = fts_query.where(f"vault_id = '{vault_id}'")
                 if filter_expr:

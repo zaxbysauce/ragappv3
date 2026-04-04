@@ -172,6 +172,10 @@ export const useAuthStore = create<AuthState>()(
       login: async (username: string, password: string) => {
         get()._setLoading(true);
         try {
+          // Force a fresh CSRF token before login to avoid 403 on first attempt
+          csrfToken = null;
+          await ensureCsrfToken();
+
           const response = await authClient.post<LoginResponse>("/auth/login", {
             username,
             password,

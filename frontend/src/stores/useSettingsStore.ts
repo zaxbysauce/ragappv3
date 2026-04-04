@@ -14,18 +14,18 @@ export interface SettingsFormData {
   embedding_query_prefix: string;
   embedding_batch_size: number;
   // Retrieval settings
-  reranking_enabled?: boolean;
-  reranker_url?: string;
-  reranker_model?: string;
-  initial_retrieval_top_k?: number;
-  reranker_top_n?: number;
-  hybrid_search_enabled?: boolean;
-  hybrid_alpha?: number;
+  reranking_enabled: boolean;
+  reranker_url: string;
+  reranker_model: string;
+  initial_retrieval_top_k: number;
+  reranker_top_n: number;
+  hybrid_search_enabled: boolean;
+  hybrid_alpha: number;
   // Model connection settings
-  ollama_embedding_url?: string;
-  ollama_chat_url?: string;
-  embedding_model?: string;
-  chat_model?: string;
+  ollama_embedding_url: string;
+  ollama_chat_url: string;
+  embedding_model: string;
+  chat_model: string;
 }
 
 export interface SettingsErrors {
@@ -110,6 +110,10 @@ const defaultFormData: SettingsFormData = {
   reranker_top_n: 5,
   hybrid_search_enabled: false,
   hybrid_alpha: 0.5,
+  ollama_embedding_url: "",
+  ollama_chat_url: "",
+  embedding_model: "",
+  chat_model: "",
 };
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
