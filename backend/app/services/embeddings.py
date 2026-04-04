@@ -124,7 +124,7 @@ class EmbeddingService:
             self._flag_base_url = settings.flag_embedding_url or base_url
             self.embeddings_url = urljoin(self._flag_base_url, "/v1/embeddings")
 
-        self.timeout = 60.0
+        self.timeout = 15.0
 
         # Read embedding prefixes from settings
         self.embedding_doc_prefix = settings.embedding_doc_prefix

@@ -628,7 +628,10 @@ async def _do_upload(
         )
 
         try:
-            result = await processor.process_file(str(file_path), vault_id=vault_id)
+            result = await asyncio.wait_for(
+                processor.process_file(str(file_path), vault_id=vault_id),
+                timeout=120.0,
+            )
 
             return UploadResponse(
                 file_id=result.file_id,
@@ -637,6 +640,14 @@ async def _do_upload(
                 filename=file_name,  # Frontend alias
                 status="indexed",
                 message=f"File '{file_name}' uploaded and processed successfully with {len(result.chunks)} chunks",
+            )
+        except asyncio.TimeoutError:
+            logger.error("Document processing timed out for file: %s", file_name)
+            if temp_file_path and temp_file_path.exists():
+                temp_file_path.unlink(missing_ok=True)
+            raise HTTPException(
+                status_code=503,
+                detail="Document processing timed out. The embedding service may be unavailable. Please try again later.",
             )
         except DuplicateFileError as e:
             # File is a duplicate, remove the uploaded file
