@@ -1,5 +1,7 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import type { SettingsFormData, SettingsErrors } from "@/stores/useSettingsStore";
 
 interface DocumentProcessingSettingsProps {
@@ -22,8 +24,9 @@ export function DocumentProcessingSettings({
       <CardContent className="space-y-6">
         {/* Chunk Size */}
         <div className="space-y-2">
-          <label className="text-sm font-medium">Chunk Size (characters)</label>
+          <Label htmlFor="chunk-size">Chunk Size (characters)</Label>
           <Input
+            id="chunk-size"
             type="number"
             min={1}
             value={formData.chunk_size_chars}
@@ -40,8 +43,9 @@ export function DocumentProcessingSettings({
 
         {/* Chunk Overlap */}
         <div className="space-y-2">
-          <label className="text-sm font-medium">Chunk Overlap (characters)</label>
+          <Label htmlFor="chunk-overlap">Chunk Overlap (characters)</Label>
           <Input
+            id="chunk-overlap"
             type="number"
             min={1}
             value={formData.chunk_overlap_chars}
@@ -58,8 +62,9 @@ export function DocumentProcessingSettings({
 
         {/* Retrieval Top-K */}
         <div className="space-y-2">
-          <label className="text-sm font-medium">Retrieval Top-K</label>
+          <Label htmlFor="retrieval-top-k">Retrieval Top-K</Label>
           <Input
+            id="retrieval-top-k"
             type="number"
             min={1}
             value={formData.retrieval_top_k}
@@ -77,16 +82,14 @@ export function DocumentProcessingSettings({
         {/* Auto Scan Enabled */}
         <div className="space-y-2">
           <div className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              id="auto_scan_enabled"
+            <Checkbox
+              id="auto-scan-enabled"
               checked={formData.auto_scan_enabled || false}
-              onChange={(e) => onChange("auto_scan_enabled", e.target.checked)}
-              className="h-4 w-4 rounded border-gray-300"
+              onCheckedChange={(checked) => onChange("auto_scan_enabled", checked as boolean)}
             />
-            <label htmlFor="auto_scan_enabled" className="text-sm font-medium">
+            <Label htmlFor="auto-scan-enabled">
               Enable Auto Scan
-            </label>
+            </Label>
           </div>
           <p className="text-xs text-muted-foreground">
             Automatically scan for new documents at regular intervals
@@ -96,8 +99,9 @@ export function DocumentProcessingSettings({
         {/* Auto Scan Interval */}
         {formData.auto_scan_enabled && (
           <div className="space-y-2">
-            <label className="text-sm font-medium">Auto Scan Interval (minutes)</label>
+            <Label htmlFor="auto-scan-interval">Auto Scan Interval (minutes)</Label>
             <Input
+              id="auto-scan-interval"
               type="number"
               min={1}
               value={formData.auto_scan_interval_minutes}

@@ -124,7 +124,7 @@ export default function VaultsPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Vaults</h1>
+          <h1 className="text-3xl font-bold tracking-tight">Vaults</h1>
           <p className="text-muted-foreground">Manage your knowledge vaults</p>
         </div>
         <Button onClick={openCreateDialog}>

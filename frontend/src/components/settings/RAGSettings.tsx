@@ -1,5 +1,8 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { SettingsFormData, SettingsErrors } from "@/stores/useSettingsStore";
 
 interface RAGSettingsProps {
@@ -23,9 +26,10 @@ export function RAGSettings({
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="space-y-2">
-            <label className="text-sm font-medium">Max Distance Threshold</label>
+            <Label htmlFor="max-distance-threshold">Max Distance Threshold</Label>
             <div className="flex items-center gap-4">
               <Input
+                id="max-distance-threshold"
                 type="number"
                 min={0}
                 max={1}
@@ -54,8 +58,9 @@ export function RAGSettings({
 
           {/* Retrieval Window */}
           <div className="space-y-2">
-            <label className="text-sm font-medium">Retrieval Window</label>
+            <Label htmlFor="retrieval-window">Retrieval Window</Label>
             <Input
+              id="retrieval-window"
               type="number"
               min={0}
               max={3}
@@ -73,16 +78,20 @@ export function RAGSettings({
 
           {/* Vector Metric */}
           <div className="space-y-2">
-            <label className="text-sm font-medium">Vector Metric</label>
-            <select
+            <Label htmlFor="vector-metric">Vector Metric</Label>
+            <Select
               value={formData.vector_metric}
-              onChange={(e) => onChange("vector_metric", e.target.value)}
-              className={`w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${errors.vector_metric ? "border-destructive" : ""}`}
+              onValueChange={(value) => onChange("vector_metric", value)}
             >
-              <option value="cosine">Cosine Similarity</option>
-              <option value="euclidean">Euclidean Distance</option>
-              <option value="dot_product">Dot Product</option>
-            </select>
+              <SelectTrigger id="vector-metric" className={errors.vector_metric ? "border-destructive" : ""}>
+                <SelectValue placeholder="Select metric" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="cosine">Cosine Similarity</SelectItem>
+                <SelectItem value="euclidean">Euclidean Distance</SelectItem>
+                <SelectItem value="dot_product">Dot Product</SelectItem>
+              </SelectContent>
+            </Select>
             {errors.vector_metric && (
               <p className="text-xs text-destructive">{errors.vector_metric}</p>
             )}
@@ -93,8 +102,9 @@ export function RAGSettings({
 
           {/* Embedding Batch Size */}
           <div className="space-y-2">
-            <label className="text-sm font-medium">Embedding Batch Size</label>
+            <Label htmlFor="embedding-batch-size">Embedding Batch Size</Label>
             <Input
+              id="embedding-batch-size"
               type="number"
               min={64}
               max={2048}
@@ -121,11 +131,12 @@ export function RAGSettings({
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="space-y-2">
-            <label className="text-sm font-medium">Embedding Document Prefix</label>
-            <textarea
+            <Label htmlFor="embedding-doc-prefix">Embedding Document Prefix</Label>
+            <Textarea
+              id="embedding-doc-prefix"
               value={formData.embedding_doc_prefix}
               onChange={(e) => onChange("embedding_doc_prefix", e.target.value)}
-              className={`w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 min-h-[80px] ${errors.embedding_doc_prefix ? "border-destructive" : ""}`}
+              className={`min-h-[80px] ${errors.embedding_doc_prefix ? "border-destructive" : ""}`}
               placeholder="Passage: "
             />
             {errors.embedding_doc_prefix && (
@@ -137,11 +148,12 @@ export function RAGSettings({
           </div>
 
           <div className="space-y-2">
-            <label className="text-sm font-medium">Embedding Query Prefix</label>
-            <textarea
+            <Label htmlFor="embedding-query-prefix">Embedding Query Prefix</Label>
+            <Textarea
+              id="embedding-query-prefix"
               value={formData.embedding_query_prefix}
               onChange={(e) => onChange("embedding_query_prefix", e.target.value)}
-              className={`w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 min-h-[80px] ${errors.embedding_query_prefix ? "border-destructive" : ""}`}
+              className={`min-h-[80px] ${errors.embedding_query_prefix ? "border-destructive" : ""}`}
               placeholder="Query: "
             />
             {errors.embedding_query_prefix && (

@@ -97,7 +97,7 @@ export function UploadIndicator() {
                 <span
                   className={cn(
                     "shrink-0",
-                    upload.status === "completed" && "text-green-500",
+                    upload.status === "completed" && "text-emerald-600",
                     upload.status === "error" && "text-destructive",
                     upload.status === "cancelled" && "text-muted-foreground"
                   )}
