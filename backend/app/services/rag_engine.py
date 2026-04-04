@@ -152,7 +152,7 @@ class RAGEngine:
                 }
                 return
         except Exception as exc:
-            logger.error("Memory intent detection/add failed: %s", exc)
+            logger.error("Memory intent detection/add failed (%s): %s", type(exc).__name__, exc)
 
         # Query transformation for broader retrieval (if enabled)
         transformed_queries: List[str] = [user_input]
@@ -171,7 +171,7 @@ class RAGEngine:
                     )
             except Exception as e:
                 logger.warning(
-                    "Query transformation failed: %s, using original query only", e
+                    "Query transformation failed (%s): %s, using original query only", type(e).__name__, e
                 )
                 transformed_queries = [user_input]
 
@@ -522,9 +522,12 @@ class RAGEngine:
                     logger.warning("Retrieval evaluation failed: %s", e)
 
             return vector_results, relevance_hint
-        except Exception:
+        except Exception as exc:
             logger.exception(
-                "[_execute_retrieval] UNHANDLED EXCEPTION in retrieval pipeline"
+                "[_execute_retrieval] UNHANDLED EXCEPTION in retrieval pipeline: %s, query=%.100s, vault_id=%s",
+                type(exc).__name__,
+                user_input,
+                vault_id,
             )
             raise
 

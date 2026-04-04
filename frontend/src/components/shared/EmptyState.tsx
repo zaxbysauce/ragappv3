@@ -28,7 +28,7 @@ export function EmptyState({ icon: Icon, title, description, action, size = "md"
   return (
     <Card>
       <CardContent className="py-12 text-center">
-        <div className={`${sizeClasses[size]} mx-auto mb-4 rounded-full bg-muted flex items-center justify-center`}>
+        <div className={`${sizeClasses[size]} mx-auto mb-4 rounded-full bg-muted flex items-center justify-center`} aria-hidden="true">
           <Icon className="w-1/2 h-1/2 text-muted-foreground" />
         </div>
         <p className="font-medium text-foreground">{title}</p>

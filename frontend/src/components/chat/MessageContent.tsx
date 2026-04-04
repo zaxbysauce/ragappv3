@@ -36,7 +36,7 @@ export function MessageContent({ content, sources, isStreaming }: MessageContent
       <div className="prose prose-sm dark:prose-invert max-w-none">
         <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>{content}</ReactMarkdown>
         {isStreaming && (
-          <span className="inline-block w-2 h-4 ml-1 bg-foreground animate-pulse" />
+          <span className="inline-block w-2 h-4 ml-1 bg-foreground animate-pulse" role="status" aria-live="polite" aria-label="Message streaming" />
         )}
       </div>
 
@@ -74,6 +74,7 @@ export function MessageContent({ content, sources, isStreaming }: MessageContent
         size="icon"
         className="absolute -right-10 top-0 opacity-0 group-hover:opacity-100 transition-opacity"
         onClick={handleCopy}
+        aria-label={copied ? "Copied to clipboard" : "Copy message to clipboard"}
       >
         {copied ? (
           <Check className="h-4 w-4 text-green-500" />

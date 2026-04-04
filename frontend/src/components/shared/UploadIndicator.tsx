@@ -34,11 +34,14 @@ export function UploadIndicator() {
         )}
       >
         {/* Header - always visible */}
-        <div
-          className="flex items-center justify-between p-3 cursor-pointer hover:bg-muted/50"
+        <button
+          type="button"
+          className="w-full flex items-center justify-between p-3 cursor-pointer hover:bg-muted/50"
           onClick={() => setIsExpanded(!isExpanded)}
+          aria-expanded={isExpanded}
+          aria-label="Toggle upload details"
         >
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2" aria-live="polite">
             <Upload className="w-4 h-4 text-primary" />
             <span className="text-sm font-medium">
               {currentUpload
@@ -74,7 +77,7 @@ export function UploadIndicator() {
               <X className="w-3 h-3" />
             </Button>
           </div>
-        </div>
+        </button>
 
         {/* Progress bar - always visible if uploading */}
         {currentUpload && (

@@ -139,7 +139,7 @@ def _load_persisted_settings(sqlite_path: str) -> None:
                 except Exception as e:
                     logger.warning(f"Failed to restore persisted setting {key}: {e}")
     except sqlite3.OperationalError:
-        pass  # Table doesn't exist yet on first run
+        logger.debug("Settings table not yet created; skipping persisted settings load (expected on first startup)")
     finally:
         conn.close()
 

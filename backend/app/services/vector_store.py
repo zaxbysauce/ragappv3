@@ -50,6 +50,12 @@ class VectorStoreValidationError(VectorStoreError):
     pass
 
 
+class VectorIndexCreationError(VectorStoreError):
+    """Exception raised when vector index creation fails."""
+
+    pass
+
+
 class VectorStore:
     """LanceDB-based vector store for document chunk embeddings."""
 
@@ -229,6 +235,8 @@ class VectorStore:
             return
 
         # Create the index
+        import time
+        t0 = time.monotonic()
         try:
             await self.table.create_index(
                 column="embedding",
@@ -240,6 +248,9 @@ class VectorStore:
                     num_sub_vectors=96,
                 ),
                 replace=True,
+            )
+            logger.info(
+                "Vector index creation completed in %.2fs", time.monotonic() - t0
             )
             logger.info(
                 "Vector index created with metric=%s (%d rows)",

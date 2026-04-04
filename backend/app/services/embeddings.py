@@ -80,6 +80,17 @@ class EmbeddingError(Exception):
     pass
 
 
+class EmbeddingDimensionMismatchError(EmbeddingError):
+    """Raised when embedding dimensions don't match the expected schema."""
+
+    def __init__(self, expected: int, got: int):
+        self.expected = expected
+        self.got = got
+        super().__init__(
+            f"Embedding dimension mismatch: expected {expected}, got {got}"
+        )
+
+
 class EmbeddingService:
     """Service for generating text embeddings via Ollama or OpenAI-compatible APIs."""
 
@@ -852,6 +863,7 @@ class EmbeddingService:
             logger.info(
                 f"Splitting single input ({len(single_text)} chars) into parts ({len(left_text)} + {len(right_text)} chars), retry {retry_count}"
             )
+            logger.info("Embedding batch size adapted: attempt %d", retry_count + 1)
 
             # Small bounded async backoff
             backoff_delay = min(0.5 * (2**retry_count), 1.0)

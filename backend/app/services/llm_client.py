@@ -87,8 +87,8 @@ class LLMClient:
                     f"LLM client pool: {connections}/{max_connections} connections, "
                     f"{keepalive}/{max_keepalive} keepalive"
                 )
-        except Exception:
-            pass  # Silently ignore any errors accessing internal pool state
+        except Exception as e:
+            logger.debug("Could not log pool stats: %s", e)
 
     async def chat_completion(
         self,

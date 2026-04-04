@@ -42,6 +42,8 @@ class Settings(BaseSettings):
     """Character-based overlap between chunks. Default 120 chars (~30 tokens)."""
     document_parsing_strategy: str = "fast"
     """Document parsing strategy for unstructured.io: 'fast' (fastest), 'hi_res' (best quality), 'auto' (automatic selection)."""
+    document_parse_timeout: float = 300.0
+    """Timeout in seconds for document parsing. Prevents worker threads from being blocked indefinitely by complex documents."""
     retrieval_top_k: int | None = None
     """Number of top chunks to retrieve (unifies max_context_chunks and vector_top_k)."""
     vector_metric: str = "cosine"

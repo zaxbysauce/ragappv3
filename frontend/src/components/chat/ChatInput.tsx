@@ -45,7 +45,7 @@ export function ChatInput({ onSend, onStop, isStreaming, className }: ChatInputP
   return (
     <div className={cn("flex flex-col gap-2 p-4 border-t border-border", className)}>
       {inputError && (
-        <div className="text-xs text-destructive">{inputError}</div>
+        <div className="text-xs text-destructive" role="alert">{inputError}</div>
       )}
       <div className="flex items-end gap-2">
         <Textarea
@@ -59,11 +59,11 @@ export function ChatInput({ onSend, onStop, isStreaming, className }: ChatInputP
           disabled={isStreaming}
         />
         {isStreaming ? (
-          <Button variant="destructive" size="icon" onClick={onStop}>
+          <Button variant="destructive" size="icon" onClick={onStop} aria-label="Stop generating">
             <Square className="h-4 w-4" />
           </Button>
         ) : (
-          <Button size="icon" onClick={handleSubmit} disabled={!input.trim()}>
+          <Button size="icon" onClick={handleSubmit} disabled={!input.trim()} aria-label="Send message">
             <Send className="h-4 w-4" />
           </Button>
         )}
