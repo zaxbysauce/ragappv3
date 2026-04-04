@@ -103,7 +103,7 @@ class QueryTransformer:
                 {"role": "user", "content": user_prompt},
             ]
             response = await self._llm_client.chat_completion(
-                messages, max_tokens=200, temperature=0.4
+                messages, max_tokens=350, temperature=0.4
             )
             response = response.strip()
             if len(response) < 20:

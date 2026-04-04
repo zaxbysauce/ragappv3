@@ -485,7 +485,12 @@ class EmbeddingService:
             ]
             response = await self._client.post(
                 embed_url,
-                json={"input": texts_to_embed},
+                json={
+                    "texts": texts_to_embed,
+                    "return_dense": True,
+                    "return_sparse": True,
+                    "return_colbert_vecs": False,
+                },
                 headers={"Content-Type": "application/json"},
             )
             response.raise_for_status()

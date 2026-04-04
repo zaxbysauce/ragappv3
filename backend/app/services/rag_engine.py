@@ -12,6 +12,7 @@ from app.services.llm_client import LLMClient, LLMError
 from app.services.memory_store import MemoryStore
 from app.services.prompt_builder import PromptBuilderService
 from app.services.query_transformer import QueryTransformer
+from app.services.context_distiller import ContextDistiller
 from app.services.retrieval_evaluator import RetrievalEvaluator
 from app.services.vector_store import VectorStore
 from app.utils.fusion import rrf_fuse
@@ -241,12 +242,13 @@ class RAGEngine:
             getattr(self.vector_store, "is_connected", lambda: "unknown")(),
         )
 
+        eval_result = "CONFIDENT"
         if self.maintenance_mode:
             fallback_reason = "RAG index is under maintenance"
             vector_results = []
         else:
             try:
-                vector_results, relevance_hint = await self._execute_retrieval(
+                vector_results, relevance_hint, eval_result = await self._execute_retrieval(
                     query_embeddings,
                     user_input,
                     vault_id,
@@ -270,6 +272,23 @@ class RAGEngine:
             "[query] After filter_relevant: relevant_chunk_count=%d",
             len(relevant_chunks),
         )
+
+        # Context distillation: deduplicate overlapping chunks and optionally synthesize
+        if settings.context_distillation_enabled and relevant_chunks:
+            try:
+                distiller = ContextDistiller(
+                    self.embedding_service,
+                    self.llm_client if settings.context_distillation_synthesis_enabled else None,
+                )
+                relevant_chunks = await distiller.distill(
+                    user_input, relevant_chunks, eval_result
+                )
+                logger.info(
+                    "[query] After context distillation: chunk_count=%d",
+                    len(relevant_chunks),
+                )
+            except Exception as exc:
+                logger.warning("Context distillation failed, continuing: %s", exc)
 
         # Check if distance filtering removed all results (no_match)
         if not relevant_chunks and self.document_retrieval.no_match:
@@ -342,7 +361,7 @@ class RAGEngine:
         vault_id: Optional[int],
         query_sparse: Optional[dict] = None,
         effective_alpha: float = 0.6,
-    ) -> tuple[List[Dict[str, Any]], Optional[str]]:
+    ) -> tuple[List[Dict[str, Any]], Optional[str], str]:
         """Execute vector search and retrieval evaluation.
 
         Args:
@@ -351,7 +370,7 @@ class RAGEngine:
             vault_id: Optional vault ID to filter by
 
         Returns:
-            Tuple of (vector_results, relevance_hint)
+            Tuple of (vector_results, relevance_hint, eval_result)
         """
         logger.info(
             "[_execute_retrieval] ENTER: vault_id=%s, top_k=%s, query_embeddings=%d",
@@ -359,6 +378,7 @@ class RAGEngine:
             self.retrieval_top_k,
             len(query_embeddings),
         )
+        eval_result = "CONFIDENT"
         try:
             # Stage 1: Initial retrieval
             fetch_k = (
@@ -376,8 +396,8 @@ class RAGEngine:
                     embedding,
                     _top_k,
                     vault_id=_vault,
-                    query_text=user_input if i == 0 else "",
-                    hybrid=self.hybrid_search_enabled and i == 0,
+                    query_text=user_input,
+                    hybrid=self.hybrid_search_enabled,
                     hybrid_alpha=effective_alpha,
                     query_sparse=query_sparse if i == 0 else None,
                 )
@@ -485,10 +505,17 @@ class RAGEngine:
                 packed_sources = self._pack_context_by_token_budget(
                     temp_sources, settings.context_max_tokens
                 )
-                # Filter vector_results to match packed sources
-                packed_texts = {s.text for s in packed_sources}
+                # Rebuild vector_results in packed_sources ORDER (preserves reranker ranking).
+                # Use (file_id, text) composite key — more unique than text alone.
+                _key_to_result: Dict[tuple, Any] = {}
+                for r in vector_results:
+                    k = (str(r.get("file_id", "")), r.get("text", ""))
+                    if k not in _key_to_result:  # first-seen wins (reranker order)
+                        _key_to_result[k] = r
                 vector_results = [
-                    r for r in vector_results if r.get("text") in packed_texts
+                    _key_to_result[(s.file_id, s.text)]
+                    for s in packed_sources
+                    if (s.file_id, s.text) in _key_to_result
                 ]
                 logger.info(
                     "Token packing: %d results → %d results (budget=%d tokens)",
@@ -531,7 +558,7 @@ class RAGEngine:
                 except Exception as e:
                     logger.warning("Retrieval evaluation failed: %s", e)
 
-            return vector_results, relevance_hint
+            return vector_results, relevance_hint, eval_result
         except Exception as exc:
             logger.exception(
                 "[_execute_retrieval] UNHANDLED EXCEPTION in retrieval pipeline: %s, query=%.100s, vault_id=%s",

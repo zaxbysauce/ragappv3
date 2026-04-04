@@ -87,6 +87,7 @@ class DocumentRetrievalService:
         self,
         results: List[Dict[str, Any]],
         top_k: Optional[int] = None,
+        reranked: bool = False,
     ) -> List[RAGSource]:
         """Filter retrieved documents by relevance threshold.
 
@@ -123,6 +124,10 @@ class DocumentRetrievalService:
             first_distances = [r.get("_distance", r.get("score")) for r in results[:5]]
             logger.debug("First few _distance values: %s", first_distances)
 
+        # When reranking has been applied, skip distance threshold — the reranker
+        # score is the quality signal; _distance is stale.
+        skip_distance_filter = reranked or any("_rerank_score" in r for r in results)
+
         for record in results:
             has_distance = "_distance" in record
             distance = record.get("_distance")
@@ -139,7 +144,7 @@ class DocumentRetrievalService:
                 threshold = self.relevance_threshold
 
             should_skip = False
-            if threshold is not None:
+            if not skip_distance_filter and threshold is not None:
                 if has_distance:
                     should_skip = distance > threshold
                 else:

@@ -466,10 +466,7 @@ class EmbeddingSemanticChunker:
 
         # Get embeddings for all windows
         try:
-            embeddings = []
-            for window in windows:
-                embedding = await self.embedding_service.embed_single(window)
-                embeddings.append(embedding)
+            embeddings = await self.embedding_service.embed_batch(windows)
         except Exception as e:
             logger.warning(
                 f"Failed to generate embeddings for semantic chunking: {e}. Using fallback chunker."
