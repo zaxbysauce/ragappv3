@@ -24,6 +24,14 @@ _MULTI_SCALE_CONCURRENCY = 4
 VECTOR_INDEX_MIN_ROWS = 256
 
 
+def _lance_escape(value) -> str:
+    """Escape a value for use in LanceDB SQL-like where clauses.
+
+    Uses SQL-standard doubled single-quote escaping consistently.
+    """
+    return str(value).replace("'", "''")
+
+
 class VectorStoreError(Exception):
     """Custom exception for vector store errors."""
 
@@ -355,12 +363,12 @@ class VectorStore:
             return []
 
         # Build scale filter
-        safe_scale = str(scale).replace("'", "\\'")
+        safe_scale = _lance_escape(scale)
         scale_filter = f"chunk_scale = '{safe_scale}'"
 
         # Combine with vault filter if present
         if vault_id is not None:
-            safe_vault_id = str(vault_id).replace("'", "\\'")
+            safe_vault_id = _lance_escape(vault_id)
             vault_filter = f"vault_id = '{safe_vault_id}'"
             if filter_expr:
                 combined_filter = (
@@ -427,7 +435,7 @@ class VectorStore:
                 fts_query = await self.table.search(query_text)
                 fts_filter_parts = [scale_filter]
                 if vault_id:
-                    safe_vault_id = str(vault_id).replace("'", "\\'")
+                    safe_vault_id = _lance_escape(vault_id)
                     fts_filter_parts.append(f"vault_id = '{safe_vault_id}'")
                 if filter_expr:
                     fts_filter_parts.append(f"({filter_expr})")
@@ -486,10 +494,10 @@ class VectorStore:
         try:
             filter_parts = ["sparse_embedding IS NOT NULL"]
             if vault_id is not None:
-                safe_vault_id = str(vault_id).replace("'", "''")
+                safe_vault_id = _lance_escape(vault_id)
                 filter_parts.append(f"vault_id = '{safe_vault_id}'")
             if scale is not None:
-                safe_scale = str(scale).replace("'", "''")
+                safe_scale = _lance_escape(scale)
                 filter_parts.append(f"chunk_scale = '{safe_scale}'")
             if filter_expr:
                 filter_parts.append(f"({filter_expr})")
@@ -695,7 +703,7 @@ class VectorStore:
         # Apply vault filter if specified
         _filter_expr = filter_expr
         if vault_id is not None:
-            safe_vault_id = str(vault_id).replace("'", "\\'")
+            safe_vault_id = _lance_escape(vault_id)
             vault_filter = f"vault_id = '{safe_vault_id}'"
             if _filter_expr:
                 _filter_expr = f"({_filter_expr}) AND ({vault_filter})"
@@ -843,7 +851,7 @@ class VectorStore:
         if self.table is None:
             return 0
 
-        safe_vault_id = str(vault_id).replace("'", "\\'")
+        safe_vault_id = _lance_escape(vault_id)
         try:
             count_before = await self.table.count_rows(f"vault_id = '{safe_vault_id}'")
         except (OSError, RuntimeError, ValueError):
@@ -1228,7 +1236,7 @@ class VectorStore:
             # Build IN clause for chunk_uids
             # Each uid is in format "{file_id}_{chunk_index}"
             # Escape single quotes in uids for SQL-like syntax
-            escaped_uids = [uid.replace("'", "''") for uid in chunk_uids]
+            escaped_uids = [_lance_escape(uid) for uid in chunk_uids]
             quoted_uids = [f"'{uid}'" for uid in escaped_uids]
             uid_list = ", ".join(quoted_uids)
 
