@@ -9,7 +9,7 @@ from typing import AsyncGenerator, List, Dict, Any, Optional
 import httpx
 
 from app.config import settings
-from app.services.circuit_breaker import llm_cb, CircuitBreakerError
+from app.services.circuit_breaker import llm_cb, CircuitBreakerError, CircuitBreakerState
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +184,15 @@ class LLMClient:
             "max_tokens": max_tokens,
         }
 
+        # Check circuit breaker state before attempting stream connection
+        if llm_cb.current_state == CircuitBreakerState.OPEN:
+            llm_cb._check_timeout()  # Allow transition to HALF_OPEN if timeout elapsed
+            if llm_cb.current_state == CircuitBreakerState.OPEN:
+                raise LLMError(
+                    "LLM service is currently unavailable (circuit breaker open)"
+                )
+
+        stream_succeeded = False
         try:
             async with client.stream("POST", url, json=payload) as response:
                 response.raise_for_status()
@@ -199,6 +208,7 @@ class LLMClient:
                     )
                     if content:
                         yield content
+                    stream_succeeded = True
                     return
 
                 try:
@@ -237,20 +247,28 @@ class LLMClient:
 
                             if content:
                                 yield content
+                    stream_succeeded = True
                 except GeneratorExit:
                     # Generator was closed by consumer - clean exit
+                    stream_succeeded = True
                     raise
         except LLMError:
-            # Re-raise LLMError exceptions (e.g., from content-type validation) cleanly
+            llm_cb.record_failure()
             raise
         except httpx.TimeoutException as e:
+            llm_cb.record_failure()
             raise LLMError(f"Streaming request timed out after {self.timeout}s") from e
         except httpx.HTTPStatusError as e:
+            llm_cb.record_failure()
             raise LLMError(
                 f"HTTP error {e.response.status_code}: {e.response.text}"
             ) from e
         except httpx.RequestError as e:
+            llm_cb.record_failure()
             raise LLMError(f"Streaming request failed: {str(e)}") from e
+        finally:
+            if stream_succeeded:
+                llm_cb.record_success()
 
         # Log connection pool metrics after streaming completes
         self._log_pool_stats()
