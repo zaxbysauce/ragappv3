@@ -88,13 +88,13 @@ class Settings(BaseSettings):
     """Weight for dense vs sparse scores in RRF. 0.0 = pure BM25, 1.0 = pure dense."""
 
     # ── Contextual chunking configuration ─────────────────────────────────────
-    contextual_chunking_enabled: bool = False
+    contextual_chunking_enabled: bool = True
     """Enable LLM-based contextual chunking (prepends document context to each chunk)."""
     contextual_chunking_concurrency: int = 5
     """Maximum concurrent LLM calls for contextual chunking."""
 
     # ── Multi-scale chunk indexing configuration ──────────────────────────────
-    multi_scale_indexing_enabled: bool = False
+    multi_scale_indexing_enabled: bool = True
     """Enable multi-scale chunk indexing (index chunks at multiple sizes for varied recall)."""
     multi_scale_chunk_sizes: str = "512,1024,2048"
     """Comma-separated list of chunk sizes (in characters) for multi-scale indexing."""
@@ -116,7 +116,7 @@ class Settings(BaseSettings):
     context_distillation_dedup_threshold: float = 0.92
     """Cosine similarity threshold for sentence deduplication in context distillation (0.0-1.0)."""
 
-    context_distillation_synthesis_enabled: bool = False
+    context_distillation_synthesis_enabled: bool = True
     """Enable LLM-based context synthesis when retrieval evaluation returns NO_MATCH or AMBIGUOUS."""
 
     # ── Token budget configuration ────────────────────────────────────────
@@ -146,13 +146,13 @@ class Settings(BaseSettings):
     """Exponential decay rate (lambda) for recency scoring. Higher values decay faster."""
 
     # ── Tri-vector embedding configuration (BGE-M3) ────────────────────────────
-    tri_vector_search_enabled: bool = False
+    tri_vector_search_enabled: bool = True
     """Enable BGE-M3 tri-vector embeddings (dense + sparse). Requires FlagEmbedding server."""
     flag_embedding_url: str = "http://embedding-server:18080"
     """URL of the FlagEmbedding server for BGE-M3 tri-vector embeddings."""
 
     # ── Chunk enrichment / curator configuration ───────────────────────────
-    chunk_enrichment_enabled: bool = False
+    chunk_enrichment_enabled: bool = True
     """Enable curator-style chunk enrichment (generates auxiliary metadata for retrieval)."""
     chunk_enrichment_concurrency: int = 5
     """Maximum concurrent LLM calls for chunk enrichment."""
@@ -160,7 +160,7 @@ class Settings(BaseSettings):
     """Comma-separated list of enrichment fields to generate: summary, questions, entities, aliases."""
 
     # ── Retrieval profile configuration ──────────────────────────────────
-    retrieval_profile: str = "baseline"
+    retrieval_profile: str = "advanced"
     """Retrieval profile: 'baseline' (dense + hybrid + rerank), 'advanced' (adds tri-vector + enrichment)."""
 
     # Document processing configuration (legacy - DEPRECATED)

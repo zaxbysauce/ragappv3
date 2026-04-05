@@ -10,7 +10,7 @@ from app.services.document_retrieval import DocumentRetrievalService, RAGSource
 from app.services.embeddings import EmbeddingService, EmbeddingError
 from app.services.llm_client import LLMClient, LLMError
 from app.services.memory_store import MemoryStore
-from app.services.prompt_builder import PromptBuilderService
+from app.services.prompt_builder import PromptBuilderService, calculate_primary_count
 from app.services.query_transformer import QueryTransformer
 from app.services.context_distiller import ContextDistiller
 from app.services.retrieval_evaluator import RetrievalEvaluator
@@ -631,7 +631,7 @@ class RAGEngine:
         score_type = "rerank" if self.reranking_enabled else "distance"
 
         # Split into primary and supporting (same split as prompt builder)
-        primary_count = min(max(len(relevant_chunks) // 2, 3), len(relevant_chunks))
+        primary_count = calculate_primary_count(len(relevant_chunks))
 
         sources = []
         for idx, chunk in enumerate(relevant_chunks):

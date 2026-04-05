@@ -20,6 +20,7 @@ from ..models.database import SQLiteConnectionPool, get_pool
 from ..utils.file_utils import compute_file_hash
 from ..utils.retry import with_retry
 from .chunking import SemanticChunker, ProcessedChunk
+from .chunk_enrichment import ChunkEnrichmentService
 from .contextual_chunking import ContextualChunker
 from .embeddings import EmbeddingService
 from .llm_client import LLMClient
@@ -154,6 +155,7 @@ class DocumentProcessor:
         self.embedding_service = embedding_service
         self._llm_client = llm_client
         self._contextual_chunker = contextual_chunker
+        self._chunk_enrichment_service: Optional[ChunkEnrichmentService] = None
 
     def _get_contextual_chunker(self) -> Optional[ContextualChunker]:
         """
@@ -171,6 +173,22 @@ class DocumentProcessor:
         if self._contextual_chunker is None:
             self._contextual_chunker = ContextualChunker(self._llm_client)
         return self._contextual_chunker
+
+    def _get_chunk_enrichment_service(self) -> Optional[ChunkEnrichmentService]:
+        """Lazily create a ChunkEnrichmentService when needed."""
+        if not settings.chunk_enrichment_enabled:
+            return None
+        if self._llm_client is None:
+            logger.warning("Chunk enrichment enabled but no LLM client available")
+            return None
+        if self._chunk_enrichment_service is None:
+            fields = [f.strip() for f in settings.chunk_enrichment_fields.split(",")]
+            self._chunk_enrichment_service = ChunkEnrichmentService(
+                llm_client=self._llm_client,
+                concurrency=settings.chunk_enrichment_concurrency,
+                enrichment_fields=fields,
+            )
+        return self._chunk_enrichment_service
 
     @with_retry(
         max_attempts=3, retry_exceptions=(sqlite3.Error,), raise_last_exception=True
@@ -581,6 +599,35 @@ class DocumentProcessor:
                     "No extractable content found in document. "
                     "The file may be empty, encrypted, or in an unsupported format."
                 )
+
+            # Chunk enrichment: generate auxiliary metadata (summary, questions, entities)
+            enrichment_service = self._get_chunk_enrichment_service()
+            if enrichment_service is not None:
+                try:
+                    chunk_dicts = [
+                        {
+                            "chunk_uid": f"{file_id}_{c.chunk_index}",
+                            "text": c.text,
+                            "metadata": c.metadata,
+                        }
+                        for c in chunks
+                    ]
+                    enrichments = await enrichment_service.enrich_chunks(
+                        chunk_dicts, document_title=source_filename
+                    )
+                    for chunk, enrichment in zip(chunks, enrichments):
+                        chunk.metadata["enrichment"] = enrichment.to_dict()
+                    logger.info(
+                        "Chunk enrichment completed for %s: %d chunks enriched",
+                        source_filename,
+                        len(enrichments),
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Chunk enrichment failed for %s: %s",
+                        source_filename,
+                        str(e),
+                    )
 
             # Generate embeddings and store in vector store
             if self.embedding_service is not None and self.vector_store is not None:

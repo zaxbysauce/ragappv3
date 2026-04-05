@@ -20,6 +20,14 @@ CITATION_INSTRUCTION = (
 )
 
 
+def calculate_primary_count(total_chunks: int) -> int:
+    """Calculate the number of primary evidence chunks from total chunk count.
+
+    Uses at least 3 chunks (or all if fewer) and at most half the total.
+    """
+    return min(max(total_chunks // 2, 3), total_chunks)
+
+
 class PromptBuilderService:
     """Service for building prompts and messages for the LLM."""
 
@@ -67,7 +75,7 @@ class PromptBuilderService:
             List of message dictionaries for the LLM
         """
         # Split chunks into primary (top-scoring) and supporting
-        primary_count = min(max(len(chunks) // 2, 3), len(chunks))
+        primary_count = calculate_primary_count(len(chunks))
         primary_chunks = chunks[:primary_count]
         supporting_chunks = chunks[primary_count:]
 

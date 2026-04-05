@@ -21,30 +21,20 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   type Group,
+  type Vault,
   getGroupVaultIds,
+  listVaults,
 } from "@/lib/api";
-import apiClient from "@/lib/api";
 
 // ============================================================================
 // Types
 // ============================================================================
-
-interface Vault {
-  id: number;
-  name: string;
-  description: string | null;
-}
 
 interface ManageVaultsSheetProps {
   group: Group | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSave: (vaultIds: number[]) => Promise<void>;
-}
-
-async function fetchAllVaults(): Promise<Vault[]> {
-  const response = await apiClient.get<{ vaults: Vault[] }>("/vaults");
-  return response.data.vaults;
 }
 
 // ============================================================================
@@ -64,7 +54,10 @@ export function ManageVaultsSheet({
   // Fetch all vaults and current group vault access
   const { data: allVaults = [], isLoading: isLoadingVaults } = useQuery<Vault[]>({
     queryKey: ["vaults"],
-    queryFn: fetchAllVaults,
+    queryFn: async () => {
+      const resp = await listVaults();
+      return resp.vaults;
+    },
     enabled: open,
   });
 
