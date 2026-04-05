@@ -84,7 +84,7 @@ export function DocumentProcessingSettings({
           <div className="flex items-center gap-2">
             <Checkbox
               id="auto-scan-enabled"
-              checked={formData.auto_scan_enabled ?? false}
+              checked={!!formData.auto_scan_enabled}
               onCheckedChange={(checked) => onChange("auto_scan_enabled", checked as boolean)}
             />
             <Label htmlFor="auto-scan-enabled">

@@ -26,6 +26,9 @@ export function MessageContent({ content, sources, isStreaming }: MessageContent
   const [copied, setCopied] = React.useState(false);
 
   const handleCopy = async () => {
+    if (!navigator.clipboard) {
+      return; // Silently fail - clipboard not available
+    }
     await navigator.clipboard.writeText(content);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);

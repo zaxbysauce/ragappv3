@@ -242,7 +242,10 @@ class DocumentRetrievalService:
                 s = str(raw)
                 return int(s.rsplit("_", 1)[-1]) if "_" in s else int(s)
 
-            indices = [_parse_chunk_index(s.metadata.get("chunk_index", 0)) for s in file_sources]
+            indices = [
+                _parse_chunk_index(s.metadata.get("chunk_index", 0))
+                for s in file_sources
+            ]
 
             for chunk_index in indices:
                 start_idx = max(0, chunk_index - window)
@@ -380,8 +383,16 @@ class DocumentRetrievalService:
             or chunk.metadata.get("section_title")
             or "Unknown document"
         )
+        # Construct unique ID per chunk to avoid duplicate React keys
+        chunk_index = chunk.metadata.get("chunk_index", "")
+        chunk_scale = chunk.metadata.get("chunk_scale", "")
+        if chunk_scale:
+            unique_id = f"{chunk.file_id}_{chunk_scale}_{chunk_index}"
+        else:
+            unique_id = f"{chunk.file_id}_{chunk_index}"
+
         return {
-            "id": chunk.file_id,
+            "id": unique_id,
             "file_id": chunk.file_id,
             "filename": filename,
             "snippet": chunk.text[:300] if chunk.text else "",

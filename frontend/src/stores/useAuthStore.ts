@@ -64,6 +64,9 @@ const authClient = axios.create({
 let csrfToken: string | null = null;
 let csrfFetchPromise: Promise<string> | null = null;
 
+// Guard to prevent retry loop when refresh returns 401
+let _initAttempted = false;
+
 async function ensureCsrfToken(): Promise<string> {
   if (csrfToken) return csrfToken;
   if (!csrfFetchPromise) {
@@ -121,6 +124,13 @@ export const useAuthStore = create<AuthState>()(
       setAuthMode: (mode: "jwt" | "apikey") => set({ authMode: mode }),
 
       init: async () => {
+        // Guard: skip if init was already attempted (prevents 401 retry loop)
+        if (_initAttempted) {
+          set({ isLoading: false });
+          return;
+        }
+        _initAttempted = true;
+
         const state = get();
         set({ isLoading: true });
 
@@ -170,6 +180,9 @@ export const useAuthStore = create<AuthState>()(
       },
 
       login: async (username: string, password: string) => {
+        // Reset init guard so re-login works after a failed init
+        _initAttempted = false;
+
         get()._setLoading(true);
         try {
           // Force a fresh CSRF token before login to avoid 403 on first attempt
