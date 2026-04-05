@@ -128,8 +128,8 @@ function App() {
                   </ProtectedRoute>
                 }
               />
-              {/* /chat/redesign removed — consolidated into /chat */}
-              <Route path="/chat/redesign" element={<Navigate to="/chat" replace />} />
+              {/* /chat/redesign removed — redirect to canonical /chat */}
+              <Route path="/chat/redesign" element={<ProtectedRoute><Navigate to="/chat" replace /></ProtectedRoute>} />
               <Route
                 path="/chat/:sessionId"
                 element={
