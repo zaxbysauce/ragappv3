@@ -3,6 +3,7 @@ import { MessageSquare, FileText, Brain, MoreHorizontal, Database, Settings, Use
 import {
   Sheet,
   SheetContent,
+  SheetDescription,
   SheetHeader,
   SheetTitle,
   SheetTrigger,
@@ -99,10 +100,10 @@ export function MobileBottomNav({ activeItem, onItemSelect }: MobileBottomNavPro
               </span>
             </button>
           </SheetTrigger>
-          <SheetContent side="bottom" className="h-[50vh] rounded-t-2xl">
+          <SheetContent side="bottom" className="h-[50vh] rounded-t-2xl" aria-describedby="mobile-more-desc">
             <SheetHeader className="mb-6">
               <div className="flex items-center justify-between">
-                <SheetTitle className="text-xl font-semibold">More</SheetTitle>
+                <SheetTitle id="mobile-more-title" className="text-xl font-semibold">More</SheetTitle>
                 <button
                   onClick={() => setMoreOpen(false)}
                   className="p-2 rounded-lg hover:bg-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-ring min-w-[44px] min-h-[44px]"
@@ -110,7 +111,8 @@ export function MobileBottomNav({ activeItem, onItemSelect }: MobileBottomNavPro
                 >
                   <X className="w-5 h-5" />
                 </button>
-              </div>
+</div>
+              <SheetDescription id="mobile-more-desc">Access settings, help, and other options</SheetDescription>
             </SheetHeader>
 
             <div className="grid grid-cols-2 gap-3">

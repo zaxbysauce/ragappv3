@@ -709,7 +709,10 @@ class VectorStore:
             return []
 
         # Dense vector search
-        query = await self.table.search(embedding)
+        # NOTE: Using query_type="vector" to bypass LanceDB's buggy auto-detection
+        # which can cause UnboundLocalError when embedding_conf is None
+        embedding_np = np.array(embedding, dtype=np.float32)
+        query = await self.table.search(embedding_np, query_type="vector")
 
         # Apply vault filter if specified
         _filter_expr = filter_expr
@@ -893,14 +896,15 @@ class VectorStore:
             )
         if row_count > 100_000:
             logger.warning(
-                "%s: loading %d rows into memory. "
-                "This may use significant RAM.",
-                operation_name, row_count,
+                "%s: loading %d rows into memory. This may use significant RAM.",
+                operation_name,
+                row_count,
             )
         elif row_count > 0:
             logger.info(
                 "%s: loading %d rows for migration.",
-                operation_name, row_count,
+                operation_name,
+                row_count,
             )
 
         return await table.to_pandas()
@@ -973,7 +977,9 @@ class VectorStore:
         else:
             # Column doesn't exist — add it to all records
             try:
-                df = await self._safe_table_to_pandas(table, "vault_id migration (add column)")
+                df = await self._safe_table_to_pandas(
+                    table, "vault_id migration (add column)"
+                )
                 if len(df) == 0:
                     # Empty table — just drop and recreate with new schema
                     # Try to get embedding_dim from existing schema before dropping
@@ -1092,7 +1098,9 @@ class VectorStore:
         else:
             # Column doesn't exist — add it to all records
             try:
-                df = await self._safe_table_to_pandas(table, "chunk_scale migration (add column)")
+                df = await self._safe_table_to_pandas(
+                    table, "chunk_scale migration (add column)"
+                )
                 if len(df) == 0:
                     # Empty table — just drop and recreate with new schema
                     # Try to get embedding_dim from existing schema before dropping

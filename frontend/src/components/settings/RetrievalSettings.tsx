@@ -29,7 +29,7 @@ export function RetrievalSettings({
             <div className="flex items-center gap-2">
               <Checkbox
                 id="reranking-enabled"
-                checked={formData.reranking_enabled || false}
+                checked={formData.reranking_enabled ?? false}
                 onCheckedChange={(checked) => onChange("reranking_enabled", checked as boolean)}
               />
               <Label htmlFor="reranking-enabled">
@@ -133,7 +133,7 @@ export function RetrievalSettings({
             <div className="flex items-center gap-2">
               <Checkbox
                 id="hybrid-search-enabled"
-                checked={formData.hybrid_search_enabled || false}
+                checked={formData.hybrid_search_enabled ?? false}
                 onCheckedChange={(checked) => onChange("hybrid_search_enabled", checked as boolean)}
               />
               <Label htmlFor="hybrid-search-enabled">

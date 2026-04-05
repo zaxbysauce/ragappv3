@@ -11,6 +11,7 @@ import {
   SheetContent,
   SheetHeader,
   SheetTitle,
+  SheetDescription,
   SheetClose,
 } from "@/components/ui/sheet";
 import { PanelLeft, PanelRight, X } from "lucide-react";
@@ -106,9 +107,10 @@ export default function ChatShell() {
 
       {/* MOBILE: Session Rail Sheet (slides from left) */}
       <Sheet open={mobileSheetOpen} onOpenChange={(open) => !open && setMobileSheetOpen(false)}>
-        <SheetContent side="left" className="w-[280px] p-0 md:hidden">
+        <SheetContent side="left" className="w-[280px] p-0 md:hidden" aria-describedby="chat-sessions-desc">
           <SheetHeader className="sr-only">
-            <SheetTitle>Chat Sessions</SheetTitle>
+            <SheetTitle id="chat-sessions-title">Chat Sessions</SheetTitle>
+            <SheetDescription id="chat-sessions-desc">Navigate between chat sessions</SheetDescription>
           </SheetHeader>
           <div className="flex h-full flex-col">
             <SessionRail />
@@ -159,9 +161,10 @@ export default function ChatShell() {
       {/* MOBILE: Right Pane Sheet (slides from bottom, 75vh) */}
       {!isWorkspaceFullScreen && (
         <Sheet open={rightPaneOpen} onOpenChange={(open) => !open && closeRightPane()}>
-          <SheetContent side="bottom" className="h-[75vh] rounded-t-xl p-0 lg:hidden">
+          <SheetContent side="bottom" className="h-[75vh] rounded-t-xl p-0 lg:hidden" aria-describedby="evidence-sources-desc">
             <SheetHeader className="sr-only">
-              <SheetTitle>Evidence & Sources</SheetTitle>
+              <SheetTitle id="evidence-sources-title">Evidence & Sources</SheetTitle>
+              <SheetDescription id="evidence-sources-desc">View retrieved evidence and source documents</SheetDescription>
             </SheetHeader>
             <div className="absolute right-4 top-4 z-10">
               <SheetClose asChild>
@@ -180,9 +183,10 @@ export default function ChatShell() {
       {/* MOBILE: Workspace Full-Screen Sheet */}
       {isWorkspaceFullScreen && (
         <Sheet open={rightPaneOpen} onOpenChange={(open) => !open && closeRightPane()}>
-          <SheetContent side="bottom" className="h-[95vh] rounded-t-xl p-0 lg:hidden">
+          <SheetContent side="bottom" className="h-[95vh] rounded-t-xl p-0 lg:hidden" aria-describedby="workspace-desc">
             <SheetHeader className="sr-only">
-              <SheetTitle>Workspace</SheetTitle>
+              <SheetTitle id="workspace-title">Workspace</SheetTitle>
+              <SheetDescription id="workspace-desc">Interactive workspace for document analysis</SheetDescription>
             </SheetHeader>
             <div className="absolute right-4 top-4 z-10">
               <SheetClose asChild>

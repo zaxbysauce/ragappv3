@@ -10,8 +10,8 @@ RUN npm run build
 FROM python:3.11-slim AS backend
 
 # Install system dependencies for Unstructured
+# Note: libmagic1 removed - python-magic-bin includes its own DLL
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libmagic1 \
     poppler-utils \
     tesseract-ocr \
     libreoffice \
