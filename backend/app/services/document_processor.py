@@ -190,6 +190,17 @@ class DocumentProcessor:
             )
         return self._chunk_enrichment_service
 
+    @staticmethod
+    def _build_chunk_uid(file_id: int, chunk: ProcessedChunk) -> str:
+        """Build a chunk_uid consistent with vector store record construction."""
+        chunk_scale = chunk.metadata.get("chunk_scale", "default")
+        if settings.multi_scale_indexing_enabled and chunk_scale != "default":
+            chunk_index_value = chunk.metadata.get("chunk_index", chunk.chunk_index)
+            if isinstance(chunk_index_value, str) and "_" in chunk_index_value:
+                return f"{file_id}_{chunk_index_value}"
+            return f"{file_id}_{chunk_scale}_{chunk.chunk_index}"
+        return f"{file_id}_{chunk.chunk_index}"
+
     @with_retry(
         max_attempts=3, retry_exceptions=(sqlite3.Error,), raise_last_exception=True
     )
@@ -606,7 +617,7 @@ class DocumentProcessor:
                 try:
                     chunk_dicts = [
                         {
-                            "chunk_uid": f"{file_id}_{c.chunk_index}",
+                            "chunk_uid": self._build_chunk_uid(file_id, c),
                             "text": c.text,
                             "metadata": c.metadata,
                         }
@@ -684,28 +695,7 @@ class DocumentProcessor:
                         chunk_scale = chunk.metadata.get("chunk_scale", "default")
 
                         # Create chunk_uid for windowing support
-                        # Use scale-aware format when multi-scale indexing is enabled
-                        if (
-                            settings.multi_scale_indexing_enabled
-                            and chunk_scale != "default"
-                        ):
-                            # Multi-scale: format is {file_id}_{scale}_{index}
-                            chunk_index_value = chunk.metadata.get(
-                                "chunk_index", chunk.chunk_index
-                            )
-                            if (
-                                isinstance(chunk_index_value, str)
-                                and "_" in chunk_index_value
-                            ):
-                                # Already formatted as scale_index from _process_document_file
-                                chunk_uid = f"{file_id}_{chunk_index_value}"
-                            else:
-                                chunk_uid = (
-                                    f"{file_id}_{chunk_scale}_{chunk.chunk_index}"
-                                )
-                        else:
-                            # Standard format: {file_id}_{index}
-                            chunk_uid = f"{file_id}_{chunk.chunk_index}"
+                        chunk_uid = self._build_chunk_uid(file_id, chunk)
 
                         # Add chunk_uid to metadata for adjacent chunk lookups
                         chunk_metadata = chunk.metadata.copy()
