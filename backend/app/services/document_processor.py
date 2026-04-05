@@ -644,6 +644,14 @@ class DocumentProcessor:
             if self.embedding_service is not None and self.vector_store is not None:
                 # Skip embedding/indexing if no chunks (status indexed with 0 chunks is acceptable)
                 if chunks:
+                    # Filter out empty/whitespace-only chunks before embedding
+                    chunks = [c for c in chunks if c.text and c.text.strip()]
+                    if not chunks:
+                        raise DocumentProcessingError(
+                            "All chunks were empty after filtering. "
+                            "The document may contain only whitespace or unsupported content."
+                        )
+
                     # Extract texts from chunks
                     texts = [c.text for c in chunks]
 
