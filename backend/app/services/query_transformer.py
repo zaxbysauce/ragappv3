@@ -1,11 +1,39 @@
 """Query transformation service for step-back prompting."""
 
 import logging
+import re
 from typing import List, Optional
 
 from app.services.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
+
+
+def _is_exact_or_document_query(query: str) -> bool:
+    """Detect queries that should NOT be broadened by step-back/HyDE.
+
+    Returns True for:
+    - Quoted exact phrases ("some phrase")
+    - Filename-specific queries (e.g., "in report.pdf", "from config.yaml")
+    - Document-specific queries (e.g., "what does <filename> say about")
+    - Very short exact lookups (3 words or fewer without question words)
+    """
+    # Quoted exact phrase
+    if re.search(r'"[^"]{3,}"', query):
+        return True
+    # Filename reference (common extensions)
+    if re.search(
+        r'\b[\w\-]+\.(pdf|docx?|xlsx?|csv|txt|md|yaml|yml|json|html?|pptx?)\b',
+        query,
+        re.IGNORECASE,
+    ):
+        return True
+    # Very short non-question lookups
+    words = query.strip().split()
+    question_words = {"what", "how", "why", "when", "where", "which", "who", "explain", "describe"}
+    if len(words) <= 3 and not any(w.lower().rstrip("?") in question_words for w in words):
+        return True
+    return False
 
 
 class QueryTransformer:
@@ -18,6 +46,9 @@ class QueryTransformer:
         """
         Transform a query into [original, step_back] or [original, step_back, hyde] versions.
 
+        Exact, quoted, filename-specific, or very short queries skip transformation
+        to avoid broadening into tangential results.
+
         Args:
             query: Original user query
 
@@ -27,6 +58,14 @@ class QueryTransformer:
             On HyDE failure alone, returns [original, step_back].
         """
         from app.config import settings
+
+        # Skip transformation for exact/document-specific queries
+        if _is_exact_or_document_query(query):
+            logger.info(
+                "Skipping query transformation for exact/document query: '%s'",
+                query[:80],
+            )
+            return [query]
 
         try:
             messages = [

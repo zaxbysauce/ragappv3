@@ -268,7 +268,9 @@ class ContextualChunker:
                 context = context.strip()
 
                 if context:
-                    # Prepend context to chunk text with two newlines
+                    # Preserve raw text before contextual enrichment
+                    chunk.raw_text = chunk.text
+                    # Prepend context to chunk text for embedding (search uses enriched text)
                     chunk.text = f"{context}\n\n{chunk.text}"
                     logger.debug(
                         f"Added context to chunk {chunk_index}: {context[:50]}..."

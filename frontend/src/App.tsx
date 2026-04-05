@@ -10,7 +10,6 @@ import type { NavItemId } from "@/components/layout/navigationTypes";
 import { Loader2 } from "lucide-react";
 
 // H-16 fix: Lazy-load all page components for code splitting
-const ChatPageRedesigned = lazy(() => import("@/pages/ChatPageRedesigned"));
 const ChatShell = lazy(() => import("@/pages/ChatShell"));
 const DocumentsPage = lazy(() => import("@/pages/DocumentsPage"));
 const MemoryPage = lazy(() => import("@/pages/MemoryPage"));
@@ -41,7 +40,6 @@ function MainAppShell({ children }: { children: React.ReactNode }) {
 
   // Determine active nav item from current route
   const getActiveItemFromPath = (pathname: string): NavItemId => {
-    if (pathname.startsWith("/chat/redesign")) return "chatNew";
     if (pathname.startsWith("/chat")) return "chat";
     if (pathname.startsWith("/documents")) return "documents";
     if (pathname.startsWith("/memory")) return "memory";
@@ -62,7 +60,7 @@ function MainAppShell({ children }: { children: React.ReactNode }) {
         navigate("/chat");
         break;
       case "chatNew":
-        navigate("/chat/redesign");
+        navigate("/chat");
         break;
       case "documents":
         navigate("/documents");
@@ -130,16 +128,8 @@ function App() {
                   </ProtectedRoute>
                 }
               />
-              <Route
-                path="/chat/redesign"
-                element={
-                  <ProtectedRoute>
-                    <MainAppShell>
-                      <ChatPageRedesigned />
-                    </MainAppShell>
-                  </ProtectedRoute>
-                }
-              />
+              {/* /chat/redesign removed — consolidated into /chat */}
+              <Route path="/chat/redesign" element={<Navigate to="/chat" replace />} />
               <Route
                 path="/chat/:sessionId"
                 element={

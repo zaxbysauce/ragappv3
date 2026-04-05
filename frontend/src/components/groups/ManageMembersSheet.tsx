@@ -20,40 +20,24 @@ import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Group } from "./GroupTable";
-import apiClient from "@/lib/api";
+import {
+  type Group,
+  type UserListItem,
+  listAllUsers,
+  getGroupMembers,
+} from "@/lib/api";
 
 // ============================================================================
 // Types
 // ============================================================================
 
-interface User {
-  id: number;
-  username: string;
-  full_name: string | null;
-  role: string;
-  is_active: boolean;
-}
+type User = UserListItem;
 
 interface ManageMembersSheetProps {
   group: Group | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSave: (userIds: number[]) => Promise<void>;
-}
-
-// ============================================================================
-// API Functions (TODO: Move to api.ts)
-// ============================================================================
-
-async function fetchAllUsers(): Promise<User[]> {
-  const response = await apiClient.get<{ users: User[] }>("/users");
-  return response.data.users;
-}
-
-async function fetchGroupMembers(groupId: number): Promise<User[]> {
-  const response = await apiClient.get<User[]>(`/groups/${groupId}/members`);
-  return response.data;
 }
 
 // ============================================================================
@@ -73,13 +57,13 @@ export function ManageMembersSheet({
   // Fetch all users and current group members
   const { data: allUsers = [], isLoading: isLoadingUsers } = useQuery<User[]>({
     queryKey: ["users"],
-    queryFn: fetchAllUsers,
+    queryFn: listAllUsers,
     enabled: open,
   });
 
-  const { data: groupMembers = [], isLoading: isLoadingMembers } = useQuery<User[]>({
+  const { data: groupMembers = [], isLoading: isLoadingMembers } = useQuery({
     queryKey: ["groups", group?.id, "members"],
-    queryFn: () => fetchGroupMembers(group!.id),
+    queryFn: () => getGroupMembers(group!.id),
     enabled: open && !!group,
   });
 

@@ -669,6 +669,9 @@ class DocumentProcessor:
                         )
                         # Ensure chunk_scale is included in metadata
                         chunk_metadata["chunk_scale"] = chunk_scale
+                        # Preserve raw text when contextual chunking modified the text
+                        if hasattr(chunk, "raw_text") and chunk.raw_text:
+                            chunk_metadata["raw_text"] = chunk.raw_text
 
                         record = {
                             "id": chunk_uid,

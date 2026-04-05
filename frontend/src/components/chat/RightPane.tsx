@@ -243,8 +243,8 @@ function SourcePreview({ source, query, onJumpToAnswer }: SourcePreviewProps) {
   );
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
+    <div className="flex flex-col h-full min-h-0 gap-4">
+      <div className="flex items-center justify-between flex-shrink-0">
         <div className="flex items-center gap-2">
           <FileText className="h-4 w-4 text-primary" />
           <h3 className="font-semibold">{source.filename}</h3>
@@ -256,14 +256,14 @@ function SourcePreview({ source, query, onJumpToAnswer }: SourcePreviewProps) {
       </div>
 
       {source.snippet && (
-        <div className="text-xs text-muted-foreground italic truncate">
+        <div className="text-xs text-muted-foreground italic truncate flex-shrink-0">
           {source.snippet.slice(0, 100)}
           {source.snippet.length > 100 ? "..." : ""}
         </div>
       )}
 
       {source.score !== undefined && source.score_type && (
-        <div className="flex items-center gap-2 text-sm">
+        <div className="flex items-center gap-2 text-sm flex-shrink-0">
           <span className="text-muted-foreground">Relevance:</span>
           <span className={getRelevanceLabel(source.score, source.score_type).color}>
             {getRelevanceLabel(source.score, source.score_type).text}
@@ -271,7 +271,7 @@ function SourcePreview({ source, query, onJumpToAnswer }: SourcePreviewProps) {
         </div>
       )}
 
-      <ScrollArea className="h-[calc(100vh-300px)] rounded-md border p-4">
+      <ScrollArea className="flex-1 min-h-0 rounded-md border p-4">
         <div className="text-sm leading-relaxed whitespace-pre-wrap">
           {highlightedContent}
         </div>
@@ -384,9 +384,9 @@ export function RightPane() {
       <Tabs
         value={activeTab}
         onValueChange={setActiveTab}
-        className="flex-1 flex flex-col"
+        className="flex-1 flex flex-col min-h-0"
       >
-        <TabsList className="grid w-full grid-cols-3">
+        <TabsList className="grid w-full grid-cols-3 flex-shrink-0">
           <TabsTrigger value="sources">
             Sources
             {hasSources && (
@@ -408,8 +408,8 @@ export function RightPane() {
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="sources" className="flex-1 mt-4">
-          <ScrollArea className="h-[calc(100vh-200px)]">
+        <TabsContent value="sources" className="flex-1 min-h-0 mt-4">
+          <ScrollArea className="h-full">
             {!hasSources ? (
               <div className="text-sm text-muted-foreground italic p-4 text-center">
                 No sources available. Send a message to see retrieved sources.
@@ -431,7 +431,7 @@ export function RightPane() {
           </ScrollArea>
         </TabsContent>
 
-        <TabsContent value="preview" className="flex-1 mt-4">
+        <TabsContent value="preview" className="flex-1 min-h-0 mt-4">
           {!selectedSource ? (
             <div className="text-sm text-muted-foreground italic p-4 text-center">
               Select a source from the Sources tab to preview it here.
@@ -445,8 +445,8 @@ export function RightPane() {
           )}
         </TabsContent>
 
-        <TabsContent value="extracted" className="flex-1 mt-4">
-          <ScrollArea className="h-[calc(100vh-200px)]">
+        <TabsContent value="extracted" className="flex-1 min-h-0 mt-4">
+          <ScrollArea className="h-full">
             {!hasStructuredOutputs ? (
               <div className="text-sm text-muted-foreground italic p-4 text-center">
                 No structured outputs found in the conversation.

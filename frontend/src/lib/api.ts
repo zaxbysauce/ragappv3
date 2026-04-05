@@ -358,7 +358,11 @@ export interface ChatMessage {
 
 export interface Source {
   id: string;
+  file_id?: string;
   filename: string;
+  section?: string;
+  source_label?: string;
+  evidence_type?: "primary" | "supporting";
   snippet?: string;
   score?: number;
   score_type?: "distance" | "rerank" | "rrf";
@@ -889,6 +893,24 @@ export interface User {
   is_superuser: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export interface UserListItem {
+  id: number;
+  username: string;
+  full_name: string | null;
+  role: string;
+  is_active: boolean;
+}
+
+export async function listAllUsers(): Promise<UserListItem[]> {
+  const response = await apiClient.get<{ users: UserListItem[] }>("/users");
+  return response.data.users;
+}
+
+export async function getGroupVaultIds(groupId: number): Promise<number[]> {
+  const response = await apiClient.get<{ id: number; name: string }[]>(`/groups/${groupId}/vaults`);
+  return response.data.map((vault) => vault.id);
 }
 
 export async function getUserGroups(userId: number): Promise<{ groups: Group[] }> {

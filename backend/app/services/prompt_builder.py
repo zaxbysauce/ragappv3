@@ -11,10 +11,12 @@ from app.services.document_retrieval import RAGSource
 
 CITATION_INSTRUCTION = (
     "\n\nWhen answering questions based on the provided context:\n"
-    "- Cite your sources inline using the format [Source: filename] when referencing specific documents\n"
+    "- Cite your sources inline using only the stable source labels provided (e.g. [S1], [S2], [S3])\n"
+    "- Do NOT cite by filename. Always use the [S#] label assigned to each source.\n"
     "- If the provided context does not contain enough information to answer the question, "
     "clearly state that the information is not available in the retrieved documents\n"
-    "- Do not fabricate or hallucinate information not present in the context"
+    "- Do not fabricate or hallucinate information not present in the context\n"
+    "- Prefer citing primary evidence over supporting evidence when both are available"
 )
 
 
@@ -39,7 +41,8 @@ class PromptBuilderService:
         """Return the default system prompt."""
         return (
             "You are KnowledgeVault, a highly accurate assistant that references sources when "
-            "answering questions. Cite the relevant documents or memories by name."
+            "answering questions. Cite the relevant documents or memories using their assigned "
+            "source labels (e.g. [S1], [S2])."
             + CITATION_INSTRUCTION
         )
 
@@ -63,7 +66,20 @@ class PromptBuilderService:
         Returns:
             List of message dictionaries for the LLM
         """
-        context_sections = [self.format_chunk(ch) for ch in chunks]
+        # Split chunks into primary (top-scoring) and supporting
+        primary_count = min(max(len(chunks) // 2, 3), len(chunks))
+        primary_chunks = chunks[:primary_count]
+        supporting_chunks = chunks[primary_count:]
+
+        # Format with stable source labels [S1], [S2], etc.
+        primary_sections = [
+            self.format_chunk(ch, idx + 1) for idx, ch in enumerate(primary_chunks)
+        ]
+        supporting_sections = [
+            self.format_chunk(ch, idx + primary_count + 1)
+            for idx, ch in enumerate(supporting_chunks)
+        ]
+
         memory_context = [mem.content for mem in memories if mem.content]
 
         messages: List[Dict[str, str]] = [
@@ -74,15 +90,22 @@ class PromptBuilderService:
         for entry in chat_history[-max_history:]:
             messages.append(entry)
 
-        context = "\n\n".join(filter(None, context_sections))
-
+        # Build structured context
         user_content_parts: List[str] = []
         if relevance_hint:
             user_content_parts.append(relevance_hint)
-        if context:
-            user_content_parts.append(f"Context:\n{context}")
-        else:
+
+        if primary_sections:
+            primary_text = "\n\n".join(primary_sections)
+            user_content_parts.append(f"Primary Evidence:\n{primary_text}")
+
+        if supporting_sections:
+            supporting_text = "\n\n".join(supporting_sections)
+            user_content_parts.append(f"Supporting Evidence:\n{supporting_text}")
+
+        if not primary_sections and not supporting_sections:
             user_content_parts.append("No relevant documents found for this query.")
+
         user_content = "\n\n".join(user_content_parts) + "\n\n"
 
         memory_text = "\n".join(memory_context)
@@ -93,21 +116,34 @@ class PromptBuilderService:
         messages.append({"role": "user", "content": user_content})
         return messages
 
-    def format_chunk(self, chunk: RAGSource) -> str:
-        """Format a chunk for inclusion in the prompt context.
+    def format_chunk(self, chunk: RAGSource, source_index: int) -> str:
+        """Format a chunk for inclusion in the prompt context with a stable source label.
 
         Args:
             chunk: RAGSource to format
+            source_index: 1-based index for the stable source label
 
         Returns:
-            Formatted string with source and text
+            Formatted string with stable source label and metadata
         """
-        source_title = (
+        filename = (
             chunk.metadata.get("source_file")
+            or chunk.metadata.get("filename")
             or chunk.metadata.get("section_title")
             or "document"
         )
-        return f"Source {source_title} (score: {chunk.score:.2f}):\n{chunk.text}"
+        section = chunk.metadata.get("section_title") or chunk.metadata.get("heading") or ""
+        label = f"[S{source_index}]"
+
+        header_parts = [f"{label} {filename}"]
+        if section and section != filename:
+            header_parts.append(f"Section: {section}")
+        header_parts.append(f"score: {chunk.score:.2f}")
+        if chunk.file_id:
+            header_parts.append(f"id: {chunk.file_id}")
+
+        header = " | ".join(header_parts)
+        return f"{header}\n{chunk.text}"
 
     def build_system_prompt(self) -> str:
         """Return the system prompt.

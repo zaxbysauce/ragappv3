@@ -19,7 +19,10 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Group } from "./GroupTable";
+import {
+  type Group,
+  getGroupVaultIds,
+} from "@/lib/api";
 import apiClient from "@/lib/api";
 
 // ============================================================================
@@ -39,20 +42,9 @@ interface ManageVaultsSheetProps {
   onSave: (vaultIds: number[]) => Promise<void>;
 }
 
-
-
-// ============================================================================
-// API Functions (TODO: Move to api.ts)
-// ============================================================================
-
 async function fetchAllVaults(): Promise<Vault[]> {
   const response = await apiClient.get<{ vaults: Vault[] }>("/vaults");
   return response.data.vaults;
-}
-
-async function fetchGroupVaultAccess(groupId: number): Promise<number[]> {
-  const response = await apiClient.get<{ id: number; name: string }[]>(`/groups/${groupId}/vaults`);
-  return response.data.map((vault) => vault.id);
 }
 
 // ============================================================================
@@ -78,7 +70,7 @@ export function ManageVaultsSheet({
 
   const { data: groupVaultIds = [], isLoading: isLoadingAccess } = useQuery<number[]>({
     queryKey: ["groups", group?.id, "vaults"],
-    queryFn: () => fetchGroupVaultAccess(group!.id),
+    queryFn: () => getGroupVaultIds(group!.id),
     enabled: open && !!group,
   });
 

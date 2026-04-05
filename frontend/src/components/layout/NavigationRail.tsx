@@ -1,4 +1,4 @@
-import { MessageSquare, FileText, Brain, Settings, Database, Sparkles, Users, UserCog, Building2, UserCircle, Sun, Moon } from "lucide-react";
+import { MessageSquare, FileText, Brain, Settings, Database, Users, UserCog, Building2, UserCircle, Sun, Moon } from "lucide-react";
 import { motion } from "framer-motion";
 import { useThemeStore } from "@/stores/useThemeStore";
 import { cn } from "@/lib/utils";
@@ -18,7 +18,6 @@ interface NavConfigItem {
 
 const navItems: NavConfigItem[] = [
   { id: "chat", label: "Chat", icon: MessageSquare, to: "/chat" },
-  { id: "chatNew", label: "Chat (New)", icon: Sparkles, to: "/chat/redesign", isSpecial: true },
   { id: "documents", label: "Documents", icon: FileText, to: "/documents" },
   { id: "memory", label: "Memory", icon: Brain, to: "/memory" },
   { id: "vaults", label: "Vaults", icon: Database, to: "/vaults" },
@@ -88,7 +87,6 @@ export function NavigationRail({ healthStatus }: NavigationRailProps) {
         {navItems.map((item) => {
           const Icon = item.icon;
           const isActive = activeItem === item.id;
-          const isNewChat = item.id === "chatNew";
 
           return (
             <NavLink
@@ -97,8 +95,7 @@ export function NavigationRail({ healthStatus }: NavigationRailProps) {
               className={cn(
                 "group relative flex flex-col items-center gap-1 p-3 rounded-xl transition-all duration-200 ease-out",
                 "hover:bg-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                isActive && "bg-primary/10",
-                isNewChat && "bg-gradient-to-br from-purple-500/10 to-pink-500/10 hover:from-purple-500/20 hover:to-pink-500/20 border border-purple-500/30"
+                isActive && "bg-primary/10"
               )}
               aria-label={item.label}
               aria-current={isActive ? "page" : undefined}
@@ -109,26 +106,18 @@ export function NavigationRail({ healthStatus }: NavigationRailProps) {
                   "relative p-2 rounded-lg transition-all duration-200",
                   isActive
                     ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground group-hover:text-foreground",
-                  isNewChat && "bg-gradient-to-br from-purple-500 to-pink-500 text-white shadow-lg shadow-purple-500/25"
+                    : "text-muted-foreground group-hover:text-foreground"
                 )}
               >
                 <Icon className="w-5 h-5" />
 
                 {/* Active Indicator — animated sliding pill */}
-                {isActive && !isNewChat && (
+                {isActive && (
                   <motion.span
                     layoutId="nav-active-indicator"
                     className="absolute -right-1 top-1/2 -translate-y-1/2 w-1 h-4 bg-primary rounded-full"
                     transition={{ type: "spring", stiffness: 380, damping: 30 }}
                   />
-                )}
-
-                {/* New Badge */}
-                {isNewChat && (
-                  <span className="absolute -top-1 -right-1 px-1.5 py-0.5 text-[8px] font-bold bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-full shadow-md">
-                    NEW
-                  </span>
                 )}
               </div>
 
@@ -138,8 +127,7 @@ export function NavigationRail({ healthStatus }: NavigationRailProps) {
                   "text-xs font-medium transition-colors duration-200",
                   isActive
                     ? "text-primary"
-                    : "text-muted-foreground group-hover:text-foreground",
-                  isNewChat && "font-bold bg-gradient-to-r from-purple-500 to-pink-500 bg-clip-text text-transparent"
+                    : "text-muted-foreground group-hover:text-foreground"
                 )}
               >
                 {item.label}

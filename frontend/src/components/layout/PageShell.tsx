@@ -26,7 +26,7 @@ export function PageShell({ children, activeItem, onItemSelect, healthStatus }: 
   const isChat = location.pathname.startsWith("/chat");
 
   return (
-    <div className="flex min-h-screen">
+    <div className="flex h-screen overflow-hidden">
       {/* Skip navigation link (CR-3) */}
       <a
         href="#main-content"
@@ -39,8 +39,8 @@ export function PageShell({ children, activeItem, onItemSelect, healthStatus }: 
       <Navigation activeItem={activeItem} onItemSelect={onItemSelect} healthStatus={healthStatus} />
 
       {/* Main Content Area */}
-      <main id="main-content" className="flex-1 flex flex-col min-h-screen overflow-hidden">
-        <div className={isChat ? "flex-1 overflow-hidden" : "flex-1 p-6 lg:p-8 overflow-auto pb-20 md:pb-6 max-w-7xl mx-auto w-full"}>
+      <main id="main-content" className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
+        <div className={isChat ? "flex-1 min-h-0 overflow-hidden" : "flex-1 min-h-0 p-6 lg:p-8 overflow-auto pb-20 md:pb-6 max-w-7xl mx-auto w-full"}>
           <AnimatePresence mode="wait">
             <motion.div
               key={location.pathname}

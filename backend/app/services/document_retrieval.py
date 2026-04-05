@@ -368,11 +368,14 @@ class DocumentRetrievalService:
                 logger.warning("Failed to parse metadata JSON: %s", exc)
         return {}
 
-    def to_source_metadata(self, chunk: RAGSource) -> Dict[str, Any]:
+    def to_source_metadata(
+        self, chunk: RAGSource, source_index: int = 0
+    ) -> Dict[str, Any]:
         """Convert RAGSource to source metadata dictionary.
 
         Args:
             chunk: RAGSource to convert
+            source_index: 1-based index for stable source label (0 = not assigned)
 
         Returns:
             Dictionary with source metadata
@@ -383,6 +386,11 @@ class DocumentRetrievalService:
             or chunk.metadata.get("section_title")
             or "Unknown document"
         )
+        section = (
+            chunk.metadata.get("section_title")
+            or chunk.metadata.get("heading")
+            or ""
+        )
         # Construct unique ID per chunk to avoid duplicate React keys
         chunk_index = chunk.metadata.get("chunk_index", "")
         chunk_scale = chunk.metadata.get("chunk_scale", "")
@@ -391,11 +399,22 @@ class DocumentRetrievalService:
         else:
             unique_id = f"{chunk.file_id}_{chunk_index}"
 
+        # Stable source label for citation resolution
+        source_label = f"S{source_index}" if source_index > 0 else ""
+
+        # Use raw_text for snippet when available (contextual chunking may have
+        # prepended synthetic context to chunk.text — we want the original for display)
+        raw_text = chunk.metadata.get("raw_text")
+        snippet_source = raw_text if raw_text else chunk.text
+        snippet = snippet_source[:300] if snippet_source else ""
+
         return {
             "id": unique_id,
             "file_id": chunk.file_id,
             "filename": filename,
-            "snippet": chunk.text[:300] if chunk.text else "",
+            "section": section,
+            "source_label": source_label,
+            "snippet": snippet,
             "score": chunk.score,
             "metadata": chunk.metadata,
         }

@@ -151,6 +151,18 @@ class Settings(BaseSettings):
     flag_embedding_url: str = "http://embedding-server:18080"
     """URL of the FlagEmbedding server for BGE-M3 tri-vector embeddings."""
 
+    # ── Chunk enrichment / curator configuration ───────────────────────────
+    chunk_enrichment_enabled: bool = False
+    """Enable curator-style chunk enrichment (generates auxiliary metadata for retrieval)."""
+    chunk_enrichment_concurrency: int = 5
+    """Maximum concurrent LLM calls for chunk enrichment."""
+    chunk_enrichment_fields: str = "summary,questions,entities"
+    """Comma-separated list of enrichment fields to generate: summary, questions, entities, aliases."""
+
+    # ── Retrieval profile configuration ──────────────────────────────────
+    retrieval_profile: str = "baseline"
+    """Retrieval profile: 'baseline' (dense + hybrid + rerank), 'advanced' (adds tri-vector + enrichment)."""
+
     # Document processing configuration (legacy - DEPRECATED)
     chunk_size: int | None = None
     """[DEPRECATED] Token-based chunk size. Use chunk_size_chars instead."""

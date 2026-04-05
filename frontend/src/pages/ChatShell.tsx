@@ -1,11 +1,16 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useParams } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { useChatShellStore } from "@/stores/useChatShellStore";
+import { useChatStore } from "@/stores/useChatStore";
 import { SessionRail } from "@/components/chat/SessionRail";
 import { TranscriptPane } from "@/components/chat/TranscriptPane";
 import { RightPane } from "@/components/chat/RightPane";
 import { Button } from "@/components/ui/button";
+import {
+  useKeyboardShortcuts,
+  KeyboardShortcutsDialog,
+} from "@/components/shared/KeyboardShortcuts";
 import {
   Sheet,
   SheetContent,
@@ -14,7 +19,7 @@ import {
   SheetDescription,
   SheetClose,
 } from "@/components/ui/sheet";
-import { PanelLeft, PanelRight, X } from "lucide-react";
+import { PanelLeft, PanelRight, Download, X } from "lucide-react";
 
 function useIsMobile(breakpoint = 768) {
   const [isMobile, setIsMobile] = useState(
@@ -46,8 +51,33 @@ export default function ChatShell() {
   } = useChatShellStore();
 
   const isMobile = useIsMobile();
+  const messages = useChatStore((s) => s.messages);
+  const { open: shortcutsOpen, setOpen: setShortcutsOpen } = useKeyboardShortcuts();
   // Mobile Sheet uses its own state, toggled by the same button
   const [mobileSheetOpen, setMobileSheetOpen] = useState(false);
+
+  const handleExportChat = useCallback(() => {
+    if (messages.length === 0) return;
+    const chatText = messages
+      .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`)
+      .join("\n\n");
+    const blob = new Blob([chatText], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    try {
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `chat-${new Date().toISOString().slice(0, 10)}.txt`;
+      link.style.display = "none";
+      document.body.appendChild(link);
+      link.click();
+      setTimeout(() => {
+        if (document.body.contains(link)) document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+      }, 100);
+    } catch {
+      URL.revokeObjectURL(url);
+    }
+  }, [messages]);
 
   const handleToggleSessionRail = () => {
     if (isMobile) {
@@ -128,6 +158,11 @@ export default function ChatShell() {
             <PanelLeft className="h-5 w-5" aria-hidden="true" />
           </Button>
           <div className="flex-1" />
+          <Button variant="ghost" size="icon" onClick={handleExportChat}
+            disabled={messages.length === 0}
+            aria-label="Export chat">
+            <Download className="h-5 w-5" aria-hidden="true" />
+          </Button>
           <Button variant="ghost" size="icon" onClick={toggleRightPane}
             aria-label={rightPaneOpen ? "Hide details panel" : "Show details panel"}
             aria-pressed={rightPaneOpen}>
@@ -201,6 +236,9 @@ export default function ChatShell() {
           </SheetContent>
         </Sheet>
       )}
+
+      {/* Keyboard Shortcuts Dialog */}
+      <KeyboardShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
     </div>
   );
 }

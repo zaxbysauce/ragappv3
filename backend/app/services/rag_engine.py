@@ -630,11 +630,22 @@ class RAGEngine:
 
         score_type = "rerank" if self.reranking_enabled else "distance"
 
+        # Split into primary and supporting (same split as prompt builder)
+        primary_count = min(max(len(relevant_chunks) // 2, 3), len(relevant_chunks))
+
+        sources = []
+        for idx, chunk in enumerate(relevant_chunks):
+            source_meta = self.document_retrieval.to_source_metadata(
+                chunk, source_index=idx + 1
+            )
+            source_meta["evidence_type"] = (
+                "primary" if idx < primary_count else "supporting"
+            )
+            sources.append(source_meta)
+
         return {
             "type": "done",
-            "sources": [
-                self.document_retrieval.to_source_metadata(c) for c in relevant_chunks
-            ],
+            "sources": sources,
             "memories_used": [mem.content for mem in memories],
             "retrieval_debug": retrieval_debug,
             "score_type": score_type,

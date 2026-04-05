@@ -74,10 +74,11 @@ interface ParsedContent {
 
 /**
  * Parse citations from message content using regex.
- * Matches [Source: filename] tags and extracts source names.
+ * Supports both new stable labels [S1], [S2] and legacy [Source: filename] format.
  */
 export function parseCitations(content: string, sources: Source[] | undefined): ParsedContent {
-  const regex = /\[Source:\s*([^\]]+)\]/g;
+  // Match both [S1] style and legacy [Source: filename] style
+  const regex = /\[S(\d+)\]|\[Source:\s*([^\]]+)\]/g;
   const segments: ParsedContent["segments"] = [];
   const citedSources: Source[] = [];
   const seenSourceIds = new Set<string>();
@@ -94,14 +95,32 @@ export function parseCitations(content: string, sources: Source[] | undefined): 
       });
     }
 
-    const sourceName = match[1].trim();
+    let source: Source | undefined;
+    let sourceName: string;
+
+    if (match[1]) {
+      // New format: [S1], [S2], etc.
+      const label = `S${match[1]}`;
+      sourceName = label;
+      source = sources?.find((s) => s.source_label === label);
+      // Fallback: resolve by index (S1 = index 0, S2 = index 1, etc.)
+      if (!source) {
+        const idx = parseInt(match[1], 10) - 1;
+        if (sources && idx >= 0 && idx < sources.length) {
+          source = sources[idx];
+        }
+      }
+    } else {
+      // Legacy format: [Source: filename]
+      sourceName = match[2].trim();
+      source = sources?.find((s) => s.filename === sourceName);
+    }
+
     segments.push({
       type: "citation",
       sourceName,
     });
 
-    // Find the corresponding source in the sources array
-    const source = sources?.find((s) => s.filename === sourceName);
     if (source && !seenSourceIds.has(source.id)) {
       citedSources.push(source);
       seenSourceIds.add(source.id);
@@ -474,7 +493,19 @@ export function AssistantMessage({
   const renderContent = () => {
     return segments.map((segment, index) => {
       if (segment.type === "citation") {
-        const source = message.sources?.find((s) => s.filename === segment.sourceName);
+        // Resolve by source_label first, then by filename (legacy), then by index
+        const source =
+          message.sources?.find((s) => s.source_label === segment.sourceName) ||
+          message.sources?.find((s) => s.filename === segment.sourceName) ||
+          (() => {
+            // Try parsing S# label to get index
+            const labelMatch = segment.sourceName.match(/^S(\d+)$/);
+            if (labelMatch && message.sources) {
+              const idx = parseInt(labelMatch[1], 10) - 1;
+              return idx >= 0 && idx < message.sources.length ? message.sources[idx] : undefined;
+            }
+            return undefined;
+          })();
         if (source) {
           // Find the chip index by looking up the source in citedSources to handle duplicates correctly
           const sourceIndex = citedSources.findIndex((s) => s.id === source.id);
@@ -490,7 +521,7 @@ export function AssistantMessage({
           );
         }
         // If source not found, render as plain text
-        return <span key={index}>[Source: {segment.sourceName}]</span>;
+        return <span key={index}>[{segment.sourceName}]</span>;
       }
       // For text segments, render markdown
       return (

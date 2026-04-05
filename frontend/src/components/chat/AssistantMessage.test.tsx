@@ -147,6 +147,66 @@ describe("parseCitations", () => {
 
     expect(result.segments[1]).toEqual({ type: "citation", sourceName: "my document.pdf" });
   });
+
+  // New stable label [S#] citation tests
+  it("should parse [S1] stable source labels", () => {
+    const sources = [
+      createSource({ id: "src-1", filename: "doc1.pdf", source_label: "S1" }),
+    ];
+    const result = parseCitations("According to [S1], the answer is yes.", sources);
+
+    expect(result.segments).toHaveLength(3);
+    expect(result.segments[0]).toEqual({ type: "text", content: "According to " });
+    expect(result.segments[1]).toEqual({ type: "citation", sourceName: "S1" });
+    expect(result.segments[2]).toEqual({ type: "text", content: ", the answer is yes." });
+    expect(result.citedSources).toHaveLength(1);
+    expect(result.citedSources[0].id).toBe("src-1");
+  });
+
+  it("should parse multiple [S#] labels", () => {
+    const sources = [
+      createSource({ id: "src-1", filename: "doc1.pdf", source_label: "S1" }),
+      createSource({ id: "src-2", filename: "doc2.pdf", source_label: "S2" }),
+    ];
+    const result = parseCitations("See [S1] and [S2] for details.", sources);
+
+    expect(result.citedSources).toHaveLength(2);
+    expect(result.citedSources[0].id).toBe("src-1");
+    expect(result.citedSources[1].id).toBe("src-2");
+  });
+
+  it("should resolve [S#] by index when source_label is missing", () => {
+    const sources = [
+      createSource({ id: "src-1", filename: "doc1.pdf" }),
+      createSource({ id: "src-2", filename: "doc2.pdf" }),
+    ];
+    const result = parseCitations("Refer to [S2] for context.", sources);
+
+    expect(result.citedSources).toHaveLength(1);
+    expect(result.citedSources[0].id).toBe("src-2");
+  });
+
+  it("should handle duplicate filenames with distinct [S#] labels", () => {
+    const sources = [
+      createSource({ id: "src-1", filename: "report.pdf", source_label: "S1" }),
+      createSource({ id: "src-2", filename: "report.pdf", source_label: "S2" }),
+    ];
+    const result = parseCitations("Compare [S1] and [S2].", sources);
+
+    expect(result.citedSources).toHaveLength(2);
+    expect(result.citedSources[0].id).toBe("src-1");
+    expect(result.citedSources[1].id).toBe("src-2");
+  });
+
+  it("should handle mixed legacy and new citation formats", () => {
+    const sources = [
+      createSource({ id: "src-1", filename: "doc1.pdf", source_label: "S1" }),
+      createSource({ id: "src-2", filename: "legacy.pdf" }),
+    ];
+    const result = parseCitations("See [S1] and [Source: legacy.pdf].", sources);
+
+    expect(result.citedSources).toHaveLength(2);
+  });
 });
 
 // =============================================================================

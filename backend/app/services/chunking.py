@@ -22,11 +22,12 @@ class ProcessedChunk:
     Represents a processed chunk of document content.
 
     Attributes:
-        text: The chunk text content
+        text: The chunk text content (may include contextual prefix if contextual chunking is enabled)
         metadata: Dictionary containing section title, element type, and other metadata
         chunk_index: Sequential index of this chunk in the document
         chunk_uid: Unique identifier for windowing (format: file_id_chunk_index)
         original_indices: List of original chunk indices if merged (for tracking)
+        raw_text: Original chunk text before any contextual enrichment (preserved for evidence display)
     """
 
     text: str
@@ -34,6 +35,7 @@ class ProcessedChunk:
     chunk_index: int
     chunk_uid: Optional[str] = None
     original_indices: List[int] = field(default_factory=list)
+    raw_text: Optional[str] = None
 
 
 class SemanticChunker:
