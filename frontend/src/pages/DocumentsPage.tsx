@@ -623,7 +623,7 @@ export default function DocumentsPage() {
                     <tr className="border-b bg-muted/50">
                       <th scope="col" className="text-left p-4 font-medium">
                         <Checkbox 
-                          checked={(selectedIds.size > 0 && selectedIds.size === filteredDocuments.length) ?? false}
+                          checked={selectedIds.size > 0 && selectedIds.size === filteredDocuments.length}
                           onCheckedChange={handleSelectAll}
                           aria-label="Select all documents"
                         />
@@ -657,7 +657,7 @@ export default function DocumentsPage() {
                         <tr key={doc.id} className={`border-b hover:bg-muted/50 ${isSelected ? 'bg-muted/30' : ''}`}>
                           <td className="p-4">
                             <Checkbox 
-                              checked={isSelected ?? false}
+                              checked={isSelected}
                               onCheckedChange={(checked) => handleSelectOne(String(doc.id), !!checked)}
                               aria-label={`Select ${doc.filename}`}
                             />

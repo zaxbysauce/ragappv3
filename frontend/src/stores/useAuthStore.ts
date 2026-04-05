@@ -253,16 +253,18 @@ export const useAuthStore = create<AuthState>()(
         } catch (error) {
           console.error("Logout request failed:", error);
           // Continue with local cleanup even if server logout fails
-        } finally {
-          // Clear all auth state
-          set({
-            user: null,
-            accessToken: null,
-            isAuthenticated: false,
-          });
-          setJwtAccessToken(null);
-          get()._setLoading(false);
-        }
+	} finally {
+		// Clear all auth state
+		set({
+			user: null,
+			accessToken: null,
+			isAuthenticated: false,
+		});
+		setJwtAccessToken(null);
+		get()._setLoading(false);
+		// Reset init guard so re-login works after logout
+		_initAttempted = false;
+	}
       },
 
       refreshToken: async (): Promise<string | null> => {

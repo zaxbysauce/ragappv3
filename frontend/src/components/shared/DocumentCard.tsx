@@ -66,7 +66,7 @@ export function DocumentCard({
             {/* Checkbox for bulk selection */}
             {onSelectionChange && (
               <Checkbox
-                checked={isSelected ?? false}
+                checked={!!isSelected}
                 onCheckedChange={(checked) =>
                   onSelectionChange(document.id, !!checked)
                 }
