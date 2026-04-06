@@ -245,6 +245,14 @@ async def chat(
     if request.vault_id is not None:
         if not await evaluate_policy(user, "vault", request.vault_id, "read"):
             raise HTTPException(status_code=403, detail="No read access to this vault")
+    else:
+        # vault_id=None ("All Vaults") searches across all vaults without filtering.
+        # Restrict to admin/superadmin — non-admin users must specify a vault_id.
+        if user.get("role") not in ("superadmin", "admin"):
+            raise HTTPException(
+                status_code=403,
+                detail="Searching all vaults requires admin access. Please select a specific vault.",
+            )
     try:
         return await non_stream_chat_response(
             request.message, request.history, rag_engine, vault_id=request.vault_id
@@ -270,11 +278,17 @@ async def chat_stream(
             status_code=400, detail="The last message must be from the user"
         )
 
-    # When vault_id is None ("All Vaults" mode), skip per-vault policy check —
-    # the RAG engine will search all vaults without filtering.
     if request.vault_id is not None:
         if not await evaluate_policy(user, "vault", request.vault_id, "read"):
             raise HTTPException(status_code=403, detail="No read access to this vault")
+    else:
+        # vault_id=None ("All Vaults") searches across all vaults without filtering.
+        # Restrict to admin/superadmin — non-admin users must specify a vault_id.
+        if user.get("role") not in ("superadmin", "admin"):
+            raise HTTPException(
+                status_code=403,
+                detail="Searching all vaults requires admin access. Please select a specific vault.",
+            )
 
     history = [msg.model_dump(exclude_none=True) for msg in request.messages[:-1]]
     return stream_chat_response(
