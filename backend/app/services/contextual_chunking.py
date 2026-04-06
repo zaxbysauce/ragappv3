@@ -358,13 +358,18 @@ class ContextualChunker:
                     logger.debug(
                         "Batch returned None for chunk %d, falling back to per-chunk", global_idx
                     )
-                    await self._contextualize_single_chunk(
-                        chunk=chunk,
-                        document_text=truncated_doc,
-                        chunk_index=global_idx,
-                        total_chunks=total_chunks,
-                        source_filename=safe_filename,
-                    )
+                    try:
+                        await self._contextualize_single_chunk(
+                            chunk=chunk,
+                            document_text=truncated_doc,
+                            chunk_index=global_idx,
+                            total_chunks=total_chunks,
+                            source_filename=safe_filename,
+                        )
+                    except Exception:
+                        # _contextualize_single_chunk sets metadata["contextualized"]=False
+                        # before re-raising; swallow here so remaining chunks are processed.
+                        chunk.metadata.setdefault("contextualized", False)
 
         tasks = [
             process_batch(batch_num, batch_chunks, batch_indices)
