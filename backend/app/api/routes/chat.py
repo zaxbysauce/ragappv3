@@ -41,7 +41,7 @@ class ChatRequest(BaseModel):
     message: str
     history: List[Dict[str, Any]] = Field(default_factory=list)
     stream: bool = False
-    vault_id: int = 1
+    vault_id: Optional[int] = None
 
 
 class ChatResponse(BaseModel):
@@ -60,7 +60,7 @@ class ChatMessage(BaseModel):
 
 class ChatStreamRequest(BaseModel):
     messages: List[ChatMessage]
-    vault_id: int = 1
+    vault_id: Optional[int] = None
 
 
 class CreateSessionRequest(BaseModel):
@@ -88,7 +88,7 @@ def stream_chat_response(
     message: str,
     history: List[Dict[str, Any]],
     rag_engine: Optional[RAGEngine],
-    vault_id: int = 1,
+    vault_id: Optional[int] = None,
 ) -> StreamingResponse:
     """
     Generate a streaming chat response using SSE format.
@@ -161,7 +161,7 @@ async def non_stream_chat_response(
     message: str,
     history: List[Dict[str, Any]],
     rag_engine: Optional[RAGEngine],
-    vault_id: int = 1,
+    vault_id: Optional[int] = None,
 ) -> ChatResponse:
     """
     Generate a non-streaming chat response.
@@ -242,8 +242,9 @@ async def chat(
             status_code=400,
             detail="Streaming is not supported on this endpoint. Use /chat/stream for streaming responses.",
         )
-    if not await evaluate_policy(user, "vault", request.vault_id, "read"):
-        raise HTTPException(status_code=403, detail="No read access to this vault")
+    if request.vault_id is not None:
+        if not await evaluate_policy(user, "vault", request.vault_id, "read"):
+            raise HTTPException(status_code=403, detail="No read access to this vault")
     try:
         return await non_stream_chat_response(
             request.message, request.history, rag_engine, vault_id=request.vault_id
@@ -269,8 +270,11 @@ async def chat_stream(
             status_code=400, detail="The last message must be from the user"
         )
 
-    if not await evaluate_policy(user, "vault", request.vault_id, "read"):
-        raise HTTPException(status_code=403, detail="No read access to this vault")
+    # When vault_id is None ("All Vaults" mode), skip per-vault policy check —
+    # the RAG engine will search all vaults without filtering.
+    if request.vault_id is not None:
+        if not await evaluate_policy(user, "vault", request.vault_id, "read"):
+            raise HTTPException(status_code=403, detail="No read access to this vault")
 
     history = [msg.model_dump(exclude_none=True) for msg in request.messages[:-1]]
     return stream_chat_response(

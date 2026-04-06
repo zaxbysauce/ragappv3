@@ -65,8 +65,11 @@ const authClient = axios.create({
 let csrfToken: string | null = null;
 let csrfFetchPromise: Promise<string> | null = null;
 
-// Guard to prevent retry loop when refresh returns 401
+// Guard to prevent concurrent/duplicate init calls.
+// Stores the in-flight promise so additional callers await the same result
+// instead of short-circuiting with a stale isInitialized=true state.
 let _initAttempted = false;
+let _initPromise: Promise<void> | null = null;
 
 async function ensureCsrfToken(): Promise<string> {
   if (csrfToken) return csrfToken;
@@ -126,47 +129,55 @@ export const useAuthStore = create<AuthState>()(
       setAuthMode: (mode: "jwt" | "apikey") => set({ authMode: mode }),
 
       init: async () => {
-        // Guard: skip if init was already attempted (prevents 401 retry loop)
+        // Guard: if init is already in-flight, await the same promise instead of
+        // short-circuiting with isInitialized=true before auth has resolved.
+        // This prevents React StrictMode's double-effect invocation from marking
+        // the route as initialized while isAuthenticated is still false.
         if (_initAttempted) {
-          set({ isLoading: false, isInitialized: true });
+          if (_initPromise) await _initPromise;
           return;
         }
         _initAttempted = true;
 
-        const state = get();
-        set({ isLoading: true });
+        _initPromise = (async () => {
+          const state = get();
+          set({ isLoading: true });
 
-        // Try in-memory token first, then attempt httpOnly cookie refresh
-        try {
-          if (state.accessToken) {
-            await get().fetchMe();
-            set({ authMode: "jwt", isAuthenticated: true, isLoading: false, isInitialized: true });
-            return;
+          // Try in-memory token first, then attempt httpOnly cookie refresh
+          try {
+            if (state.accessToken) {
+              await get().fetchMe();
+              set({ authMode: "jwt", isAuthenticated: true, isLoading: false, isInitialized: true });
+              return;
+            }
+            // No in-memory token — attempt refresh via httpOnly cookie (H-7 fix)
+            const newToken = await get().refreshToken();
+            if (newToken) {
+              await get().fetchMe();
+              set({ authMode: "jwt", isAuthenticated: true, isLoading: false, isInitialized: true });
+              return;
+            }
+          } catch {
+            // Token invalid and refresh failed — clear all auth state
+            set({
+              accessToken: null,
+              user: null,
+              isAuthenticated: false,
+            });
+            setJwtAccessToken(null);
           }
-          // No in-memory token — attempt refresh via httpOnly cookie (H-7 fix)
-          const newToken = await get().refreshToken();
-          if (newToken) {
-            await get().fetchMe();
-            set({ authMode: "jwt", isAuthenticated: true, isLoading: false, isInitialized: true });
-            return;
+
+          try {
+            await get().checkSetupStatus();
+          } catch {
+            // Backend unreachable
           }
-        } catch {
-          // Token invalid and refresh failed — clear all auth state
-          set({
-            accessToken: null,
-            user: null,
-            isAuthenticated: false,
-          });
-          setJwtAccessToken(null);
-        }
 
-        try {
-          await get().checkSetupStatus();
-        } catch {
-          // Backend unreachable
-        }
+          set({ authMode: "jwt", isLoading: false, isInitialized: true });
+        })();
 
-        set({ authMode: "jwt", isLoading: false, isInitialized: true });
+        await _initPromise;
+        _initPromise = null;
       },
 
       checkSetupStatus: async () => {
@@ -184,6 +195,7 @@ export const useAuthStore = create<AuthState>()(
       login: async (username: string, password: string) => {
         // Reset init guard so re-login works after a failed init
         _initAttempted = false;
+        _initPromise = null;
 
         get()._setLoading(true);
         try {
@@ -266,6 +278,7 @@ export const useAuthStore = create<AuthState>()(
 		get()._setLoading(false);
 		// Reset init guard so re-login works after logout
 		_initAttempted = false;
+		_initPromise = null;
 	}
       },
 

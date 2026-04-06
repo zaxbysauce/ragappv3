@@ -19,6 +19,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { useChatShellStore } from "@/stores/useChatShellStore";
+import { useChatStore } from "@/stores/useChatStore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -770,6 +771,7 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
 
   // Handle new chat
   const handleNewChat = useCallback(() => {
+    useChatStore.getState().newChat();
     setActiveSessionId(null);
     navigate("/chat");
   }, [navigate, setActiveSessionId]);
