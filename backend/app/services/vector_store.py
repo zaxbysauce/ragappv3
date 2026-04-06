@@ -393,7 +393,10 @@ class VectorStore:
             combined_filter = scale_filter
 
         # Dense vector search with scale filter
-        query = await self.table.search(embedding)
+        # NOTE: Using query_type="vector" to bypass LanceDB's buggy auto-detection
+        # which can cause UnboundLocalError when embedding_conf is None
+        embedding_np = np.array(embedding, dtype=np.float32)
+        query = await self.table.search(embedding_np, query_type="vector")
         if combined_filter:
             query = query.where(combined_filter)
         dense_results = await query.limit(fetch_k).to_list()
