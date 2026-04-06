@@ -5,7 +5,7 @@ Application configuration using Pydantic Settings.
 import logging
 import warnings
 from pathlib import Path
-from pydantic import SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -94,6 +94,10 @@ class Settings(BaseSettings):
     """Enable LLM-based contextual chunking (prepends document context to each chunk)."""
     contextual_chunking_concurrency: int = 5
     """Maximum concurrent LLM calls for contextual chunking."""
+    contextual_chunking_batch_size: int = Field(
+        default=10,
+        description="Number of chunks to contextualize per LLM call when batch mode is enabled",
+    )
 
     # ── Multi-scale chunk indexing configuration ──────────────────────────────
     multi_scale_indexing_enabled: bool = True
