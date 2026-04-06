@@ -6,6 +6,7 @@ quality by providing document-level context to each chunk.
 """
 
 import asyncio
+import json
 import logging
 from typing import List
 
@@ -63,7 +64,7 @@ class ContextualChunker:
     _TRUNCATE_CHARS = 50_000
     # Default concurrency limit
     _DEFAULT_CONCURRENCY = 5
-    # Maximum tokens for context generation
+    # Maximum tokens for context generation (per-chunk single calls)
     _MAX_TOKENS = 150
 
     def __init__(self, llm_client: LLMClient):
@@ -156,15 +157,142 @@ class ContextualChunker:
             },
         ]
 
+    def _build_batch_prompt(
+        self,
+        document_text: str,
+        chunks: list,  # list of chunk objects with .text attribute
+        source_filename: str,
+        chunk_indices: list,  # global indices for reference
+    ) -> list:
+        """Build a single prompt asking the LLM to contextualize N chunks at once."""
+        chunks_section = ""
+        for local_idx, (chunk, global_idx) in enumerate(zip(chunks, chunk_indices)):
+            chunks_section += f'\n  {{"index": {local_idx}, "text": {json.dumps(chunk.text)}}}'
+
+        return [
+            {
+                "role": "system",
+                "content": (
+                    "You are a document context expert. Given a document and a list of text chunks, "
+                    "write a brief 1-2 sentence context for each chunk explaining what it covers "
+                    "and how it fits in the document. "
+                    "Respond ONLY with a JSON array, one object per chunk, in order: "
+                    '[{"index": 0, "context": "..."}, {"index": 1, "context": "..."}, ...]. '
+                    "No other text outside the JSON array."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Source file: {source_filename}\n\n"
+                    f"Full document (for context):\n{document_text}\n\n"
+                    f"Chunks to contextualize (JSON array):\n[{chunks_section}\n]\n\n"
+                    "Respond with a JSON array of context objects in the same order."
+                ),
+            },
+        ]
+
+    def _parse_batch_response(self, response_text: str, expected_count: int) -> list:
+        """
+        Parse JSON batch response from LLM. Returns list of context strings in order.
+        Raises ValueError if parsing fails or count mismatches.
+        """
+        # Strip markdown code fences if present
+        text = response_text.strip()
+        if text.startswith("```"):
+            lines = text.split("\n")
+            text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+
+        parsed = json.loads(text)  # raises json.JSONDecodeError on failure
+
+        if not isinstance(parsed, list):
+            raise ValueError(f"Expected JSON array, got {type(parsed)}")
+        if len(parsed) != expected_count:
+            raise ValueError(
+                f"Expected {expected_count} context items, got {len(parsed)}"
+            )
+
+        # Sort by index to ensure order (LLM may reorder)
+        parsed.sort(key=lambda x: x.get("index", 0))
+
+        contexts = []
+        for item in parsed:
+            context = item.get("context", "").strip()
+            if not context:
+                raise ValueError(f"Empty context for chunk index {item.get('index')}")
+            contexts.append(context)
+
+        return contexts
+
+    async def _contextualize_batch(
+        self,
+        document_text: str,
+        chunks: list,
+        source_filename: str,
+        chunk_indices: list,
+        batch_num: int,
+    ) -> list:
+        """
+        Contextualize a batch of chunks in a single LLM call.
+        Returns list of context strings (None for failed chunks).
+        Falls back to per-chunk processing if batch fails.
+        """
+        batch_size = len(chunks)
+        # Scale max_tokens with batch size: 200 tokens per chunk + 500 overhead
+        batch_max_tokens = batch_size * 200 + 500
+
+        messages = self._build_batch_prompt(document_text, chunks, source_filename, chunk_indices)
+
+        for attempt in range(3):
+            try:
+                response = await self._llm_client.chat_completion(
+                    messages=messages,
+                    max_tokens=batch_max_tokens,
+                )
+                contexts = self._parse_batch_response(response, batch_size)
+                logger.debug(
+                    "Batch %d: contextualized %d chunks in one LLM call",
+                    batch_num,
+                    batch_size,
+                )
+                return contexts
+            except (ValueError, json.JSONDecodeError) as parse_err:
+                logger.warning(
+                    "Batch %d attempt %d: parse failed (%s), %s",
+                    batch_num,
+                    attempt + 1,
+                    parse_err,
+                    "retrying" if attempt < 2 else "falling back to per-chunk",
+                )
+                if attempt < 2:
+                    await asyncio.sleep(0.5 * (2 ** attempt))
+                    continue
+                # After 3 parse failures, return None for all — caller falls back per-chunk
+                return [None] * batch_size
+            except Exception as exc:
+                logger.warning(
+                    "Batch %d attempt %d: LLM error (%s), %s",
+                    batch_num,
+                    attempt + 1,
+                    exc,
+                    "retrying" if attempt < 2 else "falling back to per-chunk",
+                )
+                if attempt < 2:
+                    await asyncio.sleep(0.5 * (2 ** attempt))
+                    continue
+                return [None] * batch_size
+
+        return [None] * batch_size
+
     async def contextualize_chunks(
         self, document_text: str, chunks: List[ProcessedChunk], source_filename: str
     ) -> List[ProcessedChunk]:
         """
         Add LLM-generated context to each chunk in the document.
 
-        For each chunk, generates a short (1-2 sentence) context prefix using
-        the LLM and prepends it to the chunk text. Uses a semaphore to limit
-        concurrent LLM calls.
+        Uses batched LLM calls (configurable batch size) to reduce the number of
+        LLM requests. Each batch sends multiple chunks in a single call and parses
+        JSON responses. Falls back to per-chunk processing if a batch fails.
 
         Args:
             document_text: The full document text.
@@ -173,7 +301,7 @@ class ContextualChunker:
 
         Returns:
             The same chunks list with context added to each chunk's text,
-            with metadata['contextualized'] set to True.
+            with metadata['contextualized'] set to True on success or False on failure.
         """
         if not chunks:
             logger.debug("No chunks to contextualize")
@@ -186,16 +314,61 @@ class ContextualChunker:
         safe_filename = _sanitize_filename(source_filename)
         logger.info(f"Contextualizing {total_chunks} chunks for file: {safe_filename}")
 
-        # Process all chunks concurrently with semaphore limiting
+        batch_size = getattr(settings, "contextual_chunking_batch_size", 10)
+
+        # Split chunks into batches
+        batches = []
+        for batch_start in range(0, total_chunks, batch_size):
+            batch_chunks = chunks[batch_start : batch_start + batch_size]
+            batch_indices = list(range(batch_start, batch_start + len(batch_chunks)))
+            batches.append((batch_chunks, batch_indices))
+
+        logger.info(
+            f"Processing {total_chunks} chunks in {len(batches)} batches (batch_size={batch_size})"
+        )
+
+        async def process_batch(batch_num: int, batch_chunks: list, batch_indices: list) -> None:
+            async with self._semaphore:
+                contexts = await self._contextualize_batch(
+                    document_text=truncated_doc,
+                    chunks=batch_chunks,
+                    source_filename=safe_filename,
+                    chunk_indices=batch_indices,
+                    batch_num=batch_num,
+                )
+
+            # Apply results; fall back per-chunk for any None entries
+            for chunk, global_idx, context in zip(batch_chunks, batch_indices, contexts):
+                if context is not None:
+                    context = context.strip()
+                    if context:
+                        chunk.raw_text = chunk.text
+                        chunk.text = f"{context}\n\n{chunk.text}"
+                        logger.debug(
+                            "Added batch context to chunk %d: %s...",
+                            global_idx,
+                            context[:50],
+                        )
+                        chunk.metadata["contextualized"] = True
+                    else:
+                        logger.warning("Empty context string for chunk %d after batch", global_idx)
+                        chunk.metadata["contextualized"] = True
+                else:
+                    # Batch failed for this chunk — fall back to individual call
+                    logger.debug(
+                        "Batch returned None for chunk %d, falling back to per-chunk", global_idx
+                    )
+                    await self._contextualize_single_chunk(
+                        chunk=chunk,
+                        document_text=truncated_doc,
+                        chunk_index=global_idx,
+                        total_chunks=total_chunks,
+                        source_filename=safe_filename,
+                    )
+
         tasks = [
-            self._contextualize_single_chunk(
-                chunk=chunk,
-                document_text=truncated_doc,
-                chunk_index=idx,
-                total_chunks=total_chunks,
-                source_filename=safe_filename,
-            )
-            for idx, chunk in enumerate(chunks)
+            process_batch(batch_num, batch_chunks, batch_indices)
+            for batch_num, (batch_chunks, batch_indices) in enumerate(batches)
         ]
 
         await asyncio.gather(*tasks)
