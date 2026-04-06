@@ -479,14 +479,22 @@ class RAGEngine:
             # Stage 2: Reranking (if enabled)
             if self.reranking_enabled and self.reranking_service and vector_results:
                 try:
-                    vector_results = await self.reranking_service.rerank(
-                        query=user_input,
-                        chunks=vector_results,
-                        top_n=self.reranker_top_n,
+                    vector_results = await asyncio.wait_for(
+                        self.reranking_service.rerank(
+                            query=user_input,
+                            chunks=vector_results,
+                            top_n=self.reranker_top_n,
+                        ),
+                        timeout=settings.reranking_timeout_seconds,
                     )
                     logger.info(
                         "[_execute_retrieval] After reranking: result_count=%d",
                         len(vector_results),
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "Reranking timed out after %.1fs, using original results",
+                        settings.reranking_timeout_seconds,
                     )
                 except Exception as e:
                     logger.warning("Reranking failed, using original results: %s", e)
@@ -693,18 +701,27 @@ class RAGEngine:
         """
         Pack context chunks by token budget, respecting max token limit.
 
+        Token estimation accounts for both chunk body text and the per-chunk
+        metadata header added by format_chunk() (filename, section, score, id).
+        The metadata overhead constant (~25 tokens) prevents the assembled
+        prompt from consistently exceeding the configured budget.
+
         Args:
             chunks: List of RAGSource chunks to pack
-            max_tokens: Maximum tokens allowed (default 6000)
+            max_tokens: Maximum tokens allowed
 
         Returns:
             List of RAGSource chunks that fit within the token budget
         """
+        chars_per_token: float = settings.token_chars_per_token
+        # Per-chunk overhead for format_chunk() metadata header (label, filename,
+        # section, score, id fields) estimated at ~25 tokens.
+        _METADATA_OVERHEAD_TOKENS = 25
+
         packed, token_count = [], 0
         for chunk in chunks:
-            # ~3.5 chars/token for English; errs on the side of overestimation
-            # to prevent context overflow (safer than the previous len//4 undercount)
-            chunk_tokens = max(1, int(len(chunk.text) / 3.5))
+            body_tokens = max(1, int(len(chunk.text) / chars_per_token))
+            chunk_tokens = body_tokens + _METADATA_OVERHEAD_TOKENS
             if token_count + chunk_tokens > max_tokens and packed:
                 break
             packed.append(chunk)

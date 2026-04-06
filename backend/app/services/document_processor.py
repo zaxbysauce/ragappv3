@@ -566,6 +566,7 @@ class DocumentProcessor:
             self.pool.release_connection(conn)
 
         # Phase 2: Long operations (NO connection held!)
+        source_filename = Path(file_path).name
         try:
             # Process the file based on type
             if self._is_schema_file(file_path):
@@ -577,10 +578,10 @@ class DocumentProcessor:
                 )
 
             # Apply contextual chunking if enabled
+            contextualization_failed = 0
             if settings.contextual_chunking_enabled and chunks and document_text:
                 chunker = self._get_contextual_chunker()
                 if chunker is not None:
-                    source_filename = Path(file_path).name
                     logger.info(
                         "Contextual chunking: processing %d chunks for %s",
                         len(chunks),
@@ -592,16 +593,38 @@ class DocumentProcessor:
                             chunks=chunks,
                             source_filename=source_filename,
                         )
-                        logger.info(
-                            "Contextual chunking: completed for %s (%d chunks contextualized)",
-                            source_filename,
-                            len(chunks),
-                        )
                     except Exception as e:
                         logger.warning(
                             "Contextual chunking failed for %s: %s",
                             source_filename,
                             str(e),
+                        )
+                    # Count how many chunks were not successfully contextualized
+                    contextualization_failed = sum(
+                        1
+                        for c in chunks
+                        if not c.metadata.get("contextualized", False)
+                    )
+                    if contextualization_failed == 0:
+                        logger.info(
+                            "Contextual chunking: completed for %s (%d chunks contextualized)",
+                            source_filename,
+                            len(chunks),
+                        )
+                    elif contextualization_failed == len(chunks):
+                        logger.warning(
+                            "Contextual chunking: ALL %d chunks failed for %s — "
+                            "document will be indexed without contextual enrichment",
+                            contextualization_failed,
+                            source_filename,
+                        )
+                    else:
+                        logger.warning(
+                            "Contextual chunking: %d/%d chunks failed for %s — "
+                            "partial contextual enrichment",
+                            contextualization_failed,
+                            len(chunks),
+                            source_filename,
                         )
                 # else: _get_contextual_chunker already logged a warning if needed
 
@@ -612,6 +635,7 @@ class DocumentProcessor:
                 )
 
             # Chunk enrichment: generate auxiliary metadata (summary, questions, entities)
+            enrichment_failed = False
             enrichment_service = self._get_chunk_enrichment_service()
             if enrichment_service is not None:
                 try:
@@ -634,8 +658,10 @@ class DocumentProcessor:
                         len(enrichments),
                     )
                 except Exception as e:
+                    enrichment_failed = True
                     logger.warning(
-                        "Chunk enrichment failed for %s: %s",
+                        "Chunk enrichment failed for %s: %s — "
+                        "document will be indexed without enrichment metadata",
                         source_filename,
                         str(e),
                     )
@@ -695,6 +721,7 @@ class DocumentProcessor:
                                 f"Embedding {i} has dimension {len(emb)}, expected {expected_dim}"
                             )
                     # Map chunks to records for vector store
+                    sparse_serialization_failures = 0
                     records = []
                     for chunk, embedding, sparse_emb in zip(
                         chunks, embeddings, sparse_embeddings
@@ -733,17 +760,29 @@ class DocumentProcessor:
                             try:
                                 record["sparse_embedding"] = json.dumps(sparse_emb)
                             except (TypeError, ValueError) as e:
+                                sparse_serialization_failures += 1
                                 logger.warning(
-                                    f"Failed to serialize sparse embedding: {e}"
+                                    "Failed to serialize sparse embedding for chunk %s: %s "
+                                    "— hybrid search for this chunk will be degraded",
+                                    chunk_uid,
+                                    e,
                                 )
                                 record["sparse_embedding"] = None
                         records.append(record)
 
-                    # Log tri-vector usage
+                    # Log tri-vector usage and any serialization failures
                     if use_tri_vector:
-                        logger.info(
-                            f"Tri-vector embedding: stored {len(records)} chunks with sparse vectors"
-                        )
+                        if sparse_serialization_failures > 0:
+                            logger.warning(
+                                "Tri-vector embedding: %d/%d chunks lost sparse vectors "
+                                "due to serialization errors — hybrid search degraded for these chunks",
+                                sparse_serialization_failures,
+                                len(records),
+                            )
+                        else:
+                            logger.info(
+                                f"Tri-vector embedding: stored {len(records)} chunks with sparse vectors"
+                            )
 
                     # Initialize vector table with embedding dimension and add chunks
                     embedding_dim = len(embeddings[0])
@@ -769,5 +808,16 @@ class DocumentProcessor:
             conn.commit()
         finally:
             self.pool.release_connection(conn)
+
+        # Surface any enrichment degradation in the log at a visible level
+        if contextualization_failed > 0 or enrichment_failed:
+            logger.warning(
+                "Document indexed with degraded quality: file_id=%d, "
+                "contextualization_failed=%d/%d, enrichment_failed=%s",
+                file_id,
+                contextualization_failed,
+                len(chunks),
+                enrichment_failed,
+            )
 
         return ProcessedDocument(file_id=file_id, chunks=chunks)

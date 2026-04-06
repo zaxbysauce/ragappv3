@@ -94,7 +94,7 @@ class PromptBuilderService:
             {"role": "system", "content": self.system_prompt},
         ]
         # Truncate history to last N messages to prevent context overflow
-        max_history = 20
+        max_history = settings.chat_history_max_messages
         for entry in chat_history[-max_history:]:
             messages.append(entry)
 

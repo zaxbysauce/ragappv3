@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import httpx
 import logging
+import time
 from collections import OrderedDict
 from typing import List, Optional
 from urllib.parse import urljoin, urlparse
@@ -16,30 +17,54 @@ logger = logging.getLogger(__name__)
 
 
 class LRUCache:
-    """Simple LRU cache with size limit and hit/miss statistics."""
+    """Simple LRU cache with size limit, optional TTL, and hit/miss statistics.
 
-    def __init__(self, maxsize: int = 1000):
+    When ttl_seconds > 0 each cached entry expires after that many seconds.
+    Stale entries are evicted lazily on access rather than via a background
+    sweeper, keeping the implementation simple and allocation-free.
+    """
+
+    def __init__(self, maxsize: int = 1000, ttl_seconds: int = 0):
         self.maxsize = maxsize
-        self._cache: OrderedDict[str, List[float]] = OrderedDict()
+        self.ttl_seconds = ttl_seconds
+        # Values are (embedding, inserted_at) tuples when TTL is enabled,
+        # or plain List[float] when TTL is disabled (zero-overhead path).
+        self._cache: OrderedDict = OrderedDict()
         self._hits = 0
         self._misses = 0
 
     def get(self, key: str) -> Optional[List[float]]:
-        """Get value from cache, moving to end if found (LRU)."""
-        if key in self._cache:
-            self._cache.move_to_end(key)
-            self._hits += 1
-            return self._cache[key]
-        self._misses += 1
-        return None
+        """Get value from cache, moving to end if found (LRU).
+
+        Returns None if the entry is absent or has expired.
+        """
+        if key not in self._cache:
+            self._misses += 1
+            return None
+
+        entry = self._cache[key]
+        if self.ttl_seconds > 0:
+            value, inserted_at = entry
+            if time.monotonic() - inserted_at > self.ttl_seconds:
+                # Expired — evict and treat as a miss
+                del self._cache[key]
+                self._misses += 1
+                return None
+        else:
+            value = entry
+
+        self._cache.move_to_end(key)
+        self._hits += 1
+        return value
 
     def set(self, key: str, value: List[float]) -> None:
         """Set value in cache, evicting oldest if at capacity."""
         if self.maxsize <= 0:
             return
+        entry = (value, time.monotonic()) if self.ttl_seconds > 0 else value
         if key in self._cache:
             self._cache.move_to_end(key)
-        self._cache[key] = value
+        self._cache[key] = entry
         if len(self._cache) > self.maxsize:
             self._cache.popitem(last=False)
 
@@ -146,7 +171,10 @@ class EmbeddingService:
 
         # LRU cache for embed_single requests (disabled for local models if embedding_url is not set)
         # Cache is enabled when using external embedding services
-        self._embed_cache = LRUCache(maxsize=1000)
+        self._embed_cache = LRUCache(
+            maxsize=1000,
+            ttl_seconds=settings.embedding_cache_ttl_seconds,
+        )
 
     async def detect_tri_vector_support(self) -> bool:
         """
@@ -447,13 +475,30 @@ class EmbeddingService:
             else:
                 texts_to_embed.append(text)
 
-        # Process in batches using true API batching
-        all_embeddings: List[List[float]] = []
-        for i in range(0, len(texts_to_embed), batch_size):
-            batch = texts_to_embed[i : i + batch_size]
-            embeddings = await self._embed_batch_api(batch)
-            all_embeddings.extend(embeddings)
+        # Build batch slices
+        batches = [
+            texts_to_embed[i : i + batch_size]
+            for i in range(0, len(texts_to_embed), batch_size)
+        ]
 
+        if len(batches) <= 1:
+            # Single batch — no concurrency benefit, avoid overhead
+            return await self._embed_batch_api(batches[0]) if batches else []
+
+        # Multiple batches — issue concurrently with a semaphore to avoid
+        # overwhelming the embedding server (max 4 concurrent requests).
+        _EMBED_BATCH_CONCURRENCY = 4
+        semaphore = asyncio.Semaphore(_EMBED_BATCH_CONCURRENCY)
+
+        async def _embed_with_sem(batch: List[str]) -> List[List[float]]:
+            async with semaphore:
+                return await self._embed_batch_api(batch)
+
+        results = await asyncio.gather(*[_embed_with_sem(b) for b in batches])
+
+        all_embeddings: List[List[float]] = []
+        for batch_result in results:
+            all_embeddings.extend(batch_result)
         return all_embeddings
 
     async def embed_multi(self, texts: List[str]) -> List[dict]:

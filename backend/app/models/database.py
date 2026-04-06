@@ -733,7 +733,8 @@ class SQLiteConnectionPool:
         """
         try:
             conn.execute("SELECT 1")
-            conn.execute("PRAGMA foreign_keys = ON")
+            # PRAGMA foreign_keys is connection-scoped and already set at
+            # creation time; re-executing it on every checkout is redundant.
             return True
         except (sqlite3.DatabaseError, sqlite3.OperationalError):
             # Rollback any failed transaction state

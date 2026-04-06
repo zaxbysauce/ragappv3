@@ -80,6 +80,8 @@ class Settings(BaseSettings):
     """Number of chunks to keep after reranking."""
     initial_retrieval_top_k: int = 25
     """Chunks fetched from vector store BEFORE reranking."""
+    reranking_timeout_seconds: float = 30.0
+    """Maximum seconds to wait for reranking to complete before falling back to original order."""
 
     # ── Hybrid search configuration ─────────────────────────────────────────
     hybrid_search_enabled: bool = True
@@ -181,6 +183,12 @@ class Settings(BaseSettings):
     csrf_token_ttl: int = 900
     admin_rate_limit: str = "10/minute"
     health_check_api_key: str = "health-api-key"
+    embedding_cache_ttl_seconds: int = 3600
+    """TTL in seconds for cached embeddings. 0 disables TTL. Prevents stale embeddings after model changes."""
+    token_chars_per_token: float = 3.5
+    """Characters-per-token ratio for token budget estimation. Adjust for non-English or code-heavy content."""
+    chat_history_max_messages: int = 20
+    """Maximum number of chat history messages to include in each LLM prompt."""
 
     # Auto-scan configuration
     auto_scan_enabled: bool = True
@@ -422,6 +430,17 @@ class Settings(BaseSettings):
             raise ValueError(
                 "JWT_SECRET_KEY must be changed from the default when USERS_ENABLED=True. "
                 'Generate one with: python -c "import secrets; print(secrets.token_urlsafe(48))"'
+            )
+        if self.users_enabled and self.health_check_api_key == "health-api-key":
+            raise ValueError(
+                "HEALTH_CHECK_API_KEY must be changed from the default when USERS_ENABLED=True. "
+                'Generate one with: python -c "import secrets; print(secrets.token_hex(32))"'
+            )
+        if "*" in self.backend_cors_origins and self.users_enabled:
+            raise ValueError(
+                "BACKEND_CORS_ORIGINS must not contain '*' when USERS_ENABLED=True. "
+                "A wildcard origin with credentials enabled is a security misconfiguration. "
+                "Set BACKEND_CORS_ORIGINS to specific allowed origins."
             )
         return self
 

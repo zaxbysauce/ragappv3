@@ -5,6 +5,7 @@ LanceDB vector store service for semantic search.
 import asyncio
 import json
 import time
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, cast
 import lancedb
@@ -888,8 +889,12 @@ class VectorStore:
         """
         try:
             row_count = await table.count_rows()
-        except Exception:
-            row_count = -1  # Unknown — proceed cautiously
+        except Exception as _count_exc:
+            raise VectorStoreError(
+                f"{operation_name}: could not determine table size before migration "
+                f"({_count_exc}). Aborting to prevent potential OOM on an unknown-size "
+                f"table. Resolve the count error and retry."
+            ) from _count_exc
 
         if row_count > 500_000:
             raise VectorStoreError(
@@ -911,6 +916,77 @@ class VectorStore:
             )
 
         return await table.to_pandas()
+
+    async def _migration_drop_and_recreate(
+        self,
+        df,
+        migration_name: str,
+    ) -> None:
+        """Drop the chunks table and recreate it from a modified DataFrame.
+
+        Writes a parquet backup before dropping so data can be recovered if
+        recreation fails.  On success the backup is removed.  On failure the
+        backup path is logged at CRITICAL so operators can restore manually.
+
+        Args:
+            df: The modified pandas DataFrame to write to the new table.
+            migration_name: Human-readable label used in log messages.
+
+        Raises:
+            Any exception raised by create_table is re-raised after logging
+            the backup path for operator recovery.
+        """
+        # Write backup parquet before the destructive drop
+        backup_fd, backup_path = tempfile.mkstemp(
+            suffix=".parquet", prefix=f"lancedb_{migration_name}_backup_"
+        )
+        import os
+        os.close(backup_fd)
+        try:
+            await asyncio.to_thread(df.to_parquet, backup_path, index=False)
+            logger.info(
+                "%s: backup written to %s (%d rows)",
+                migration_name,
+                backup_path,
+                len(df),
+            )
+        except Exception as backup_err:
+            # If backup fails, abort the migration entirely — data is still intact.
+            Path(backup_path).unlink(missing_ok=True)
+            raise VectorStoreError(
+                f"{migration_name}: could not write pre-migration backup ({backup_err}). "
+                f"Aborting migration to protect existing data."
+            ) from backup_err
+
+        # Destructive step — point of no return
+        await self.db.drop_table("chunks")
+        try:
+            self.table = await self.db.create_table("chunks", data=df)
+        except Exception as create_err:
+            logger.critical(
+                "%s: drop succeeded but create_table failed: %s. "
+                "Data backup is at: %s — restore with: "
+                "import pandas as pd; import lancedb; "
+                "db = lancedb.connect('<path>'); "
+                "db.create_table('chunks', data=pd.read_parquet('%s'))",
+                migration_name,
+                create_err,
+                backup_path,
+                backup_path,
+            )
+            raise
+
+        # Recreation succeeded — remove backup
+        try:
+            Path(backup_path).unlink(missing_ok=True)
+            logger.info("%s: backup removed after successful migration", migration_name)
+        except OSError as unlink_err:
+            logger.warning(
+                "%s: could not remove backup file %s: %s",
+                migration_name,
+                backup_path,
+                unlink_err,
+            )
 
     async def migrate_add_vault_id(self) -> int:
         """
@@ -963,15 +1039,8 @@ class VectorStore:
                 df["vault_id"] = df["vault_id"].fillna("1")
                 count = int(null_count)
 
-                # Drop and recreate table with updated data
-                await self.db.drop_table("chunks")
-                try:
-                    self.table = await self.db.create_table("chunks", data=df)
-                except (OSError, RuntimeError, ValueError) as create_err:
-                    logger.critical(
-                        f"LanceDB vault_id migration: table dropped but recreate failed: {create_err}. Data may need manual recovery from backup."
-                    )
-                    raise
+                # Drop and recreate table with backup protection
+                await self._migration_drop_and_recreate(df, "vault_id migration (backfill)")
                 logger.info(f"LanceDB vault_id migration: backfilled {count} records")
                 return count
             except (OSError, RuntimeError, ValueError) as e:
@@ -993,7 +1062,6 @@ class VectorStore:
                             if hasattr(embedding_field.type, "list_size"):
                                 self._embedding_dim = embedding_field.type.list_size
                         except (AttributeError, KeyError, IndexError, TypeError):
-                            # If we can't determine embedding_dim, leave it as None
                             pass
 
                     await self.db.drop_table("chunks")
@@ -1014,15 +1082,8 @@ class VectorStore:
                 df["vault_id"] = "1"
                 migrated_count = len(df)
 
-                # Drop and recreate table with updated data
-                await self.db.drop_table("chunks")
-                try:
-                    self.table = await self.db.create_table("chunks", data=df)
-                except (OSError, RuntimeError, ValueError) as create_err:
-                    logger.critical(
-                        f"LanceDB vault_id migration: table dropped but recreate failed: {create_err}. Data may need manual recovery from backup."
-                    )
-                    raise
+                # Drop and recreate table with backup protection
+                await self._migration_drop_and_recreate(df, "vault_id migration (add column)")
                 logger.info(
                     f"LanceDB vault_id migration: backfilled {migrated_count} records"
                 )
@@ -1082,15 +1143,8 @@ class VectorStore:
                 df["chunk_scale"] = df["chunk_scale"].fillna("default")
                 count = int(null_count)
 
-                # Drop and recreate table with updated data
-                await self.db.drop_table("chunks")
-                try:
-                    self.table = await self.db.create_table("chunks", data=df)
-                except (OSError, RuntimeError, ValueError) as create_err:
-                    logger.critical(
-                        f"LanceDB chunk_scale migration: table dropped but recreate failed: {create_err}. Data may need manual recovery from backup."
-                    )
-                    raise
+                # Drop and recreate table with backup protection
+                await self._migration_drop_and_recreate(df, "chunk_scale migration (backfill)")
                 logger.info(
                     f"LanceDB chunk_scale migration: backfilled {count} records"
                 )
@@ -1106,7 +1160,6 @@ class VectorStore:
                 )
                 if len(df) == 0:
                     # Empty table — just drop and recreate with new schema
-                    # Try to get embedding_dim from existing schema before dropping
                     if self._embedding_dim is None:
                         try:
                             schema = await table.schema()
@@ -1114,7 +1167,6 @@ class VectorStore:
                             if hasattr(embedding_field.type, "list_size"):
                                 self._embedding_dim = embedding_field.type.list_size
                         except (AttributeError, KeyError, IndexError, TypeError):
-                            # If we can't determine embedding_dim, leave it as None
                             pass
 
                     await self.db.drop_table("chunks")
@@ -1135,15 +1187,8 @@ class VectorStore:
                 df["chunk_scale"] = "default"
                 migrated_count = len(df)
 
-                # Drop and recreate table with updated data
-                await self.db.drop_table("chunks")
-                try:
-                    self.table = await self.db.create_table("chunks", data=df)
-                except (OSError, RuntimeError, ValueError) as create_err:
-                    logger.critical(
-                        f"LanceDB chunk_scale migration: table dropped but recreate failed: {create_err}. Data may need manual recovery from backup."
-                    )
-                    raise
+                # Drop and recreate table with backup protection
+                await self._migration_drop_and_recreate(df, "chunk_scale migration (add column)")
                 logger.info(
                     f"LanceDB chunk_scale migration: backfilled {migrated_count} records"
                 )
@@ -1233,10 +1278,9 @@ class VectorStore:
             df["sparse_embedding"] = None
             migrated_count = len(df)
 
-            # Drop and recreate table with updated data
-            await self.db.drop_table("chunks")
+            # Drop and recreate table with backup protection, then recreate indexes
+            await self._migration_drop_and_recreate(df, "sparse_embedding migration")
             try:
-                self.table = await self.db.create_table("chunks", data=df)
                 # Recreate vector index
                 await self.table.create_index(
                     column="embedding",
@@ -1259,11 +1303,12 @@ class VectorStore:
                     replace=True,
                 )
                 logger.info("Full-text search index recreated on 'text' column")
-            except (OSError, RuntimeError, ValueError) as create_err:
-                logger.critical(
-                    f"LanceDB sparse_embedding migration: table dropped but recreate failed: {create_err}"
+            except (OSError, RuntimeError, ValueError) as idx_err:
+                logger.warning(
+                    "LanceDB sparse_embedding migration: indexes could not be recreated "
+                    "after table recreate: %s — data is intact but search performance may be degraded",
+                    idx_err,
                 )
-                raise
             logger.info(
                 f"LanceDB sparse_embedding migration: added column to {migrated_count} records"
             )

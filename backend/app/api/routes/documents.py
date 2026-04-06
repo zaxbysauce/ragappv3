@@ -803,47 +803,64 @@ async def batch_delete_documents(
     chunks from the vector store. Returns count of successfully deleted
     documents and any failed IDs.
     """
-    deleted_count = 0
     failed_ids: List[str] = []
 
+    # Validate which file IDs exist before attempting deletion
+    valid: dict[str, str] = {}  # file_id -> file_name
     for file_id in file_ids:
         try:
-            # Check if file exists
             cursor = await asyncio.to_thread(
                 conn.execute, "SELECT id, file_name FROM files WHERE id = ?", (file_id,)
             )
             row = await asyncio.to_thread(cursor.fetchone)
-
             if row is None:
                 failed_ids.append(file_id)
-                continue
+            else:
+                valid[file_id] = row["file_name"]
+        except Exception:
+            logger.exception("Error checking existence of document %s", file_id)
+            failed_ids.append(file_id)
 
-            file_name = row["file_name"]
+    if not valid:
+        return BatchDeleteResponse(deleted_count=0, failed_ids=failed_ids)
 
-            # Delete from vector store first
-            try:
-                db = vector_store.db
-                if db is not None and "chunks" in await db.table_names():
-                    vector_store.table = await db.open_table("chunks")
-                    await vector_store.delete_by_file(str(file_id))
-            except Exception as e:
-                logger.warning(
-                    "Error deleting chunks from vector store for file_id %d: %s",
-                    file_id,
-                    e,
-                )
+    # Delete from vector store concurrently for all valid file IDs
+    vector_delete_errors: dict[str, Exception] = {}
+    try:
+        db = vector_store.db
+        if db is not None and "chunks" in await db.table_names():
+            vector_store.table = await db.open_table("chunks")
 
-            # Delete from database
+            async def _delete_from_vs(fid: str) -> None:
+                try:
+                    await vector_store.delete_by_file(fid)
+                except Exception as exc:
+                    vector_delete_errors[fid] = exc
+
+            await asyncio.gather(*[_delete_from_vs(fid) for fid in valid])
+    except Exception as e:
+        logger.warning("Error opening vector store for batch delete: %s", e)
+
+    for fid, exc in vector_delete_errors.items():
+        logger.warning(
+            "Error deleting chunks from vector store for file_id %s: %s", fid, exc
+        )
+
+    # Delete from database in a single transaction
+    deleted_count = 0
+    try:
+        for file_id, file_name in valid.items():
             await asyncio.to_thread(
                 conn.execute, "DELETE FROM files WHERE id = ?", (file_id,)
             )
-            await asyncio.to_thread(conn.commit)
             deleted_count += 1
-            logger.info("Deleted document '%s' (id: %d)", file_name, file_id)
-
-        except Exception as e:
-            logger.exception("Error deleting document %d", file_id)
-            failed_ids.append(file_id)
+            logger.info("Deleted document '%s' (id: %s)", file_name, file_id)
+        await asyncio.to_thread(conn.commit)
+    except Exception:
+        logger.exception("Error during batch DB delete; rolling back")
+        await asyncio.to_thread(conn.rollback)
+        failed_ids.extend(list(valid.keys()))
+        deleted_count = 0
 
     return BatchDeleteResponse(
         deleted_count=deleted_count,
@@ -871,35 +888,48 @@ async def delete_all_vault_documents(
     )
     rows = await asyncio.to_thread(cursor.fetchall)
 
-    file_ids = [row["id"] for row in rows]
+    file_ids = [str(row["id"]) for row in rows]
     deleted_count = 0
 
-    for file_id in file_ids:
-        try:
-            # Delete from vector store first
-            try:
-                db = vector_store.db
-                if db is not None and "chunks" in await db.table_names():
-                    vector_store.table = await db.open_table("chunks")
-                    await vector_store.delete_by_file(str(file_id))
-            except Exception as e:
-                logger.warning(
-                    "Error deleting chunks from vector store for file_id %d: %s",
-                    file_id,
-                    e,
-                )
+    if not file_ids:
+        return DeleteAllVaultResponse(deleted_count=0, vault_id=vault_id)
 
-            # Delete from database
+    # Delete from vector store concurrently
+    try:
+        db = vector_store.db
+        if db is not None and "chunks" in await db.table_names():
+            vector_store.table = await db.open_table("chunks")
+
+            async def _delete_vs(fid: str) -> None:
+                try:
+                    await vector_store.delete_by_file(fid)
+                except Exception as exc:
+                    logger.warning(
+                        "Error deleting chunks from vector store for file_id %s: %s",
+                        fid,
+                        exc,
+                    )
+
+            await asyncio.gather(*[_delete_vs(fid) for fid in file_ids])
+    except Exception as e:
+        logger.warning(
+            "Error opening vector store for vault %d delete: %s", vault_id, e
+        )
+
+    # Delete all file records in a single transaction
+    try:
+        for file_id in file_ids:
             await asyncio.to_thread(
                 conn.execute, "DELETE FROM files WHERE id = ?", (file_id,)
             )
-            await asyncio.to_thread(conn.commit)
-            deleted_count += 1
-
-        except Exception as e:
-            logger.exception(
-                "Error deleting document %d from vault %d", file_id, vault_id
-            )
+        await asyncio.to_thread(conn.commit)
+        deleted_count = len(file_ids)
+    except Exception:
+        logger.exception(
+            "Error during DB delete for vault %d; rolling back", vault_id
+        )
+        await asyncio.to_thread(conn.rollback)
+        deleted_count = 0
 
     logger.info("Deleted %d documents from vault %d", deleted_count, vault_id)
 

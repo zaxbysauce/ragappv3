@@ -15,12 +15,18 @@ from app.config import Settings, settings
 
 
 class UserRole(IntEnum):
-    """Canonical role hierarchy used for all authorization checks."""
+    """Canonical role hierarchy used for all authorization checks.
+
+    OWNER (5) is an organisation-level role stored in org_members.role.
+    It is included here so authorization code that reads org_members.role
+    via UserRole.level() returns a meaningful level instead of 0 (no access).
+    """
 
     VIEWER = 1
     MEMBER = 2
     ADMIN = 3
     SUPERADMIN = 4
+    OWNER = 5
 
     @classmethod
     def level(cls, role_name: str) -> int:

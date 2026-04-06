@@ -5,6 +5,28 @@ FastAPI application with lifespan context manager.
 import logging
 
 from fastapi import FastAPI, Request, HTTPException
+from app.utils.request_context import RequestIdFilter
+
+
+def _configure_logging() -> None:
+    """Attach RequestIdFilter to all handlers on the root logger.
+
+    This ensures every log record emitted during a request carries the
+    request_id set by LoggingMiddleware, enabling end-to-end correlation
+    across service-layer loggers.
+    """
+    request_id_filter = RequestIdFilter()
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers:
+        if not any(isinstance(f, RequestIdFilter) for f in handler.filters):
+            handler.addFilter(request_id_filter)
+    # Also attach to the root logger itself so records get the field
+    # even when handlers are added later (e.g., by uvicorn).
+    if not any(isinstance(f, RequestIdFilter) for f in root_logger.filters):
+        root_logger.addFilter(request_id_filter)
+
+
+_configure_logging()
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from slowapi.middleware import SlowAPIMiddleware
