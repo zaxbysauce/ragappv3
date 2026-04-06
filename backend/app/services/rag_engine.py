@@ -32,6 +32,187 @@ class RAGEngineError(Exception):
     """Raised when the RAG engine cannot complete a query."""
 
 
+class RetrievalOrchestrator:
+    """Handles vector search, fusion, reranking, and token-aware context packing."""
+
+    def __init__(self, embedding_service, vector_store, reranking_service, settings_ref):
+        self._embedding_service = embedding_service
+        self._vector_store = vector_store
+        self._reranking_service = reranking_service
+        self._settings_ref = settings_ref
+
+    def _pack_context_by_token_budget(
+        self, chunks: List["RAGSource"], max_tokens: int = 6000
+    ) -> List["RAGSource"]:
+        """
+        Pack context chunks by token budget, respecting max token limit.
+
+        Token estimation accounts for both chunk body text and the per-chunk
+        metadata header added by format_chunk() (filename, section, score, id).
+        The metadata overhead constant (~25 tokens) prevents the assembled
+        prompt from consistently exceeding the configured budget.
+
+        Args:
+            chunks: List of RAGSource chunks to pack
+            max_tokens: Maximum tokens allowed
+
+        Returns:
+            List of RAGSource chunks that fit within the token budget
+        """
+        chars_per_token: float = settings.token_chars_per_token
+        # Per-chunk overhead for format_chunk() metadata header (label, filename,
+        # section, score, id fields) estimated at ~25 tokens.
+        _METADATA_OVERHEAD_TOKENS = 25
+
+        packed, token_count = [], 0
+        for chunk in chunks:
+            body_tokens = max(1, int(len(chunk.text) / chars_per_token))
+            chunk_tokens = body_tokens + _METADATA_OVERHEAD_TOKENS
+            if token_count + chunk_tokens > max_tokens and packed:
+                break
+            packed.append(chunk)
+            token_count += chunk_tokens
+        return packed
+
+    async def _check_supersession(self, sources: List["RAGSource"]) -> Optional[str]:
+        """Query SQLite to check if any retrieved files have been superseded by newer versions.
+
+        Feature-flag gated by files table schema — only runs if supersedes_file_id column exists.
+        """
+        file_ids = list({src.file_id for src in sources if src.file_id})
+        if not file_ids:
+            return None
+        try:
+
+            def _query() -> list:
+                pool = _get_pool()
+                with pool.connection() as conn:
+                    # Check if supersedes_file_id column exists in files table
+                    cursor = conn.execute("PRAGMA table_info(files)")
+                    columns = {row[1] for row in cursor.fetchall()}
+                    if "supersedes_file_id" not in columns:
+                        logger.debug(
+                            "Supersession check skipped: supersedes_file_id column not in files table"
+                        )
+                        return []
+
+                    placeholders = ",".join("?" * len(file_ids))
+                    sql = (
+                        f"SELECT file_name FROM files "
+                        f"WHERE supersedes_file_id IN ({placeholders}) AND status='indexed'"
+                    )
+                    rows = conn.execute(sql, file_ids).fetchall()
+                    return rows
+
+            rows = await asyncio.to_thread(_query)
+            if rows:
+                newer_names = [r[0] for r in rows]
+                logger.warning(
+                    "Supersession warning: retrieved file_ids %s have been superseded by %s",
+                    file_ids,
+                    newer_names,
+                )
+                return (
+                    "\u26a0\ufe0f Note: One or more retrieved documents may have been superseded by a "
+                    "newer version in the knowledge base. Verify currency of information where critical."
+                )
+        except Exception as exc:
+            logger.warning("Supersession check failed (suppressed): %s", exc)
+        return None
+
+
+class LLMResponseGenerator:
+    """Handles LLM calls and response formatting."""
+
+    def __init__(self, llm_client, document_retrieval_service, settings_ref: Dict[str, Any]):
+        self._llm_client = llm_client
+        self._doc_retrieval = document_retrieval_service
+        self._settings_ref = settings_ref
+
+    async def _stream_llm_response(
+        self,
+        messages: List[Dict[str, str]],
+    ) -> "AsyncIterator[Dict[str, Any]]":
+        """Stream LLM response chunks.
+
+        Args:
+            messages: List of message dictionaries
+
+        Yields:
+            Response chunks as dictionaries
+        """
+        try:
+            async for chunk in self._llm_client.chat_completion_stream(messages):
+                yield {"type": "content", "content": chunk}
+        except LLMError as exc:
+            logger.error("[_stream_llm_response] LLMError: %s", exc)
+            yield {"type": "error", "message": str(exc), "code": "LLM_ERROR"}
+
+    async def _get_llm_response(
+        self,
+        messages: List[Dict[str, str]],
+    ) -> "AsyncIterator[Dict[str, Any]]":
+        """Get non-streaming LLM response.
+
+        Args:
+            messages: List of message dictionaries
+
+        Yields:
+            Response content dictionary
+
+        Raises:
+            RAGEngineError: If LLM call fails
+        """
+        try:
+            content = await self._llm_client.chat_completion(messages)
+            yield {"type": "content", "content": content}
+        except LLMError as exc:
+            raise RAGEngineError(f"LLM chat failed: {exc}") from exc
+
+    def _build_done_message(
+        self,
+        relevant_chunks: List["RAGSource"],
+        memories: List[Any],
+    ) -> Dict[str, Any]:
+        """Build the final done message with sources.
+
+        Args:
+            relevant_chunks: Filtered relevant chunks
+            memories: Retrieved memories
+
+        Returns:
+            Done message dictionary
+        """
+        retrieval_debug: Dict[str, Any] = {
+            "max_distance_threshold": self._settings_ref["max_distance_threshold"],
+            "vector_metric": self._settings_ref["vector_metric"],
+            "retrieval_top_k": self._settings_ref["retrieval_top_k"],
+        }
+
+        score_type = "rerank" if self._settings_ref["reranking_enabled"] else "distance"
+
+        # Split into primary and supporting (same split as prompt builder)
+        primary_count = calculate_primary_count(len(relevant_chunks))
+
+        sources = []
+        for idx, chunk in enumerate(relevant_chunks):
+            source_meta = self._doc_retrieval.to_source_metadata(
+                chunk, source_index=idx + 1
+            )
+            source_meta["evidence_type"] = (
+                "primary" if idx < primary_count else "supporting"
+            )
+            sources.append(source_meta)
+
+        return {
+            "type": "done",
+            "sources": sources,
+            "memories_used": [mem.content for mem in memories],
+            "retrieval_debug": retrieval_debug,
+            "score_type": score_type,
+        }
+
+
 class RAGEngine:
     """Coordinates embeddings, vector search, memory search, and LLM responses."""
 
@@ -125,6 +306,24 @@ class RAGEngine:
 
         # Retrieval evaluator instance (lazy-loaded)
         self._retrieval_evaluator: Optional[RetrievalEvaluator] = None
+
+        # Sub-class instances for separation-of-concerns decomposition (FIND-19)
+        self._retrieval = RetrievalOrchestrator(
+            embedding_service=self.embedding_service,
+            vector_store=self.vector_store,
+            reranking_service=self.reranking_service,
+            settings_ref=settings,
+        )
+        self._llm_gen = LLMResponseGenerator(
+            llm_client=self.llm_client,
+            document_retrieval_service=self.document_retrieval,
+            settings_ref={
+                "max_distance_threshold": self.max_distance_threshold,
+                "vector_metric": self.vector_metric,
+                "retrieval_top_k": self.retrieval_top_k,
+                "reranking_enabled": self.reranking_enabled,
+            },
+        )
 
     async def query(
         self,
@@ -298,7 +497,7 @@ class RAGEngine:
 
         # Supersession check: warn if retrieved files have newer versions
         if relevant_chunks:
-            supersession_warning = await self._check_supersession(relevant_chunks)
+            supersession_warning = await self._retrieval._check_supersession(relevant_chunks)
             if supersession_warning:
                 if relevance_hint:
                     relevance_hint = supersession_warning + "\n" + relevance_hint
@@ -335,18 +534,18 @@ class RAGEngine:
 
         # Stream or non-stream LLM response
         if stream:
-            async for chunk in self._stream_llm_response(messages):
+            async for chunk in self._llm_gen._stream_llm_response(messages):
                 chunk_type = chunk.get("type", "unknown")
                 logger.debug("[query] Yielding '%s' chunk (stream)", chunk_type)
                 yield chunk
         else:
-            async for chunk in self._get_llm_response(messages):
+            async for chunk in self._llm_gen._get_llm_response(messages):
                 chunk_type = chunk.get("type", "unknown")
                 logger.debug("[query] Yielding '%s' chunk (non-stream)", chunk_type)
                 yield chunk
 
         # Yield done message with sources
-        done_msg = self._build_done_message(relevant_chunks, memories)
+        done_msg = self._llm_gen._build_done_message(relevant_chunks, memories)
         logger.info(
             "[query] Yielding 'done': sources_count=%d, memories_used=%d",
             len(done_msg.get("sources", [])),
@@ -510,7 +709,7 @@ class RAGEngine:
                     )
                     for r in vector_results
                 ]
-                packed_sources = self._pack_context_by_token_budget(
+                packed_sources = self._retrieval._pack_context_by_token_budget(
                     temp_sources, settings.context_max_tokens
                 )
                 # Rebuild vector_results in packed_sources ORDER (preserves reranker ranking).
@@ -580,84 +779,25 @@ class RAGEngine:
         self,
         messages: List[Dict[str, str]],
     ) -> AsyncIterator[Dict[str, Any]]:
-        """Stream LLM response chunks.
-
-        Args:
-            messages: List of message dictionaries
-
-        Yields:
-            Response chunks as dictionaries
-        """
-        try:
-            async for chunk in self.llm_client.chat_completion_stream(messages):
-                yield {"type": "content", "content": chunk}
-        except LLMError as exc:
-            logger.error("[_stream_llm_response] LLMError: %s", exc)
-            yield {"type": "error", "message": str(exc), "code": "LLM_ERROR"}
+        """Stream LLM response chunks (backward-compat delegation wrapper)."""
+        async for chunk in self._llm_gen._stream_llm_response(messages):
+            yield chunk
 
     async def _get_llm_response(
         self,
         messages: List[Dict[str, str]],
     ) -> AsyncIterator[Dict[str, Any]]:
-        """Get non-streaming LLM response.
-
-        Args:
-            messages: List of message dictionaries
-
-        Yields:
-            Response content dictionary
-
-        Raises:
-            RAGEngineError: If LLM call fails
-        """
-        try:
-            content = await self.llm_client.chat_completion(messages)
-            yield {"type": "content", "content": content}
-        except LLMError as exc:
-            raise RAGEngineError(f"LLM chat failed: {exc}") from exc
+        """Get non-streaming LLM response (backward-compat delegation wrapper)."""
+        async for chunk in self._llm_gen._get_llm_response(messages):
+            yield chunk
 
     def _build_done_message(
         self,
         relevant_chunks: List[RAGSource],
         memories: List[Any],
     ) -> Dict[str, Any]:
-        """Build the final done message with sources.
-
-        Args:
-            relevant_chunks: Filtered relevant chunks
-            memories: Retrieved memories
-
-        Returns:
-            Done message dictionary
-        """
-        retrieval_debug: Dict[str, Any] = {
-            "max_distance_threshold": self.max_distance_threshold,
-            "vector_metric": self.vector_metric,
-            "retrieval_top_k": self.retrieval_top_k,
-        }
-
-        score_type = "rerank" if self.reranking_enabled else "distance"
-
-        # Split into primary and supporting (same split as prompt builder)
-        primary_count = calculate_primary_count(len(relevant_chunks))
-
-        sources = []
-        for idx, chunk in enumerate(relevant_chunks):
-            source_meta = self.document_retrieval.to_source_metadata(
-                chunk, source_index=idx + 1
-            )
-            source_meta["evidence_type"] = (
-                "primary" if idx < primary_count else "supporting"
-            )
-            sources.append(source_meta)
-
-        return {
-            "type": "done",
-            "sources": sources,
-            "memories_used": [mem.content for mem in memories],
-            "retrieval_debug": retrieval_debug,
-            "score_type": score_type,
-        }
+        """Build the final done message with sources (backward-compat delegation wrapper)."""
+        return self._llm_gen._build_done_message(relevant_chunks, memories)
 
     def _ensure_services(self) -> None:
         """Ensure extracted services are initialized.
@@ -698,81 +838,12 @@ class RAGEngine:
     def _pack_context_by_token_budget(
         self, chunks: List[RAGSource], max_tokens: int = 6000
     ) -> List[RAGSource]:
-        """
-        Pack context chunks by token budget, respecting max token limit.
-
-        Token estimation accounts for both chunk body text and the per-chunk
-        metadata header added by format_chunk() (filename, section, score, id).
-        The metadata overhead constant (~25 tokens) prevents the assembled
-        prompt from consistently exceeding the configured budget.
-
-        Args:
-            chunks: List of RAGSource chunks to pack
-            max_tokens: Maximum tokens allowed
-
-        Returns:
-            List of RAGSource chunks that fit within the token budget
-        """
-        chars_per_token: float = settings.token_chars_per_token
-        # Per-chunk overhead for format_chunk() metadata header (label, filename,
-        # section, score, id fields) estimated at ~25 tokens.
-        _METADATA_OVERHEAD_TOKENS = 25
-
-        packed, token_count = [], 0
-        for chunk in chunks:
-            body_tokens = max(1, int(len(chunk.text) / chars_per_token))
-            chunk_tokens = body_tokens + _METADATA_OVERHEAD_TOKENS
-            if token_count + chunk_tokens > max_tokens and packed:
-                break
-            packed.append(chunk)
-            token_count += chunk_tokens
-        return packed
+        """Pack context chunks by token budget (backward-compat delegation wrapper)."""
+        return self._retrieval._pack_context_by_token_budget(chunks, max_tokens)
 
     async def _check_supersession(self, sources: List[RAGSource]) -> Optional[str]:
-        """Query SQLite to check if any retrieved files have been superseded by newer versions.
-
-        Feature-flag gated by files table schema — only runs if supersedes_file_id column exists.
-        """
-        file_ids = list({src.file_id for src in sources if src.file_id})
-        if not file_ids:
-            return None
-        try:
-
-            def _query() -> list:
-                pool = _get_pool()
-                with pool.connection() as conn:
-                    # Check if supersedes_file_id column exists in files table
-                    cursor = conn.execute("PRAGMA table_info(files)")
-                    columns = {row[1] for row in cursor.fetchall()}
-                    if "supersedes_file_id" not in columns:
-                        logger.debug(
-                            "Supersession check skipped: supersedes_file_id column not in files table"
-                        )
-                        return []
-
-                    placeholders = ",".join("?" * len(file_ids))
-                    sql = (
-                        f"SELECT file_name FROM files "
-                        f"WHERE supersedes_file_id IN ({placeholders}) AND status='indexed'"
-                    )
-                    rows = conn.execute(sql, file_ids).fetchall()
-                    return rows
-
-            rows = await asyncio.to_thread(_query)
-            if rows:
-                newer_names = [r[0] for r in rows]
-                logger.warning(
-                    "Supersession warning: retrieved file_ids %s have been superseded by %s",
-                    file_ids,
-                    newer_names,
-                )
-                return (
-                    "\u26a0\ufe0f Note: One or more retrieved documents may have been superseded by a "
-                    "newer version in the knowledge base. Verify currency of information where critical."
-                )
-        except Exception as exc:
-            logger.warning("Supersession check failed (suppressed): %s", exc)
-        return None
+        """Check supersession of retrieved files (backward-compat delegation wrapper)."""
+        return await self._retrieval._check_supersession(sources)
 
     async def _expand_window(self, sources: List[RAGSource]) -> List[RAGSource]:
         """Expand search results by fetching adjacent chunks (backward compatibility).

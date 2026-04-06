@@ -116,6 +116,31 @@ class EmbeddingDimensionMismatchError(EmbeddingError):
         )
 
 
+class EmbeddingGenerator:
+    """Pure embedding generation — delegates to EmbeddingService for HTTP and caching.
+
+    Provides a separation-of-concerns boundary: callers that only need to
+    generate embeddings depend on EmbeddingGenerator rather than the full
+    EmbeddingService (which also owns HTTP client lifecycle, retry logic,
+    circuit-breaker wiring, and provider detection).
+    """
+
+    def __init__(self, service: "EmbeddingService"):
+        self._svc = service
+
+    async def embed_single(self, text: str) -> List[float]:
+        return await self._svc.embed_single(text)
+
+    async def embed_batch(self, texts: List[str], batch_size: int | None = None) -> List[List[float]]:
+        return await self._svc.embed_batch(texts, batch_size)
+
+    async def embed_multi(self, texts: List[str]) -> List[dict]:
+        return await self._svc.embed_multi(texts)
+
+    async def embed_query_sparse(self, text: str) -> dict:
+        return await self._svc.embed_query_sparse(text)
+
+
 class EmbeddingService:
     """Service for generating text embeddings via Ollama or OpenAI-compatible APIs."""
 
@@ -175,6 +200,9 @@ class EmbeddingService:
             maxsize=1000,
             ttl_seconds=settings.embedding_cache_ttl_seconds,
         )
+
+        # Facade sub-class for callers that only need embedding generation (FIND-19)
+        self.generator = EmbeddingGenerator(self)
 
     async def detect_tri_vector_support(self) -> bool:
         """
