@@ -194,7 +194,7 @@ async def create_group(
         target_org_id = request.org_id
     else:
         try:
-            target_org_id = get_user_primary_org(user_id, db)
+            target_org_id = await get_user_primary_org(user_id, db)
         except MultipleOrgError:
             raise HTTPException(
                 status_code=400,

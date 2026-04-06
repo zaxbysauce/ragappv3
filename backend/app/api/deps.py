@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import secrets
 import sqlite3
 from collections.abc import Callable
@@ -205,11 +206,12 @@ async def get_current_active_user(
     if not user_id:
         raise HTTPException(status_code=403, detail="Invalid token payload")
 
-    cursor = db.execute(
+    cursor = await asyncio.to_thread(
+        db.execute,
         "SELECT id, username, full_name, role, is_active, must_change_password FROM users WHERE id = ?",
         (user_id,),
     )
-    row = cursor.fetchone()
+    row = await asyncio.to_thread(cursor.fetchone)
 
     if not row:
         raise HTTPException(status_code=403, detail="User not found")
@@ -260,11 +262,12 @@ async def _evaluate_policy(
         return False
 
     # Use injected db connection instead of creating new pool
-    cursor = db.execute(
+    cursor = await asyncio.to_thread(
+        db.execute,
         "SELECT permission FROM vault_members WHERE vault_id = ? AND user_id = ?",
         (resource_id, user_id),
     )
-    row = cursor.fetchone()
+    row = await asyncio.to_thread(cursor.fetchone)
 
     if row:
         permission_levels = {"read": 1, "write": 2, "admin": 3}
@@ -277,13 +280,14 @@ async def _evaluate_policy(
             return True
 
     # Check vault_group_access for group-based permissions
-    cursor = db.execute(
+    cursor = await asyncio.to_thread(
+        db.execute,
         """SELECT vga.permission FROM vault_group_access vga
            JOIN group_members gm ON vga.group_id = gm.group_id
            WHERE vga.vault_id = ? AND gm.user_id = ?""",
         (resource_id, user_id),
     )
-    group_permissions = cursor.fetchall()
+    group_permissions = await asyncio.to_thread(cursor.fetchall)
 
     if group_permissions:
         permission_levels = {"read": 1, "write": 2, "admin": 3}
@@ -297,10 +301,12 @@ async def _evaluate_policy(
 
     # Check vault visibility for public read access
     if action == "read":
-        cursor = db.execute(
-            "SELECT visibility FROM vaults WHERE id = ?", (resource_id,)
+        cursor = await asyncio.to_thread(
+            db.execute,
+            "SELECT visibility FROM vaults WHERE id = ?",
+            (resource_id,),
         )
-        row = cursor.fetchone()
+        row = await asyncio.to_thread(cursor.fetchone)
 
         if row and row[0] == "public":
             return True
@@ -416,7 +422,7 @@ async def require_admin_role(user: dict = Depends(get_current_active_user)) -> d
     return user
 
 
-def get_user_accessible_vault_ids(user: dict, db) -> list:
+async def get_user_accessible_vault_ids(user: dict, db) -> list:
     """
     Get all vault IDs that a user has access to.
 
@@ -435,20 +441,23 @@ def get_user_accessible_vault_ids(user: dict, db) -> list:
     vault_ids = set()
 
     # Direct vault_members access
-    cursor = db.execute(
-        "SELECT vault_id FROM vault_members WHERE user_id = ?", (user_id,)
+    cursor = await asyncio.to_thread(
+        db.execute,
+        "SELECT vault_id FROM vault_members WHERE user_id = ?",
+        (user_id,),
     )
-    for row in cursor.fetchall():
+    for row in await asyncio.to_thread(cursor.fetchall):
         vault_ids.add(row[0])
 
     # Group-based access
-    cursor = db.execute(
+    cursor = await asyncio.to_thread(
+        db.execute,
         """SELECT DISTINCT vga.vault_id FROM vault_group_access vga
            JOIN group_members gm ON vga.group_id = gm.group_id
            WHERE gm.user_id = ?""",
         (user_id,),
     )
-    for row in cursor.fetchall():
+    for row in await asyncio.to_thread(cursor.fetchall):
         vault_ids.add(row[0])
 
     return list(vault_ids)
@@ -460,7 +469,7 @@ class MultipleOrgError(Exception):
     pass
 
 
-def get_user_orgs(user_id: int, db: sqlite3.Connection) -> list[int]:
+async def get_user_orgs(user_id: int, db: sqlite3.Connection) -> list[int]:
     """Get all organization IDs for a user.
 
     Args:
@@ -470,11 +479,13 @@ def get_user_orgs(user_id: int, db: sqlite3.Connection) -> list[int]:
     Returns:
         List of organization IDs the user belongs to
     """
-    cursor = db.execute("SELECT org_id FROM org_members WHERE user_id = ?", (user_id,))
-    return [row[0] for row in cursor.fetchall()]
+    cursor = await asyncio.to_thread(
+        db.execute, "SELECT org_id FROM org_members WHERE user_id = ?", (user_id,)
+    )
+    return [row[0] for row in await asyncio.to_thread(cursor.fetchall)]
 
 
-def get_user_primary_org(user_id: int, db: sqlite3.Connection) -> int | None:
+async def get_user_primary_org(user_id: int, db: sqlite3.Connection) -> int | None:
     """Get the primary organization ID for a user.
 
     Args:
@@ -488,7 +499,7 @@ def get_user_primary_org(user_id: int, db: sqlite3.Connection) -> int | None:
     Raises:
         MultipleOrgError: If user belongs to multiple organizations
     """
-    orgs = get_user_orgs(user_id, db)
+    orgs = await get_user_orgs(user_id, db)
     if len(orgs) == 0:
         return None
     if len(orgs) == 1:

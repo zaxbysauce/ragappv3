@@ -338,7 +338,7 @@ async def list_documents(
     else:
         # For non-admins without vault_id, get accessible vaults
         if user.get("role") not in ("admin", "superadmin"):
-            accessible_vaults = get_user_accessible_vault_ids(user, conn)
+            accessible_vaults = await get_user_accessible_vault_ids(user, conn)
             if not accessible_vaults:
                 return DocumentListResponse(documents=[], total=0)
             placeholders = ",".join("?" * len(accessible_vaults))
@@ -412,7 +412,7 @@ async def get_document_stats(
     else:
         # For non-admins without vault_id, get accessible vaults
         if user.get("role") not in ("admin", "superadmin"):
-            accessible_vaults = get_user_accessible_vault_ids(user, conn)
+            accessible_vaults = await get_user_accessible_vault_ids(user, conn)
             if not accessible_vaults:
                 return DocumentStatsResponse(
                     total_documents=0,

@@ -352,7 +352,7 @@ async def list_sessions(
 
     # Filter sessions for non-admin users
     if user.get("role") not in ("superadmin", "admin"):
-        accessible_ids = get_user_accessible_vault_ids(user, conn)
+        accessible_ids = await get_user_accessible_vault_ids(user, conn)
         if accessible_ids:
             sessions_with_count = [
                 r for r in sessions_with_count if r.get("vault_id") in accessible_ids

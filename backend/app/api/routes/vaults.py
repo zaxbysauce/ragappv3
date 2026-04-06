@@ -142,7 +142,7 @@ async def list_vaults(
     vaults = await _fetch_all_vaults(conn)
 
     if user.get("role") not in ("superadmin", "admin"):
-        accessible_ids = get_user_accessible_vault_ids(user, conn)
+        accessible_ids = await get_user_accessible_vault_ids(user, conn)
         if accessible_ids:
             vaults = [v for v in vaults if v.id in accessible_ids]
         else:
@@ -160,7 +160,7 @@ async def list_accessible_vaults(
     if user.get("role") in ("superadmin", "admin"):
         return VaultListResponse(vaults=await _fetch_all_vaults(conn))
 
-    accessible_ids = get_user_accessible_vault_ids(user, conn)
+    accessible_ids = await get_user_accessible_vault_ids(user, conn)
     if not accessible_ids:
         return VaultListResponse(vaults=[])
 
