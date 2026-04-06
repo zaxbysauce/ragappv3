@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 from fastapi import Request, Depends, Header, HTTPException, Cookie
 
 from app.config import Settings, settings
+from app.repositories.authorization import AuthorizationRepository
 
 
 class UserRole(IntEnum):
@@ -206,12 +207,8 @@ async def get_current_active_user(
     if not user_id:
         raise HTTPException(status_code=403, detail="Invalid token payload")
 
-    cursor = await asyncio.to_thread(
-        db.execute,
-        "SELECT id, username, full_name, role, is_active, must_change_password FROM users WHERE id = ?",
-        (user_id,),
-    )
-    row = await asyncio.to_thread(cursor.fetchone)
+    repo = AuthorizationRepository(db)
+    row = await repo.get_user_by_id(user_id)
 
     if not row:
         raise HTTPException(status_code=403, detail="User not found")
@@ -262,12 +259,8 @@ async def _evaluate_policy(
         return False
 
     # Use injected db connection instead of creating new pool
-    cursor = await asyncio.to_thread(
-        db.execute,
-        "SELECT permission FROM vault_members WHERE vault_id = ? AND user_id = ?",
-        (resource_id, user_id),
-    )
-    row = await asyncio.to_thread(cursor.fetchone)
+    repo = AuthorizationRepository(db)
+    row = await repo.get_vault_member_permission(resource_id, user_id)
 
     if row:
         permission_levels = {"read": 1, "write": 2, "admin": 3}
@@ -280,14 +273,7 @@ async def _evaluate_policy(
             return True
 
     # Check vault_group_access for group-based permissions
-    cursor = await asyncio.to_thread(
-        db.execute,
-        """SELECT vga.permission FROM vault_group_access vga
-           JOIN group_members gm ON vga.group_id = gm.group_id
-           WHERE vga.vault_id = ? AND gm.user_id = ?""",
-        (resource_id, user_id),
-    )
-    group_permissions = await asyncio.to_thread(cursor.fetchall)
+    group_permissions = await repo.get_vault_group_permissions(resource_id, user_id)
 
     if group_permissions:
         permission_levels = {"read": 1, "write": 2, "admin": 3}
@@ -301,12 +287,7 @@ async def _evaluate_policy(
 
     # Check vault visibility for public read access
     if action == "read":
-        cursor = await asyncio.to_thread(
-            db.execute,
-            "SELECT visibility FROM vaults WHERE id = ?",
-            (resource_id,),
-        )
-        row = await asyncio.to_thread(cursor.fetchone)
+        row = await repo.get_vault_visibility(resource_id)
 
         if row and row[0] == "public":
             return True
@@ -440,25 +421,15 @@ async def get_user_accessible_vault_ids(user: dict, db) -> list:
 
     vault_ids = set()
 
+    repo = AuthorizationRepository(db)
+
     # Direct vault_members access
-    cursor = await asyncio.to_thread(
-        db.execute,
-        "SELECT vault_id FROM vault_members WHERE user_id = ?",
-        (user_id,),
-    )
-    for row in await asyncio.to_thread(cursor.fetchall):
-        vault_ids.add(row[0])
+    for vid in await repo.get_user_vault_ids(user_id):
+        vault_ids.add(vid)
 
     # Group-based access
-    cursor = await asyncio.to_thread(
-        db.execute,
-        """SELECT DISTINCT vga.vault_id FROM vault_group_access vga
-           JOIN group_members gm ON vga.group_id = gm.group_id
-           WHERE gm.user_id = ?""",
-        (user_id,),
-    )
-    for row in await asyncio.to_thread(cursor.fetchall):
-        vault_ids.add(row[0])
+    for vid in await repo.get_user_group_vault_ids(user_id):
+        vault_ids.add(vid)
 
     return list(vault_ids)
 
@@ -479,10 +450,8 @@ async def get_user_orgs(user_id: int, db: sqlite3.Connection) -> list[int]:
     Returns:
         List of organization IDs the user belongs to
     """
-    cursor = await asyncio.to_thread(
-        db.execute, "SELECT org_id FROM org_members WHERE user_id = ?", (user_id,)
-    )
-    return [row[0] for row in await asyncio.to_thread(cursor.fetchall)]
+    repo = AuthorizationRepository(db)
+    return await repo.get_user_org_ids(user_id)
 
 
 async def get_user_primary_org(user_id: int, db: sqlite3.Connection) -> int | None:

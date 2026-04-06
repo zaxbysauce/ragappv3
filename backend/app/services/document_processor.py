@@ -109,102 +109,16 @@ class DocumentParser:
             ) from e
 
 
-class DocumentProcessor:
-    """
-    Orchestrates document processing with status tracking and deduplication.
+class FileManager:
+    """Manages SQLite file table operations for document processing."""
 
-    Coordinates DocumentParser, SemanticChunker, and SchemaParser to process
-    files while maintaining processing status in SQLite and handling duplicates.
-    """
-
-    # File extensions that should use SchemaParser instead of DocumentParser
-    SCHEMA_EXTENSIONS = {".sql", ".ddl"}
-
-    def __init__(
-        self,
-        chunk_size_chars: int = 2000,
-        chunk_overlap_chars: int = 200,
-        vector_store: Optional[VectorStore] = None,
-        embedding_service: Optional[EmbeddingService] = None,
-        pool: Optional["SQLiteConnectionPool"] = None,
-        llm_client: Optional[LLMClient] = None,
-        contextual_chunker: Optional[ContextualChunker] = None,
-    ):
-        """
-        Initialize the document processor.
-
-        Args:
-            chunk_size_chars: Target chunk size in characters for semantic chunking
-            chunk_overlap_chars: Overlap between chunks in characters
-            vector_store: VectorStore instance for storing chunk embeddings
-            embedding_service: EmbeddingService instance for generating embeddings
-            pool: SQLiteConnectionPool instance for database connections
-            llm_client: LLMClient instance for contextual chunking (optional)
-            contextual_chunker: Pre-configured ContextualChunker instance (optional)
-        """
-        self.parser = DocumentParser()
-        self.chunker = SemanticChunker(
-            chunk_size_chars=chunk_size_chars, chunk_overlap_chars=chunk_overlap_chars
-        )
-        self.schema_parser = SchemaParser()
-        # Fallback to creating a pool from settings if not provided
-        if pool is None:
-            pool = get_pool(str(settings.sqlite_path), max_size=2)
-        self.pool = pool
-        self.vector_store = vector_store
-        self.embedding_service = embedding_service
-        self._llm_client = llm_client
-        self._contextual_chunker = contextual_chunker
-        self._chunk_enrichment_service: Optional[ChunkEnrichmentService] = None
-
-    def _get_contextual_chunker(self) -> Optional[ContextualChunker]:
-        """
-        Lazily create a ContextualChunker when needed.
-
-        Returns:
-            ContextualChunker instance if contextual_chunking_enabled is True
-            and llm_client exists, None otherwise.
-        """
-        if not settings.contextual_chunking_enabled:
-            return None
-        if self._llm_client is None:
-            logger.warning("Contextual chunking enabled but no LLM client available")
-            return None
-        if self._contextual_chunker is None:
-            self._contextual_chunker = ContextualChunker(self._llm_client)
-        return self._contextual_chunker
-
-    def _get_chunk_enrichment_service(self) -> Optional[ChunkEnrichmentService]:
-        """Lazily create a ChunkEnrichmentService when needed."""
-        if not settings.chunk_enrichment_enabled:
-            return None
-        if self._llm_client is None:
-            logger.warning("Chunk enrichment enabled but no LLM client available")
-            return None
-        if self._chunk_enrichment_service is None:
-            fields = [f.strip() for f in settings.chunk_enrichment_fields.split(",")]
-            self._chunk_enrichment_service = ChunkEnrichmentService(
-                llm_client=self._llm_client,
-                concurrency=settings.chunk_enrichment_concurrency,
-                enrichment_fields=fields,
-            )
-        return self._chunk_enrichment_service
-
-    @staticmethod
-    def _build_chunk_uid(file_id: int, chunk: ProcessedChunk) -> str:
-        """Build a chunk_uid consistent with vector store record construction."""
-        chunk_scale = chunk.metadata.get("chunk_scale", "default")
-        if settings.multi_scale_indexing_enabled and chunk_scale != "default":
-            chunk_index_value = chunk.metadata.get("chunk_index", chunk.chunk_index)
-            if isinstance(chunk_index_value, str) and "_" in chunk_index_value:
-                return f"{file_id}_{chunk_index_value}"
-            return f"{file_id}_{chunk_scale}_{chunk.chunk_index}"
-        return f"{file_id}_{chunk.chunk_index}"
+    def __init__(self, pool) -> None:
+        self._pool = pool
 
     @with_retry(
         max_attempts=3, retry_exceptions=(sqlite3.Error,), raise_last_exception=True
     )
-    def _check_duplicate(
+    def check_duplicate(
         self, file_hash: str, conn: sqlite3.Connection, vault_id: int = 1
     ) -> Optional[sqlite3.Row]:
         """
@@ -227,7 +141,7 @@ class DocumentProcessor:
     @with_retry(
         max_attempts=3, retry_exceptions=(sqlite3.Error,), raise_last_exception=True
     )
-    def _insert_or_get_file_record(
+    def insert_or_get_file_record(
         self,
         file_path: str,
         file_hash: str,
@@ -347,7 +261,7 @@ class DocumentProcessor:
     @with_retry(
         max_attempts=3, retry_exceptions=(sqlite3.Error,), raise_last_exception=True
     )
-    def _update_status(
+    def update_status(
         self,
         file_id: int,
         status: str,
@@ -392,6 +306,112 @@ class DocumentProcessor:
                 (status, now, file_id),
             )
         # Note: No commit here - caller manages transactions
+
+
+class DocumentProcessor:
+    """
+    Orchestrates document processing with status tracking and deduplication.
+
+    Coordinates DocumentParser, SemanticChunker, and SchemaParser to process
+    files while maintaining processing status in SQLite and handling duplicates.
+    """
+
+    # File extensions that should use SchemaParser instead of DocumentParser
+    SCHEMA_EXTENSIONS = {".sql", ".ddl"}
+
+    def __init__(
+        self,
+        chunk_size_chars: int = 2000,
+        chunk_overlap_chars: int = 200,
+        vector_store: Optional[VectorStore] = None,
+        embedding_service: Optional[EmbeddingService] = None,
+        pool: Optional["SQLiteConnectionPool"] = None,
+        llm_client: Optional[LLMClient] = None,
+        contextual_chunker: Optional[ContextualChunker] = None,
+    ):
+        """
+        Initialize the document processor.
+
+        Args:
+            chunk_size_chars: Target chunk size in characters for semantic chunking
+            chunk_overlap_chars: Overlap between chunks in characters
+            vector_store: VectorStore instance for storing chunk embeddings
+            embedding_service: EmbeddingService instance for generating embeddings
+            pool: SQLiteConnectionPool instance for database connections
+            llm_client: LLMClient instance for contextual chunking (optional)
+            contextual_chunker: Pre-configured ContextualChunker instance (optional)
+        """
+        self.parser = DocumentParser()
+        self.chunker = SemanticChunker(
+            chunk_size_chars=chunk_size_chars, chunk_overlap_chars=chunk_overlap_chars
+        )
+        self.schema_parser = SchemaParser()
+        # Fallback to creating a pool from settings if not provided
+        if pool is None:
+            pool = get_pool(str(settings.sqlite_path), max_size=2)
+        self.pool = pool
+        self._file_manager = FileManager(pool)
+        self.vector_store = vector_store
+        self.embedding_service = embedding_service
+        self._llm_client = llm_client
+        self._contextual_chunker = contextual_chunker
+        self._chunk_enrichment_service: Optional[ChunkEnrichmentService] = None
+
+    def _get_contextual_chunker(self) -> Optional[ContextualChunker]:
+        """
+        Lazily create a ContextualChunker when needed.
+
+        Returns:
+            ContextualChunker instance if contextual_chunking_enabled is True
+            and llm_client exists, None otherwise.
+        """
+        if not settings.contextual_chunking_enabled:
+            return None
+        if self._llm_client is None:
+            logger.warning("Contextual chunking enabled but no LLM client available")
+            return None
+        if self._contextual_chunker is None:
+            self._contextual_chunker = ContextualChunker(self._llm_client)
+        return self._contextual_chunker
+
+    def _get_chunk_enrichment_service(self) -> Optional[ChunkEnrichmentService]:
+        """Lazily create a ChunkEnrichmentService when needed."""
+        if not settings.chunk_enrichment_enabled:
+            return None
+        if self._llm_client is None:
+            logger.warning("Chunk enrichment enabled but no LLM client available")
+            return None
+        if self._chunk_enrichment_service is None:
+            fields = [f.strip() for f in settings.chunk_enrichment_fields.split(",")]
+            self._chunk_enrichment_service = ChunkEnrichmentService(
+                llm_client=self._llm_client,
+                concurrency=settings.chunk_enrichment_concurrency,
+                enrichment_fields=fields,
+            )
+        return self._chunk_enrichment_service
+
+    @staticmethod
+    def _build_chunk_uid(file_id: int, chunk: ProcessedChunk) -> str:
+        """Build a chunk_uid consistent with vector store record construction."""
+        chunk_scale = chunk.metadata.get("chunk_scale", "default")
+        if settings.multi_scale_indexing_enabled and chunk_scale != "default":
+            chunk_index_value = chunk.metadata.get("chunk_index", chunk.chunk_index)
+            if isinstance(chunk_index_value, str) and "_" in chunk_index_value:
+                return f"{file_id}_{chunk_index_value}"
+            return f"{file_id}_{chunk_scale}_{chunk.chunk_index}"
+        return f"{file_id}_{chunk.chunk_index}"
+
+    def _check_duplicate(self, *args, **kwargs):
+        """Backward-compatible delegation to FileManager.check_duplicate."""
+        return self._file_manager.check_duplicate(*args, **kwargs)
+
+    def _insert_or_get_file_record(self, *args, **kwargs):
+        """Backward-compatible delegation to FileManager.insert_or_get_file_record."""
+        return self._file_manager.insert_or_get_file_record(*args, **kwargs)
+
+    def _update_status(self, *args, **kwargs):
+        """Backward-compatible delegation to FileManager.update_status."""
+        return self._file_manager.update_status(*args, **kwargs)
 
     def _is_schema_file(self, file_path: str) -> bool:
         """
@@ -541,14 +561,14 @@ class DocumentProcessor:
         conn = self.pool.get_connection()
         try:
             # Check for duplicates
-            duplicate = self._check_duplicate(file_hash, conn, vault_id)
+            duplicate = self._file_manager.check_duplicate(file_hash, conn, vault_id)
             if duplicate:
                 raise DuplicateFileError(
                     f"File with hash {file_hash} already indexed as '{duplicate['file_path']}'"
                 )
 
             # Insert or get file record (handles its own commit)
-            file_id = self._insert_or_get_file_record(
+            file_id = self._file_manager.insert_or_get_file_record(
                 file_path,
                 file_hash,
                 conn,
@@ -559,7 +579,7 @@ class DocumentProcessor:
             )
 
             # Update status to processing
-            self._update_status(file_id, "processing", conn)
+            self._file_manager.update_status(file_id, "processing", conn)
             conn.commit()
         finally:
             # Release connection before long-running operations
@@ -795,7 +815,7 @@ class DocumentProcessor:
             # Get connection again to update error status
             conn = self.pool.get_connection()
             try:
-                self._update_status(file_id, "error", conn, error_message=str(e))
+                self._file_manager.update_status(file_id, "error", conn, error_message=str(e))
                 conn.commit()
             finally:
                 self.pool.release_connection(conn)
@@ -804,7 +824,7 @@ class DocumentProcessor:
         # Phase 3: Final DB operations - update status to indexed
         conn = self.pool.get_connection()
         try:
-            self._update_status(file_id, "indexed", conn, chunk_count=len(chunks))
+            self._file_manager.update_status(file_id, "indexed", conn, chunk_count=len(chunks))
             conn.commit()
         finally:
             self.pool.release_connection(conn)
