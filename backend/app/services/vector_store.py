@@ -58,22 +58,21 @@ class VectorIndexCreationError(VectorStoreError):
     pass
 
 
-class VectorStore:
-    """LanceDB-based vector store for document chunk embeddings."""
+class VectorStoreConnection:
+    """Manages LanceDB connection lifecycle and shared state.
 
-    def __init__(self, db_path: Optional[Path] = None):
-        """
-        Initialize the vector store.
+    Owns the mutable connection state (db, table, _embedding_dim) and
+    provides connect/init_table/close operations. Extracted from VectorStore
+    so that dependent classes can receive shared state via constructor injection.
+    """
 
-        Args:
-            db_path: Path to LanceDB database. Defaults to settings.lancedb_path.
-        """
-        self.db_path = db_path or settings.lancedb_path
+    def __init__(self, db_path: Path):
+        self.db_path = db_path
         self.db: Optional[lancedb.AsyncConnection] = None
         self.table: Optional[lancedb.table.AsyncTable] = None
         self._embedding_dim: Optional[int] = None
 
-    async def connect(self) -> "VectorStore":
+    async def connect(self) -> "VectorStoreConnection":
         """Connect to LanceDB.
 
         Raises:
@@ -87,7 +86,7 @@ class VectorStore:
             ) from e
         return self
 
-    async def init_table(self, embedding_dim: int) -> "VectorStore":
+    async def init_table(self, embedding_dim: int) -> "VectorStoreConnection":
         """
         Initialize or open the 'chunks' table.
 
@@ -260,6 +259,532 @@ class VectorStore:
             )
         except (OSError, RuntimeError, ValueError) as e:
             logger.warning("Vector index creation failed: %s", e)
+
+    def close(self) -> None:
+        """Close the database connection."""
+        # LanceDB connections are typically stateless
+        self.db = None
+        self.table = None
+
+
+class VectorStoreSearch:
+    """Handles vector search operations.
+
+    Receives shared connection state via constructor injection so that it can
+    operate on the same db/table as VectorStore without creating circular
+    dependencies.
+    """
+
+    def __init__(self, connection: VectorStoreConnection):
+        self._conn = connection
+
+    async def _sparse_search(
+        self,
+        query_sparse: dict,
+        limit: int,
+        vault_id: Optional[str] = None,
+        filter_expr: Optional[str] = None,
+        scale: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Compute dot-product similarity between query sparse vector and stored sparse embeddings.
+
+        Fetches candidates from LanceDB where sparse_embedding IS NOT NULL, computes
+        dot-product scores, and returns top results sorted by score descending.
+
+        Falls back to empty list on any error (e.g. missing sparse_embedding column).
+        """
+        if self._conn.table is None:
+            return []
+
+        try:
+            filter_parts = ["sparse_embedding IS NOT NULL"]
+            if vault_id is not None:
+                safe_vault_id = _lance_escape(vault_id)
+                filter_parts.append(f"vault_id = '{safe_vault_id}'")
+            if scale is not None:
+                safe_scale = _lance_escape(scale)
+                filter_parts.append(f"chunk_scale = '{safe_scale}'")
+            if filter_expr:
+                filter_parts.append(f"({filter_expr})")
+            combined_filter = " AND ".join(filter_parts)
+
+            max_candidates = settings.sparse_search_max_candidates
+            candidates = (
+                await (await self._conn.table.search())
+                .where(combined_filter)
+                .limit(max_candidates)
+                .to_list()
+            )
+
+            scored = []
+            for record in candidates:
+                sparse_str = record.get("sparse_embedding")
+                if not sparse_str:
+                    continue
+                try:
+                    doc_sparse = json.loads(sparse_str)
+                except (ValueError, TypeError):
+                    continue
+                score = sum(query_sparse.get(k, 0.0) * v for k, v in doc_sparse.items())
+                rec = dict(record)
+                rec["_sparse_score"] = score
+                scored.append(rec)
+
+            scored.sort(key=lambda r: r["_sparse_score"], reverse=True)
+            return scored[:limit]
+        except Exception as exc:
+            logger.warning("Sparse search failed (returning empty): %s", exc)
+            return []
+
+    async def _search_single_scale(
+        self,
+        embedding: List[float],
+        scale: str,
+        fetch_k: int,
+        filter_expr: Optional[str] = None,
+        vault_id: Optional[str] = None,
+        query_text: str = "",
+        hybrid: bool = True,
+        query_sparse: Optional[dict] = None,
+        hybrid_alpha: float = 0.5,
+    ) -> List[Dict[str, Any]]:
+        """
+        Search within a single chunk scale.
+
+        Args:
+            embedding: Query embedding vector.
+            scale: The chunk_scale value to filter by (e.g., "512", "1024", "default").
+            fetch_k: Number of results to fetch per search type.
+            filter_expr: Optional additional filter expression.
+            vault_id: Optional vault ID to filter results.
+            query_text: Raw query text for BM25 FTS search.
+            hybrid: If True, combine dense vector search with BM25 FTS using RRF.
+
+        Returns:
+            List of matching records for this scale with RRF scores.
+        """
+        if self._conn.table is None:
+            return []
+
+        # Build scale filter
+        safe_scale = _lance_escape(scale)
+        scale_filter = f"chunk_scale = '{safe_scale}'"
+
+        # Combine with vault filter if present
+        if vault_id is not None:
+            safe_vault_id = _lance_escape(vault_id)
+            vault_filter = f"vault_id = '{safe_vault_id}'"
+            if filter_expr:
+                combined_filter = (
+                    f"({filter_expr}) AND ({scale_filter}) AND ({vault_filter})"
+                )
+            else:
+                combined_filter = f"{scale_filter} AND ({vault_filter})"
+        elif filter_expr:
+            combined_filter = f"({filter_expr}) AND ({scale_filter})"
+        else:
+            combined_filter = scale_filter
+
+        # Dense vector search with scale filter
+        # NOTE: Using query_type="vector" to bypass LanceDB's buggy auto-detection
+        # which can cause UnboundLocalError when embedding_conf is None
+        embedding_np = np.array(embedding, dtype=np.float32)
+        query = await self._conn.table.search(embedding_np, query_type="vector")
+        if combined_filter:
+            query = query.where(combined_filter)
+        dense_results = await query.limit(fetch_k).to_list()
+
+        # If hybrid disabled, return dense results only
+        if not hybrid or not query_text:
+            return dense_results
+
+        # Run search based on query_sparse availability
+        if query_sparse is not None:
+            # Use sparse retrieval instead of BM25 FTS
+            sparse_results = await self._sparse_search(
+                query_sparse=query_sparse,
+                limit=fetch_k,
+                vault_id=vault_id,
+                filter_expr=combined_filter if filter_expr else scale_filter,
+                scale=scale,
+            )
+
+            # RRF Fusion for this scale with dense + sparse
+            k_rrf = 60
+            rrf_scores: dict = {}
+            id_to_record: dict = {}
+
+            for rank, record in enumerate(dense_results):
+                uid = record.get("id", f"dense_{rank}")
+                rrf_scores[uid] = rrf_scores.get(uid, 0.0) + (1.0 - hybrid_alpha) / (
+                    k_rrf + rank + 1
+                )
+                id_to_record[uid] = record
+
+            for rank, record in enumerate(sparse_results):
+                uid = record.get("id", f"sparse_{rank}")
+                # Apply hybrid_alpha: dense gets (1-alpha), sparse gets alpha
+                rrf_scores[uid] = rrf_scores.get(uid, 0.0) + hybrid_alpha * 1.0 / (
+                    k_rrf + rank + 1
+                )
+                if uid not in id_to_record:
+                    id_to_record[uid] = record
+
+            result_list = []
+            for uid in rrf_scores:
+                record = dict(id_to_record[uid])
+                record["_rrf_score"] = rrf_scores[uid]
+                result_list.append(record)
+            return result_list
+        else:
+            # Use BM25 FTS (existing code)
+            try:
+                fts_query = await self._conn.table.search(query_text, query_type="fts")
+                fts_filter_parts = [scale_filter]
+                if vault_id:
+                    safe_vault_id = _lance_escape(vault_id)
+                    fts_filter_parts.append(f"vault_id = '{safe_vault_id}'")
+                if filter_expr:
+                    fts_filter_parts.append(f"({filter_expr})")
+                fts_combined_filter = " AND ".join(f"({f})" for f in fts_filter_parts)
+                fts_query = fts_query.where(fts_combined_filter)
+                fts_results = await fts_query.limit(fetch_k).to_list()
+            except Exception as e:
+                logger.warning(
+                    f"FTS search failed for scale {scale} (falling back to dense-only): {e}"
+                )
+                fts_results = []
+
+            # RRF Fusion for this scale
+            k_rrf = 60
+            rrf_scores: dict = {}
+            id_to_record: dict = {}
+
+            for rank, record in enumerate(dense_results):
+                uid = record.get("id", f"dense_{rank}")
+                rrf_scores[uid] = rrf_scores.get(uid, 0.0) + 1.0 / (k_rrf + rank + 1)
+                id_to_record[uid] = record
+
+            for rank, record in enumerate(fts_results):
+                uid = record.get("id", f"fts_{rank}")
+                rrf_scores[uid] = rrf_scores.get(uid, 0.0) + 1.0 / (k_rrf + rank + 1)
+                if uid not in id_to_record:
+                    id_to_record[uid] = record
+
+            # Return results with RRF scores (unsorted, to be sorted in cross-scale RRF)
+            result_list = []
+            for uid in rrf_scores:
+                record = dict(id_to_record[uid])
+                record["_rrf_score"] = rrf_scores[uid]
+                result_list.append(record)
+            return result_list
+
+    async def search(
+        self,
+        embedding: List[float],
+        limit: int = 10,
+        filter_expr: Optional[str] = None,
+        vault_id: Optional[str] = None,
+        query_text: str = "",
+        hybrid: bool = True,
+        hybrid_alpha: float = 0.5,
+        query_sparse: Optional[dict] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Search for similar chunks by embedding.
+
+        Args:
+            embedding: Query embedding vector.
+            limit: Maximum number of results.
+            filter_expr: Optional filter expression (LanceDB syntax).
+            vault_id: Optional vault ID to filter results. If provided, only returns
+                      chunks from the specified vault.
+            query_text: Raw query text for BM25 FTS search (used in hybrid search).
+            hybrid: If True, combine dense vector search with BM25 FTS using RRF.
+            hybrid_alpha: Weight controlling the balance between dense and sparse retrieval in hybrid search (dense gets weight 1-alpha, sparse gets alpha).
+
+        Returns:
+            List of matching records with similarity scores. Each record includes:
+            - All original fields (id, text, file_id, chunk_index, metadata, etc.)
+            - _distance: Cosine distance from query embedding (lower = more similar)
+            - _rrf_score: Reciprocal Rank Fusion score (when hybrid=True)
+            Empty list if no table exists.
+
+        Note:
+            For cosine distance metric:
+            - Distance of 0 = identical vectors (perfect match)
+            - Distance of 1 = orthogonal vectors
+            - Distance of 2 = opposite vectors (perfect mismatch)
+            The _distance field is provided by LanceDB's vector search.
+        """
+        # Ensure DB connection exists
+        if self._conn.db is None:
+            await self._conn.connect()
+
+        # Try to open existing table if not already loaded
+        if self._conn.table is None:
+            try:
+                table_names = await self._conn.db.table_names()
+            except (OSError, RuntimeError, ValueError) as e:
+                raise VectorStoreConnectionError(
+                    f"Failed to list table names: {e}"
+                ) from e
+
+            if "chunks" not in table_names:
+                # No table exists yet - graceful no-docs behavior
+                return []
+
+            # Table exists, try to open it
+            try:
+                self._conn.table = await self._conn.db.open_table("chunks")
+            except (OSError, RuntimeError, ValueError) as e:
+                raise VectorStoreConnectionError(
+                    f"Failed to open 'chunks' table: {e}"
+                ) from e
+
+            # Set embedding_dim from table schema if available
+            if self._conn._embedding_dim is None:
+                try:
+                    schema = await self._conn.table.schema()
+                    embedding_field = schema.field("embedding")
+                    # Extract dimension from fixed size list type
+                    if hasattr(embedding_field.type, "list_size"):
+                        self._conn._embedding_dim = embedding_field.type.list_size
+                except (AttributeError, KeyError, IndexError, TypeError):
+                    # If we can't determine embedding_dim, leave it as None
+                    pass
+
+        # Check if vector index should be created (deferred index creation)
+        await self._conn._maybe_create_vector_index()
+
+        # Check for multi-scale search
+        fetch_k = limit * 2
+
+        if settings.multi_scale_indexing_enabled and settings.multi_scale_chunk_sizes:
+            # Parse scale sizes
+            scale_strs = [
+                s.strip()
+                for s in settings.multi_scale_chunk_sizes.split(",")
+                if s.strip()
+            ]
+
+            if len(scale_strs) > 1:
+                # Multi-scale search: query each scale with limited concurrency
+                # and perform cross-scale RRF
+                semaphore = asyncio.Semaphore(_MULTI_SCALE_CONCURRENCY)
+
+                async def _sem_search_single_scale(scale: str) -> List[Dict[str, Any]]:
+                    """Semaphore-guarded wrapper for _search_single_scale."""
+                    async with semaphore:
+                        return await self._search_single_scale(
+                            embedding=embedding,
+                            scale=scale,
+                            fetch_k=fetch_k,
+                            filter_expr=filter_expr,
+                            vault_id=vault_id,
+                            query_text=query_text,
+                            hybrid=hybrid,
+                            query_sparse=query_sparse,
+                            hybrid_alpha=hybrid_alpha,
+                        )
+
+                # Create tasks for parallel execution (concurrency limited by semaphore)
+                search_tasks = [_sem_search_single_scale(scale) for scale in scale_strs]
+
+                # Execute all scale searches with limited concurrency
+                scale_results_list = await asyncio.gather(
+                    *search_tasks, return_exceptions=True
+                )
+
+                # Collect results from successful searches
+                all_scale_results: List[Dict[str, Any]] = []
+                for i, scale_results in enumerate(scale_results_list):
+                    if isinstance(scale_results, list):
+                        all_scale_results.extend(scale_results)
+                    else:
+                        logger.warning(
+                            f"Search failed for scale {scale_strs[i]}: {scale_results}"
+                        )
+
+                # Cross-scale RRF fusion
+                k_rrf = 60
+                cross_scale_scores: dict = {}
+                id_to_record: dict = {}
+
+                # Add results from each scale with their RRF contributions
+                for rank, record in enumerate(all_scale_results):
+                    uid = record.get("id", f"scale_{rank}")
+                    # Use the per-scale RRF score as contribution
+                    scale_rrf = record.get("_rrf_score", 0.0)
+                    cross_scale_scores[uid] = (
+                        cross_scale_scores.get(uid, 0.0) + scale_rrf
+                    )
+                    if uid not in id_to_record:
+                        id_to_record[uid] = record
+
+                # Sort by cross-scale RRF score and return top limit
+                sorted_uids = sorted(
+                    cross_scale_scores,
+                    key=lambda u: cross_scale_scores[u],
+                    reverse=True,
+                )
+                fused = []
+                for uid in sorted_uids[:limit]:
+                    record = dict(id_to_record[uid])
+                    record["_rrf_score"] = cross_scale_scores[uid]
+                    fused.append(record)
+
+                logger.info(
+                    f"Multi-scale search: queried {len(scale_strs)} scales, "
+                    f"returning {len(fused)} results"
+                )
+                return fused
+
+        # Single-scale or multi-scale disabled: use existing behavior
+
+        if self._conn.table is None:
+            return []
+
+        # Dense vector search
+        # NOTE: Using query_type="vector" to bypass LanceDB's buggy auto-detection
+        # which can cause UnboundLocalError when embedding_conf is None
+        embedding_np = np.array(embedding, dtype=np.float32)
+        query = await self._conn.table.search(embedding_np, query_type="vector")
+
+        # Apply vault filter if specified
+        _filter_expr = filter_expr
+        if vault_id is not None:
+            safe_vault_id = _lance_escape(vault_id)
+            vault_filter = f"vault_id = '{safe_vault_id}'"
+            if _filter_expr:
+                _filter_expr = f"({_filter_expr}) AND ({vault_filter})"
+            else:
+                _filter_expr = vault_filter
+
+        if _filter_expr:
+            query = query.where(_filter_expr)
+
+        dense_results = await query.limit(fetch_k).to_list()
+
+        # If hybrid disabled, return dense results only
+        if not hybrid or not query_text:
+            return dense_results
+
+        # Run search based on query_sparse availability
+        if query_sparse is not None:
+            # Use sparse retrieval instead of BM25 FTS
+            sparse_results = await self._sparse_search(
+                query_sparse=query_sparse,
+                limit=fetch_k,
+                vault_id=vault_id,
+                filter_expr=filter_expr,
+            )
+            # Apply hybrid_alpha weighting in RRF
+            return rrf_fuse(
+                [dense_results, sparse_results],
+                k=60,
+                limit=limit,
+                weights=[1.0 - hybrid_alpha, hybrid_alpha],
+            )
+        else:
+            # Use BM25 FTS (existing code)
+            try:
+                fts_query = await self._conn.table.search(query_text, query_type="fts")
+                if vault_id:
+                    safe_vault_id = _lance_escape(vault_id)
+                    fts_query = fts_query.where(f"vault_id = '{safe_vault_id}'")
+                if filter_expr:
+                    # FTS doesn't support complex filter_expr, apply basic vault filter only
+                    fts_query = fts_query.where(filter_expr)
+                fts_results = await fts_query.limit(fetch_k).to_list()
+            except (OSError, RuntimeError, ValueError) as e:
+                logger.warning(f"FTS search failed (falling back to dense-only): {e}")
+                fts_results = []
+
+            # RRF Fusion using shared utility
+            return rrf_fuse([dense_results, fts_results], k=60, limit=limit)
+
+
+class VectorStore:
+    """LanceDB-based vector store for document chunk embeddings."""
+
+    def __init__(self, db_path: Optional[Path] = None):
+        """
+        Initialize the vector store.
+
+        Args:
+            db_path: Path to LanceDB database. Defaults to settings.lancedb_path.
+        """
+        self.db_path = db_path or settings.lancedb_path
+        self._connection = VectorStoreConnection(self.db_path)
+        self._searcher = VectorStoreSearch(self._connection)
+
+    # ------------------------------------------------------------------
+    # Properties: expose db/table from the connection so that existing
+    # external code that accesses vs.db or vs.table continues to work.
+    # ------------------------------------------------------------------
+
+    @property
+    def db(self) -> Optional[lancedb.AsyncConnection]:
+        return self._connection.db
+
+    @db.setter
+    def db(self, value: Optional[lancedb.AsyncConnection]) -> None:
+        self._connection.db = value
+
+    @property
+    def table(self) -> Optional[lancedb.table.AsyncTable]:
+        return self._connection.table
+
+    @table.setter
+    def table(self, value: Optional[lancedb.table.AsyncTable]) -> None:
+        self._connection.table = value
+
+    @property
+    def _embedding_dim(self) -> Optional[int]:
+        return self._connection._embedding_dim
+
+    @_embedding_dim.setter
+    def _embedding_dim(self, value: Optional[int]) -> None:
+        self._connection._embedding_dim = value
+
+    # ------------------------------------------------------------------
+    # Delegated connection methods
+    # ------------------------------------------------------------------
+
+    async def connect(self) -> "VectorStore":
+        """Connect to LanceDB.
+
+        Raises:
+            VectorStoreConnectionError: If connection to LanceDB fails.
+        """
+        await self._connection.connect()
+        return self
+
+    async def init_table(self, embedding_dim: int) -> "VectorStore":
+        """
+        Initialize or open the 'chunks' table.
+
+        Args:
+            embedding_dim: Dimension of embedding vectors.
+
+        Returns:
+            Self for method chaining.
+
+        Raises:
+            VectorStoreConnectionError: If connection or table operations fail.
+        """
+        await self._connection.init_table(embedding_dim)
+        return self
+
+    async def _get_expected_embedding_dim(self) -> Optional[int]:
+        """Get the expected embedding dimension from the table schema."""
+        return await self._connection._get_expected_embedding_dim()
+
+    async def _maybe_create_vector_index(self) -> None:
+        """Conditionally create vector ANN index if conditions are met."""
+        await self._connection._maybe_create_vector_index()
 
     async def add_chunks(self, records: List[Dict[str, Any]]) -> None:
         """
