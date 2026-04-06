@@ -367,9 +367,10 @@ class ContextualChunker:
                             source_filename=safe_filename,
                         )
                     except Exception:
-                        # _contextualize_single_chunk sets metadata["contextualized"]=False
-                        # before re-raising; swallow here so remaining chunks are processed.
-                        chunk.metadata.setdefault("contextualized", False)
+                        # _contextualize_single_chunk already set metadata["contextualized"]=False
+                        # in its inner except handler before re-raising. Swallow here so
+                        # the remaining chunks in this batch still get processed.
+                        pass
 
         tasks = [
             process_batch(batch_num, batch_chunks, batch_indices)
