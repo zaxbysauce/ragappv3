@@ -848,8 +848,10 @@ async def batch_delete_documents(
 
     # Delete from database in a single transaction
     deleted_count = 0
+    _current_file_id: str | None = None
     try:
         for file_id, file_name in valid.items():
+            _current_file_id = file_id
             await asyncio.to_thread(
                 conn.execute, "DELETE FROM files WHERE id = ?", (file_id,)
             )
@@ -857,7 +859,9 @@ async def batch_delete_documents(
             logger.info("Deleted document '%s' (id: %s)", file_name, file_id)
         await asyncio.to_thread(conn.commit)
     except Exception:
-        logger.exception("Error during batch DB delete; rolling back")
+        logger.exception(
+            "Error during batch DB delete at file_id=%s; rolling back", _current_file_id
+        )
         await asyncio.to_thread(conn.rollback)
         failed_ids.extend(list(valid.keys()))
         deleted_count = 0
@@ -917,8 +921,10 @@ async def delete_all_vault_documents(
         )
 
     # Delete all file records in a single transaction
+    _current_file_id: str | None = None
     try:
         for file_id in file_ids:
+            _current_file_id = file_id
             await asyncio.to_thread(
                 conn.execute, "DELETE FROM files WHERE id = ?", (file_id,)
             )
@@ -926,7 +932,9 @@ async def delete_all_vault_documents(
         deleted_count = len(file_ids)
     except Exception:
         logger.exception(
-            "Error during DB delete for vault %d; rolling back", vault_id
+            "Error during DB delete for vault %d at file_id=%s; rolling back",
+            vault_id,
+            _current_file_id,
         )
         await asyncio.to_thread(conn.rollback)
         deleted_count = 0
