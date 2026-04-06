@@ -1,8 +1,9 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams } from "react-router-dom";
 import { cn } from "@/lib/utils";
+import { getChatSession } from "@/lib/api";
 import { useChatShellStore } from "@/stores/useChatShellStore";
-import { useChatStore } from "@/stores/useChatStore";
+import { useChatStore, type Message } from "@/stores/useChatStore";
 import { SessionRail } from "@/components/chat/SessionRail";
 import { TranscriptPane } from "@/components/chat/TranscriptPane";
 import { RightPane } from "@/components/chat/RightPane";
@@ -87,6 +88,7 @@ export default function ChatShell() {
     }
   };
 
+  // Sync URL sessionId → shell store activeSessionId
   useEffect(() => {
     if (sessionId && sessionId !== activeSessionId) {
       setActiveSessionId(sessionId);
@@ -94,6 +96,33 @@ export default function ChatShell() {
       setActiveSessionId(null);
     }
   }, [sessionId, activeSessionId, setActiveSessionId]);
+
+  // RT-04 fix: Load session messages when sessionId changes
+  const loadedSessionRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!sessionId || sessionId === loadedSessionRef.current) return;
+    // Don't reload if we already have messages for this session
+    const { activeChatId } = useChatStore.getState();
+    if (activeChatId === sessionId) {
+      loadedSessionRef.current = sessionId;
+      return;
+    }
+    loadedSessionRef.current = sessionId;
+    (async () => {
+      try {
+        const detail = await getChatSession(parseInt(sessionId));
+        const loadedMessages: Message[] = (detail.messages ?? []).map((m) => ({
+          id: m.id.toString(),
+          role: m.role as "user" | "assistant",
+          content: m.content,
+          sources: m.sources ?? undefined,
+        }));
+        useChatStore.getState().loadChat(sessionId, loadedMessages);
+      } catch (err) {
+        console.error("Failed to load chat session:", err);
+      }
+    })();
+  }, [sessionId]);
 
   const handleResizeStart = (e: React.MouseEvent) => {
     e.preventDefault();

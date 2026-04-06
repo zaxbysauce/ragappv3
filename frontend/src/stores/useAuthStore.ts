@@ -27,6 +27,7 @@ interface AuthState {
   accessToken: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
+  isInitialized: boolean;
   needsSetup: boolean | null;
   authMode: "jwt" | "apikey" | "unknown";
 
@@ -115,6 +116,7 @@ export const useAuthStore = create<AuthState>()(
       user: null,
       accessToken: null,
       isAuthenticated: false,
+      isInitialized: false,
       isLoading: false,
       needsSetup: null as boolean | null,
       authMode: "unknown",
@@ -126,7 +128,7 @@ export const useAuthStore = create<AuthState>()(
       init: async () => {
         // Guard: skip if init was already attempted (prevents 401 retry loop)
         if (_initAttempted) {
-          set({ isLoading: false });
+          set({ isLoading: false, isInitialized: true });
           return;
         }
         _initAttempted = true;
@@ -138,14 +140,14 @@ export const useAuthStore = create<AuthState>()(
         try {
           if (state.accessToken) {
             await get().fetchMe();
-            set({ authMode: "jwt", isAuthenticated: true, isLoading: false });
+            set({ authMode: "jwt", isAuthenticated: true, isLoading: false, isInitialized: true });
             return;
           }
           // No in-memory token — attempt refresh via httpOnly cookie (H-7 fix)
           const newToken = await get().refreshToken();
           if (newToken) {
             await get().fetchMe();
-            set({ authMode: "jwt", isAuthenticated: true, isLoading: false });
+            set({ authMode: "jwt", isAuthenticated: true, isLoading: false, isInitialized: true });
             return;
           }
         } catch {
@@ -164,7 +166,7 @@ export const useAuthStore = create<AuthState>()(
           // Backend unreachable
         }
 
-        set({ authMode: "jwt", isLoading: false });
+        set({ authMode: "jwt", isLoading: false, isInitialized: true });
       },
 
       checkSetupStatus: async () => {

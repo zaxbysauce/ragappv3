@@ -10,10 +10,11 @@ export function ProtectedRoute({ children }: ProtectedRouteProps) {
   const location = useLocation();
 
   // H-10 fix: Use only the JWT auth store — legacy AuthContext OR removed
-  const { isAuthenticated, isLoading, needsSetup } = useAuthStore();
+  const { isAuthenticated, isLoading, isInitialized, needsSetup } = useAuthStore();
 
   // Show loading while auth state or setup check is still initializing
-  if (isLoading || needsSetup === null) {
+  // RT-02 fix: wait for init() to complete before making auth decisions
+  if (isLoading || !isInitialized || needsSetup === null) {
     return (
       <div className="flex h-screen w-full items-center justify-center">
         <Loader2

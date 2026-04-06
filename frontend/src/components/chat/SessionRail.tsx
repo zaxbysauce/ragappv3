@@ -638,6 +638,14 @@ export function SessionGroup({
 // COMPONENT: SessionRail (Main)
 // =============================================================================
 
+// RT-08 fix: Module-level cache to deduplicate session list fetches across
+// multiple SessionRail instances (desktop sidebar + mobile sheet)
+const _sessionCache: { data: ChatSession[] | null; vaultId?: number; ts: number } = {
+  data: null,
+  ts: 0,
+};
+const SESSION_CACHE_TTL = 5000; // 5 seconds
+
 interface SessionRailProps {
   vaultId?: number;
   className?: string;
@@ -663,23 +671,40 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
   // H-7 fix: Debounce search to avoid firing API calls per keystroke
   const [debouncedSearchQuery] = useDebounce(sessionSearchQuery, 300);
 
-  // Fetch sessions on mount and when vaultId changes
+  // Fetch sessions on mount and when vaultId changes (with dedup cache)
   useEffect(() => {
+    let cancelled = false;
     const fetchSessions = async () => {
+      // Use cache if fresh and same vault
+      if (
+        _sessionCache.data &&
+        _sessionCache.vaultId === vaultId &&
+        Date.now() - _sessionCache.ts < SESSION_CACHE_TTL
+      ) {
+        setSessions(_sessionCache.data);
+        setIsLoading(false);
+        return;
+      }
+
       setIsLoading(true);
       setError(null);
       try {
         const data = await listChatSessions(vaultId);
-        setSessions(Array.isArray(data.sessions) ? data.sessions : []);
+        const sessionList = Array.isArray(data.sessions) ? data.sessions : [];
+        _sessionCache.data = sessionList;
+        _sessionCache.vaultId = vaultId;
+        _sessionCache.ts = Date.now();
+        if (!cancelled) setSessions(sessionList);
       } catch (err) {
         const message = err instanceof Error ? err.message : "Failed to load sessions";
-        setError(message);
+        if (!cancelled) setError(message);
       } finally {
-        setIsLoading(false);
+        if (!cancelled) setIsLoading(false);
       }
     };
 
     fetchSessions();
+    return () => { cancelled = true; };
   }, [vaultId]);
 
   // Track which session IDs have been fetched to avoid duplicate fetches
@@ -792,6 +817,8 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
     async (session: ChatSession) => {
       try {
         await deleteChatSession(session.id);
+        // Invalidate cache so next fetch gets fresh data
+        _sessionCache.ts = 0;
         // Remove from local list
         setSessions((prev) => prev.filter((s) => s.id !== session.id));
         // Unpin if it was pinned
@@ -813,6 +840,7 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
 
   // Retry loading sessions
   const handleRetry = useCallback(async () => {
+    _sessionCache.ts = 0; // Invalidate cache for retry
     setIsLoading(true);
     setError(null);
     try {

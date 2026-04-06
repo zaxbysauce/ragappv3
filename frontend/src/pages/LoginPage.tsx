@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useNavigate, Navigate, Link } from "react-router-dom";
+import { useNavigate, Navigate, Link, useLocation } from "react-router-dom";
 import { useAuthStore } from "@/stores/useAuthStore";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
@@ -36,6 +36,9 @@ export default function LoginPage() {
   } = useAuthStore();
 
   const navigate = useNavigate();
+  const location = useLocation();
+  // RT-03 fix: restore return-to URL after login
+  const returnTo = (location.state as { from?: { pathname: string } })?.from?.pathname || "/";
 
   // Initialize auth store on mount
   useEffect(() => {
@@ -73,7 +76,7 @@ export default function LoginPage() {
 
       try {
         await jwtLogin(credentials.username, credentials.password);
-        navigate("/");
+        navigate(returnTo, { replace: true });
       } catch (err) {
         setError(err instanceof Error ? err.message : "Login failed");
       }
@@ -86,7 +89,7 @@ export default function LoginPage() {
 
       try {
         await apiKeyLogin(apiKey);
-        navigate("/");
+        navigate(returnTo, { replace: true });
       } catch (err) {
         setError(err instanceof Error ? err.message : "Invalid API key");
       }
