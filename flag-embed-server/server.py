@@ -239,6 +239,7 @@ async def rerank(request: RerankRequest):
 async def health():
     return {
         "status": "ok",
+        "supports_sparse": True,
         "models": {
             "embedding": "BAAI/bge-m3",
             "reranker": "BAAI/bge-reranker-v2-m3",

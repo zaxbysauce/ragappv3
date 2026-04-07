@@ -260,6 +260,7 @@ class TestMaybeCreateVectorIndex(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.embedding_dim = 768
 
                 await self.store._maybe_create_vector_index()
 
@@ -267,7 +268,7 @@ class TestMaybeCreateVectorIndex(unittest.IsolatedAsyncioTestCase):
         MockIvfPq.assert_called_once()
         call_kwargs = MockIvfPq.call_args.kwargs
         self.assertEqual(call_kwargs["num_partitions"], 256)
-        self.assertEqual(call_kwargs["num_sub_vectors"], 96)
+        self.assertEqual(call_kwargs["num_sub_vectors"], 96)  # 768 // 8 = 96
 
         # Verify create_index was called with embedding column
         self.assertEqual(create_index_kwargs.get("column"), "embedding")

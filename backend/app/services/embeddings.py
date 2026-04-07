@@ -494,7 +494,22 @@ class EmbeddingService:
                 headers={"Content-Type": "application/json"},
             )
             response.raise_for_status()
-            return response.json()
+            raw = response.json()
+            # Production server (flag-embed-server) returns a dict with
+            # dense_embeddings/sparse_embeddings/colbert_vecs keys.
+            # Dev server returns a list of {dense, sparse, colbert} dicts.
+            if isinstance(raw, dict):
+                dense_list = raw.get("dense_embeddings") or [[] for _ in texts]
+                sparse_list = raw.get("sparse_embeddings") or [None for _ in texts]
+                return [
+                    {
+                        "dense": dense_list[i] if i < len(dense_list) else [],
+                        "sparse": sparse_list[i] if i < len(sparse_list) else None,
+                        "colbert": None,
+                    }
+                    for i in range(len(texts))
+                ]
+            return raw
         except (httpx.TimeoutException, httpx.HTTPError, ValueError, OSError) as e:
             logger.error(f"Tri-vector embedding failed: {e}")
             raise EmbeddingError(f"Failed to generate tri-vector embeddings: {e}")
@@ -993,12 +1008,18 @@ class EmbeddingService:
                 embed_url = urljoin(self._flag_base_url, "/embed")
                 response = await self._client.post(
                     embed_url,
-                    json={"input": [text_to_embed]},
+                    json={
+                        "texts": [text_to_embed],
+                        "return_dense": False,
+                        "return_sparse": True,
+                        "return_colbert_vecs": False,
+                    },
                     headers={"Content-Type": "application/json"},
                 )
                 response.raise_for_status()
                 results = response.json()
-                sparse = results[0].get("sparse") if results else None
+                sparse_list = results.get("sparse_embeddings") if isinstance(results, dict) else None
+                sparse = sparse_list[0] if sparse_list else None
                 if not sparse:
                     raise EmbeddingError(
                         "FlagEmbedding /embed returned no sparse vector"

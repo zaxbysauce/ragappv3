@@ -238,6 +238,7 @@ class VectorStore:
         # Create the index
         t0 = time.monotonic()
         try:
+            num_sub_vectors = settings.embedding_dim // 8
             await self.table.create_index(
                 column="embedding",
                 config=IvfPq(
@@ -245,7 +246,7 @@ class VectorStore:
                         "Literal['l2', 'cosine', 'dot']", settings.vector_metric
                     ),
                     num_partitions=256,
-                    num_sub_vectors=96,
+                    num_sub_vectors=num_sub_vectors,
                 ),
                 replace=True,
             )
@@ -1238,6 +1239,7 @@ class VectorStore:
             try:
                 self.table = await self.db.create_table("chunks", data=df)
                 # Recreate vector index
+                num_sub_vectors = settings.embedding_dim // 8
                 await self.table.create_index(
                     column="embedding",
                     config=IvfPq(
@@ -1245,7 +1247,7 @@ class VectorStore:
                             "Literal['l2', 'cosine', 'dot']", settings.vector_metric
                         ),
                         num_partitions=256,
-                        num_sub_vectors=96,
+                        num_sub_vectors=num_sub_vectors,
                     ),
                     replace=True,
                 )
