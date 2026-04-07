@@ -120,14 +120,14 @@ class TestEmbedQuerySparse:
         call_args = mock_client.post.call_args
         assert "/embed" in call_args[0][0]
 
-    async def test_sparse_embedding_timeout_200ms(self):
-        """Test that asyncio.timeout raises EmbeddingError after 200ms."""
+    async def test_sparse_embedding_timeout(self):
+        """Test that asyncio.timeout raises EmbeddingError when request exceeds sparse_embedding_timeout."""
         service = self._create_service_with_flag_url()
 
-        # Create a mock that takes longer than 200ms
+        # Create a mock that takes longer than the configured timeout
         async def slow_post(*args, **kwargs):
-            await asyncio.sleep(1)  # 1 second - longer than 200ms timeout
-            return self._create_mock_response({"sparse": {"1": 0.5}})
+            await asyncio.sleep(10)  # Much longer than any configured timeout
+            return self._create_mock_response({"1": 0.5})
 
         mock_client = MagicMock()
         mock_client.post = slow_post
@@ -139,7 +139,6 @@ class TestEmbedQuerySparse:
             await service.embed_query_sparse("test query")
 
         assert "timed out" in str(context.value).lower()
-        assert "200ms" in str(context.value) or "0.2" in str(context.value)
 
     async def test_sparse_embedding_no_flag_url(self):
         """Test that empty flag_embedding_url raises EmbeddingError."""

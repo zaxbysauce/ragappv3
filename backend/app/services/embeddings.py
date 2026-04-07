@@ -1026,7 +1026,9 @@ class EmbeddingService:
                     )
                 return sparse
         except asyncio.TimeoutError:
-            raise EmbeddingError("Sparse embedding request timed out (200ms)")
+            raise EmbeddingError(
+                f"Sparse embedding request timed out ({settings.sparse_embedding_timeout}s)"
+            )
         except EmbeddingError:
             raise
         except Exception as e:
