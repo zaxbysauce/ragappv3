@@ -206,7 +206,7 @@ class VectorStore:
         Checks:
         1. Skip if embedding_idx already exists (fast path)
         2. Skip if row count < VECTOR_INDEX_MIN_ROWS (256)
-        3. Create index with num_partitions=256, num_sub_vectors=96
+        3. Create index with num_partitions=256, num_sub_vectors=embedding_dim//8
         """
         if self.table is None:
             return

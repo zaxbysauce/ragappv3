@@ -71,10 +71,18 @@ class TestEmbedQuerySparse:
         return service
 
     def _create_mock_response(self, sparse_data: dict, status_code: int = 200):
-        """Create a mock HTTP response with sparse embedding data."""
+        """Create a mock HTTP response with sparse embedding data.
+
+        sparse_data is the sparse token-weight dict (e.g. {"123": 0.5}),
+        matching the production flag-embed-server response format.
+        """
         response = MagicMock()
         response.status_code = status_code
-        response.json.return_value = [sparse_data]
+        response.json.return_value = {
+            "sparse_embeddings": [sparse_data],
+            "dense_embeddings": None,
+            "colbert_vecs": None,
+        }
         response.raise_for_status = (
             MagicMock()
             if status_code == 200
@@ -95,7 +103,7 @@ class TestEmbedQuerySparse:
         mock_client = MagicMock()
         expected_sparse = {"123": 0.5, "456": 0.3, "789": 0.2}
         mock_client.post = AsyncMock(
-            return_value=self._create_mock_response({"sparse": expected_sparse})
+            return_value=self._create_mock_response(expected_sparse)
         )
 
         service._client = mock_client
@@ -191,7 +199,7 @@ class TestEmbedQuerySparse:
         mock_client = MagicMock()
         mock_client.post = AsyncMock(
             return_value=self._create_mock_response(
-                {"sparse": {"1": 0.5}}, status_code=500
+                {"1": 0.5}, status_code=500
             )
         )
 
@@ -212,7 +220,7 @@ class TestEmbedQuerySparse:
         async def capture_post(*args, **kwargs):
             nonlocal captured_payload
             captured_payload = kwargs.get("json", args[1] if len(args) > 1 else {})
-            return self._create_mock_response({"sparse": {"1": 0.5}})
+            return self._create_mock_response({"1": 0.5})
 
         mock_client = MagicMock()
         mock_client.post = capture_post
@@ -224,8 +232,8 @@ class TestEmbedQuerySparse:
 
         # Verify the prefix was applied
         assert captured_payload is not None
-        assert "input" in captured_payload
-        input_text = captured_payload["input"][0]
+        assert "texts" in captured_payload
+        input_text = captured_payload["texts"][0]
         assert input_text.startswith("search: ")
         assert "my search term" in input_text
 
@@ -239,7 +247,7 @@ class TestEmbedQuerySparse:
         async def capture_post(*args, **kwargs):
             nonlocal captured_payload
             captured_payload = kwargs.get("json", args[1] if len(args) > 1 else {})
-            return self._create_mock_response({"sparse": {"1": 0.5}})
+            return self._create_mock_response({"1": 0.5})
 
         mock_client = MagicMock()
         mock_client.post = capture_post
@@ -251,8 +259,8 @@ class TestEmbedQuerySparse:
 
         # Verify the prefix was NOT applied
         assert captured_payload is not None
-        assert "input" in captured_payload
-        input_text = captured_payload["input"][0]
+        assert "texts" in captured_payload
+        input_text = captured_payload["texts"][0]
         assert input_text == "my search term"
 
     async def test_sparse_embedding_uses_correct_endpoint(self):
@@ -264,7 +272,7 @@ class TestEmbedQuerySparse:
         async def capture_post(url, **kwargs):
             nonlocal captured_url
             captured_url = url
-            return self._create_mock_response({"sparse": {"1": 0.5}})
+            return self._create_mock_response({"1": 0.5})
 
         mock_client = MagicMock()
         mock_client.post = capture_post

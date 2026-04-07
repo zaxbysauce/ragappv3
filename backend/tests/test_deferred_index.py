@@ -297,6 +297,7 @@ class TestMaybeCreateVectorIndex(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.embedding_dim = 768
 
                 await self.store._maybe_create_vector_index()
 
@@ -357,6 +358,7 @@ class TestMaybeCreateVectorIndex(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "dot"  # Non-default metric
+                mock_settings.embedding_dim = 768
 
                 await self.store._maybe_create_vector_index()
 
@@ -408,6 +410,7 @@ class TestMaybeCreateVectorIndexLogging(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.embedding_dim = 768
 
                 with patch("app.services.vector_store.logger") as mock_logger:
                     await self.store._maybe_create_vector_index()
@@ -477,6 +480,7 @@ class TestMaybeCreateVectorIndexEdgeCases(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.embedding_dim = 768
 
                 with patch("app.services.vector_store.logger") as mock_logger:
                     # Should NOT raise - should log warning
