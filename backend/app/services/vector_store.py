@@ -519,8 +519,8 @@ class VectorStore:
             combined_filter = " AND ".join(filter_parts)
 
             max_candidates = settings.sparse_search_max_candidates
-            candidates = (
-                await (await self.table.search())
+            candidates = await (
+                self.table.query()
                 .where(combined_filter)
                 .limit(max_candidates)
                 .to_list()
@@ -1300,7 +1300,7 @@ class VectorStore:
 
             # Query chunks where id is in the list of chunk_uids
             query = f"id IN ({uid_list})"
-            results = await (await self.table.search()).where(query).to_list()
+            results = await self.table.query().where(query).to_list()
 
             return results
         except (OSError, RuntimeError, ValueError) as e:
