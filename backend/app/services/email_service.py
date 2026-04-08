@@ -548,6 +548,7 @@ class EmailIngestionService:
             'text/css': '.css',
             'application/xml': '.xml',
             'application/x-yaml': '.yaml',
+            'text/x-log': '.log',
         }
         ext = ext_map.get(content_type, '.bin')
 

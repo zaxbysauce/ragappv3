@@ -258,6 +258,7 @@ class Settings(BaseSettings):
         "text/css",
         "application/xml",
         "application/x-yaml",
+        "text/x-log",
         "application/vnd.ms-excel",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     }
