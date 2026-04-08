@@ -247,13 +247,6 @@ export default function DocumentsPage() {
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     onDropRejected,
-    accept: {
-      'application/pdf': ['.pdf'],
-      'text/plain': ['.txt'],
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
-      'application/msword': ['.doc'],
-      'text/markdown': ['.md'],
-    },
     maxSize: MAX_FILE_SIZE,
   });
 
