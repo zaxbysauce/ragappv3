@@ -219,6 +219,8 @@ class Settings(BaseSettings):
         ".pdf",
         ".docx",
         ".csv",
+        ".xls",
+        ".xlsx",
         ".json",
         ".sql",
         ".py",
@@ -255,6 +257,8 @@ class Settings(BaseSettings):
         "text/css",
         "application/xml",
         "application/x-yaml",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     }
 
     # CORS settings

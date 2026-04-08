@@ -15,6 +15,8 @@ from datetime import datetime, UTC
 from pathlib import Path
 from typing import List, Any, Optional, Tuple
 
+import pandas as pd
+
 from ..config import settings
 from ..models.database import SQLiteConnectionPool, get_pool
 from ..utils.file_utils import compute_file_hash
@@ -109,6 +111,129 @@ class DocumentParser:
             ) from e
 
 
+class SpreadsheetParser:
+    """
+    Parser for CSV, XLS, and XLSX spreadsheet files.
+
+    Converts tabular data into RAG-ready text chunks. Each chunk covers a
+    configurable number of rows and always includes the column header line
+    as context, so retrieved chunks are self-contained without needing
+    surrounding rows for interpretation.
+
+    Sheet name and column list are prepended to every chunk so the LLM
+    can orient itself when answering questions about the data.
+    """
+
+    # Number of data rows per chunk. Tune lower for wide sheets (many columns),
+    # higher for narrow sheets. 50 rows * ~5 cols * ~15 chars ≈ ~3750 chars,
+    # safely under a 2000-char chunk_size_chars default with header overhead.
+    ROWS_PER_CHUNK: int = 50
+
+    def parse(self, file_path: str) -> List[dict]:
+        """
+        Parse a spreadsheet file and return a list of chunk dicts.
+
+        Each returned dict has the structure:
+            {
+                "text": str,        # RAG-ready text block for this chunk
+                "metadata": dict,   # Sheet name, row range, column count, etc.
+            }
+
+        Args:
+            file_path: Absolute or relative path to the .csv, .xls, or .xlsx file.
+
+        Returns:
+            List of chunk dicts. Returns an empty list if the file has no
+            readable data (empty sheets are skipped, not errored).
+
+        Raises:
+            FileNotFoundError: If the file does not exist.
+            DocumentParseError: If pandas fails to read the file.
+        """
+        path = Path(file_path)
+        if not path.exists():
+            raise FileNotFoundError(f"Spreadsheet file not found: {file_path}")
+
+        ext = path.suffix.lower()
+
+        try:
+            if ext == ".csv":
+                # Single-sheet: wrap in dict to unify the loop below
+                df = pd.read_csv(file_path, dtype=str).fillna("")
+                sheets: dict = {"Sheet1": df}
+            elif ext in {".xls", ".xlsx"}:
+                xf = pd.ExcelFile(file_path)
+                sheets = {
+                    name: xf.parse(name, dtype=str).fillna("")
+                    for name in xf.sheet_names
+                }
+            else:
+                raise DocumentParseError(
+                    f"SpreadsheetParser received unsupported extension '{ext}'. "
+                    f"Expected .csv, .xls, or .xlsx."
+                )
+        except DocumentParseError:
+            raise
+        except Exception as e:
+            raise DocumentParseError(
+                f"Failed to read spreadsheet '{file_path}': {e}"
+            ) from e
+
+        chunks: List[dict] = []
+
+        for sheet_name, df in sheets.items():
+            if df.empty:
+                logger.debug(
+                    "Skipping empty sheet '%s' in '%s'", sheet_name, file_path
+                )
+                continue
+
+            headers = list(df.columns)
+            header_str = " | ".join(str(h) for h in headers)
+            total_rows = len(df)
+
+            for start in range(0, total_rows, self.ROWS_PER_CHUNK):
+                batch = df.iloc[start : start + self.ROWS_PER_CHUNK]
+                rows_text_lines = []
+
+                for _, row in batch.iterrows():
+                    # Only include cells that have non-empty values to keep
+                    # chunks compact. The header line already names every column.
+                    row_parts = [
+                        f"{col}: {val}"
+                        for col, val in zip(headers, row)
+                        if str(val).strip()
+                    ]
+                    if row_parts:
+                        rows_text_lines.append(" | ".join(row_parts))
+
+                if not rows_text_lines:
+                    # All rows in this batch were entirely empty — skip
+                    continue
+
+                chunk_text = (
+                    f"Sheet: {sheet_name}\n"
+                    f"Columns: {header_str}\n\n"
+                    + "\n".join(rows_text_lines)
+                )
+
+                chunks.append(
+                    {
+                        "text": chunk_text,
+                        "metadata": {
+                            "sheet_name": sheet_name,
+                            "row_start": start,
+                            "row_end": start + len(batch) - 1,
+                            "total_rows": total_rows,
+                            "column_count": len(headers),
+                            "source_type": "spreadsheet",
+                        },
+                    }
+                )
+
+        return chunks
+
+
 class DocumentProcessor:
     """
     Orchestrates document processing with status tracking and deduplication.
@@ -119,6 +244,9 @@ class DocumentProcessor:
 
     # File extensions that should use SchemaParser instead of DocumentParser
     SCHEMA_EXTENSIONS = {".sql", ".ddl"}
+
+    # File extensions that should use SpreadsheetParser
+    SPREADSHEET_EXTENSIONS = {".csv", ".xls", ".xlsx"}
 
     def __init__(
         self,
@@ -147,6 +275,7 @@ class DocumentProcessor:
             chunk_size_chars=chunk_size_chars, chunk_overlap_chars=chunk_overlap_chars
         )
         self.schema_parser = SchemaParser()
+        self.spreadsheet_parser = SpreadsheetParser()
         # Fallback to creating a pool from settings if not provided
         if pool is None:
             pool = get_pool(str(settings.sqlite_path), max_size=2)
@@ -405,6 +534,64 @@ class DocumentProcessor:
         """
         return Path(file_path).suffix.lower() in self.SCHEMA_EXTENSIONS
 
+    def _is_spreadsheet_file(self, file_path: str) -> bool:
+        """
+        Check if a file should be processed as a spreadsheet.
+
+        Args:
+            file_path: Path to the file.
+
+        Returns:
+            True if the file has a spreadsheet extension (.csv, .xls, .xlsx).
+        """
+        return Path(file_path).suffix.lower() in self.SPREADSHEET_EXTENSIONS
+
+    async def _process_spreadsheet_file(self, file_path: str) -> List[ProcessedChunk]:
+        """
+        Process a spreadsheet file using SpreadsheetParser.
+
+        Runs the synchronous SpreadsheetParser.parse() in a thread pool to
+        avoid blocking the event loop on large files.
+
+        Args:
+            file_path: Path to the .csv, .xls, or .xlsx file.
+
+        Returns:
+            List of ProcessedChunk objects, one per row-group per sheet.
+
+        Raises:
+            DocumentParseError: If SpreadsheetParser.parse() raises.
+            DocumentProcessingError: If the file parses but produces no chunks
+                (e.g., all sheets are empty).
+        """
+        sheet_chunks = await asyncio.to_thread(
+            self.spreadsheet_parser.parse, file_path
+        )
+
+        if not sheet_chunks:
+            raise DocumentProcessingError(
+                f"Spreadsheet '{file_path}' contains no readable data. "
+                "All sheets may be empty or all rows may be blank."
+            )
+
+        processed_chunks: List[ProcessedChunk] = []
+        total = len(sheet_chunks)
+
+        for idx, chunk_data in enumerate(sheet_chunks):
+            chunk = ProcessedChunk(
+                text=chunk_data["text"],
+                metadata={
+                    **chunk_data["metadata"],
+                    "chunk_index": idx,
+                    "total_chunks": total,
+                    "chunk_scale": "default",  # Spreadsheet files bypass multi-scale
+                },
+                chunk_index=idx,
+            )
+            processed_chunks.append(chunk)
+
+        return processed_chunks
+
     async def _process_schema_file(self, file_path: str) -> List[ProcessedChunk]:
         """
         Process a schema file using SchemaParser.
@@ -571,6 +758,9 @@ class DocumentProcessor:
             if self._is_schema_file(file_path):
                 chunks = await self._process_schema_file(file_path)
                 document_text = ""
+            elif self._is_spreadsheet_file(file_path):
+                chunks = await self._process_spreadsheet_file(file_path)
+                document_text = " ".join(c.text for c in chunks)
             else:
                 chunks, document_text = await self._process_document_file(
                     file_path, file_id
