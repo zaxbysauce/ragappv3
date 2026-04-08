@@ -766,11 +766,14 @@ class DocumentProcessor:
                     file_path, file_id
                 )
 
+            # Define source_filename here so it is available to both contextual
+            # chunking and chunk enrichment below, regardless of which branches run.
+            source_filename = Path(file_path).name
+
             # Apply contextual chunking if enabled
             if settings.contextual_chunking_enabled and chunks and document_text:
                 chunker = self._get_contextual_chunker()
                 if chunker is not None:
-                    source_filename = Path(file_path).name
                     logger.info(
                         "Contextual chunking: processing %d chunks for %s",
                         len(chunks),

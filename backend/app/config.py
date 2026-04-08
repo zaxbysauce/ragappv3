@@ -231,6 +231,7 @@ class Settings(BaseSettings):
         ".xml",
         ".yaml",
         ".yml",
+        ".log",
     }
 
     # IMAP Email Ingestion configuration
