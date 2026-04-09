@@ -218,7 +218,7 @@ cd /Users/YourName/RAGAPPv2
 1. Open your web browser (Chrome, Firefox, Safari, or Edge)
 2. Type this in the address bar:
    ```
-   http://localhost:8080
+   http://localhost:9090
    ```
 3. Press Enter
 4. KnowledgeVault should load
@@ -295,7 +295,7 @@ To view saved memories:
 
 - [ ] Open Docker Desktop
 - [ ] Verify Ollama is running (type `ollama list` in terminal)
-- [ ] Open browser to http://localhost:8080
+- [ ] Open browser to http://localhost:9090
 
 ### Shutting Down KnowledgeVault
 
@@ -405,8 +405,8 @@ If you encounter problems:
 
 | Service | URL |
 |---------|-----|
-| KnowledgeVault | http://localhost:8080 |
-| API Documentation | http://localhost:8080/docs |
+| KnowledgeVault | http://localhost:9090 |
+| API Documentation | http://localhost:9090/docs |
 
 ### Supported File Types
 

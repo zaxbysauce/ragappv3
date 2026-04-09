@@ -37,7 +37,7 @@ KnowledgeVault enables you to:
 ```
 +------------------+     +------------------+     +------------------+
 |   React Frontend |---->|  FastAPI Backend |---->|   LanceDB Vector |
-|   (Port 5173*)   |     |   (Port 8080)    |     |   Store          |
+|   (Port 5173*)   |     |   (Port 9090)    |     |   Store          |
 +------------------+     +------------------+     +------------------+
                                |                           |
                                |                    +------v------+
@@ -175,7 +175,7 @@ docker compose up -d
 
 ### 5. Access the Application
 
-Open your browser to: `http://localhost:8080`
+Open your browser to: `http://localhost:9090`
 
 On first launch, you'll be redirected to the **Setup Wizard** (`/setup`) to create the initial superadmin account. After setup, log in with your credentials.
 
@@ -187,7 +187,7 @@ On first launch, you'll be redirected to the **Setup Wizard** (`/setup`) to crea
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PORT` | 8080 | Web server port |
+| `PORT` | 9090 | Web server port |
 | `HOST_DATA_DIR` | ./data | Host path for data persistence |
 | `DATA_DIR` | /app/data | Container data path |
 | `OLLAMA_EMBEDDING_URL` | http://harrier-embed:8080/v1/embeddings | Embedding service endpoint (TEI) |
@@ -456,9 +456,9 @@ docker compose logs knowledgevault
 
 ### API Documentation
 
-Interactive API docs available at: `http://localhost:8080/docs`
+Interactive API docs available at: `http://localhost:9090/docs`
 
-OpenAPI schema: `http://localhost:8080/openapi.json`
+OpenAPI schema: `http://localhost:9090/openapi.json`
 
 ### Source Citations
 
