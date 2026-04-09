@@ -848,28 +848,9 @@ class DocumentProcessor:
                     # Extract texts from chunks
                     texts = [c.text for c in chunks]
 
-                    # Check if tri-vector embeddings are supported
-                    use_tri_vector = (
-                        await self.embedding_service.detect_tri_vector_support()
-                    )
-                    logger.debug("Tri-vector embedding support: result=%s", use_tri_vector)
-                    if use_tri_vector:
-                        logger.info(
-                            "Tri-vector embedding enabled: generating dense + sparse vectors"
-                        )
-                        # Generate tri-vector embeddings (dense + sparse + colbert)
-                        tri_vectors = await self.embedding_service.embed_multi(texts)
-                        # Validate tri-vectors count matches chunks count
-                        if len(tri_vectors) != len(chunks):
-                            raise DocumentProcessingError(
-                                f"Tri-vector embedding count mismatch: expected {len(chunks)}, got {len(tri_vectors)}"
-                            )
-                        embeddings = [tv["dense"] for tv in tri_vectors]
-                        sparse_embeddings = [tv.get("sparse") for tv in tri_vectors]
-                    else:
-                        # Generate standard embeddings (dense only)
-                        embeddings = await self.embedding_service.embed_batch(texts)
-                        sparse_embeddings = [None] * len(chunks)
+                    # Generate dense embeddings (Harrier dense-only)
+                    embeddings = await self.embedding_service.embed_batch(texts)
+                    sparse_embeddings = [None] * len(chunks)
 
                     # Validate embeddings count matches chunks count
                     if len(embeddings) != len(chunks):
@@ -931,12 +912,6 @@ class DocumentProcessor:
                                 )
                                 record["sparse_embedding"] = None
                         records.append(record)
-
-                    # Log tri-vector usage
-                    if use_tri_vector:
-                        logger.info(
-                            f"Tri-vector embedding: stored {len(records)} chunks with sparse vectors"
-                        )
 
                     # Initialize vector table with embedding dimension and add chunks
                     embedding_dim = len(embeddings[0])

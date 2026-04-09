@@ -25,15 +25,15 @@ class Settings(BaseSettings):
     data_dir: Path = Path("./data")
 
     # Ollama configuration
-    ollama_embedding_url: str = "http://host.docker.internal:11434"
+    ollama_embedding_url: str = "http://harrier-embed:8080/v1/embeddings"
     ollama_chat_url: str = "http://host.docker.internal:11434"
 
     # Model configuration
-    embedding_model: str = "nomic-embed-text"
+    embedding_model: str = "microsoft/harrier-oss-v1-0.6b"
     chat_model: str = "gemma-4-26b-a4b-it-apex"
 
     # Embedding dimension (auto-detected from model, but can be overridden)
-    embedding_dim: int = 768
+    embedding_dim: int = 1024
 
     # Document processing configuration (character-based - NEW)
     chunk_size_chars: int | None = None
@@ -78,7 +78,7 @@ class Settings(BaseSettings):
     """Enable cross-encoder reranking after vector retrieval."""
     reranker_top_n: int = 7
     """Number of chunks to keep after reranking."""
-    initial_retrieval_top_k: int = 25
+    initial_retrieval_top_k: int = 20
     """Chunks fetched from vector store BEFORE reranking."""
 
     # ── Hybrid search configuration ─────────────────────────────────────────
@@ -133,10 +133,10 @@ class Settings(BaseSettings):
 
     # ── Sparse search configuration ──────────────────────────────────
     sparse_search_max_candidates: int = 1000
-    """Maximum candidate records to scan during learned sparse dot-product search."""
+    """Deprecated: Sparse search removed. Field retained for config compatibility."""
 
     sparse_embedding_timeout: float = 2.0
-    """Timeout in seconds for sparse embedding API calls. Previous default of 0.2s was too aggressive."""
+    """Deprecated: Sparse embedding removed. Field retained for config compatibility."""
 
     # ── Retrieval recency configuration ──────────────────────────
     retrieval_recency_weight: float = 0.1
@@ -145,11 +145,11 @@ class Settings(BaseSettings):
     recency_decay_lambda: float = 0.001
     """Exponential decay rate (lambda) for recency scoring. Higher values decay faster."""
 
-    # ── Tri-vector embedding configuration (BGE-M3) ────────────────────────────
-    tri_vector_search_enabled: bool = True
-    """Enable BGE-M3 tri-vector embeddings (dense + sparse). Requires FlagEmbedding server."""
-    flag_embedding_url: str = "http://embedding-server:18080"
-    """URL of the FlagEmbedding server for BGE-M3 tri-vector embeddings."""
+    # ── Tri-vector embedding configuration (deprecated) ───────────────────────
+    tri_vector_search_enabled: bool = False
+    """Deprecated: BGE-M3 replaced by Harrier. Field retained for config compatibility."""
+    flag_embedding_url: str = ""
+    """Deprecated: FlagEmbedding server removed. Field retained for config compatibility."""
 
     # ── Chunk enrichment / curator configuration ───────────────────────────
     chunk_enrichment_enabled: bool = True
@@ -161,7 +161,7 @@ class Settings(BaseSettings):
 
     # ── Retrieval profile configuration ──────────────────────────────────
     retrieval_profile: str = "advanced"
-    """Retrieval profile: 'baseline' (dense + hybrid + rerank), 'advanced' (adds tri-vector + enrichment)."""
+    """Retrieval profile: 'baseline' (dense + hybrid + rerank), 'advanced' (adds enrichment)."""
 
     # Document processing configuration (legacy - DEPRECATED)
     chunk_size: int | None = None
@@ -493,9 +493,12 @@ class Settings(BaseSettings):
 
     @property
     def effective_embedding_doc_prefix(self) -> str:
-        """Effective document prefix for embedding. BGE-M3 doesn't use prefixes."""
+        """Effective document prefix for embedding. Harrier and BGE-M3 don't use prefixes."""
         if self.embedding_doc_prefix:
             return self.embedding_doc_prefix
+        # Harrier base model: symmetric retrieval — no prefix needed
+        if "harrier" in self.embedding_model.lower():
+            return ""
         # Auto-apply Qwen3 instruction prefix only for Qwen models
         if "qwen" in self.embedding_model.lower():
             return "Instruct: Represent this technical documentation passage for retrieval.\nDocument: "
@@ -503,9 +506,12 @@ class Settings(BaseSettings):
 
     @property
     def effective_embedding_query_prefix(self) -> str:
-        """Effective query prefix for embedding. BGE-M3 doesn't use prefixes."""
+        """Effective query prefix for embedding. Harrier and BGE-M3 don't use prefixes."""
         if self.embedding_query_prefix:
             return self.embedding_query_prefix
+        # Harrier base model: symmetric retrieval — no prefix needed
+        if "harrier" in self.embedding_model.lower():
+            return ""
         if "qwen" in self.embedding_model.lower():
             return (
                 "Instruct: Retrieve relevant technical documentation passages.\nQuery: "

@@ -1,54 +1,112 @@
 services:
+
+  # Harrier Embedding Server (replaces flag-embed-server)
+  harrier-embed:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest
+    # For NVIDIA GPU: swap to :1.5-gpu and uncomment deploy block below
+    container_name: harrier-embed
+    restart: unless-stopped
+    command: --model-id microsoft/harrier-oss-v1-0.6b --port 8080 --max-batch-tokens 16384
+    ports:
+      - "8080:8080"
+    volumes:
+      - harrier-model-cache:/data
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  # Reranker Server (bge-reranker-v2-m3 via TEI)
+  reranker:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest
+    container_name: reranker
+    restart: unless-stopped
+    command: --model-id BAAI/bge-reranker-v2-m3 --port 8081 --max-batch-tokens 8192
+    ports:
+      - "8081:8081"
+    volumes:
+      - reranker-model-cache:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    container_name: knowledgevault_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # KnowledgeVault (backend + frontend, combined image)
   knowledgevault:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: knowledgevault
+    restart: unless-stopped
     ports:
-      - "${PORT:-8080}:8080"
+      - "${PORT:-9090}:9090"
     volumes:
       - ${HOST_DATA_DIR:-./data}:/app/data
     environment:
       - DATA_DIR=/app/data
-      - OLLAMA_EMBEDDING_URL=${OLLAMA_EMBEDDING_URL:-http://flag-embed:18080/v1/embeddings}
+      - OLLAMA_EMBEDDING_URL=http://harrier-embed:8080/v1/embeddings
       - OLLAMA_CHAT_URL=${OLLAMA_CHAT_URL:-http://host.docker.internal:11434}
-      - FLAG_EMBEDDING_URL=${FLAG_EMBEDDING_URL:-http://flag-embed:18080}
-      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-bge-m3}
-      - CHAT_MODEL=${CHAT_MODEL:-qwen3:8b}
-      - RERANKER_URL=${RERANKER_URL:-}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-microsoft/harrier-oss-v1-0.6b}
+      - EMBEDDING_DIM=${EMBEDDING_DIM:-1024}
+      - CHAT_MODEL=${CHAT_MODEL:-gemma-4-26b-a4b-it-apex}
+      - RERANKER_URL=http://reranker:8081
       - RERANKER_MODEL=${RERANKER_MODEL:-BAAI/bge-reranker-v2-m3}
       - RERANKING_ENABLED=${RERANKING_ENABLED:-true}
-      - RERANKER_TOP_N=${RERANKER_TOP_N:-5}
+      - RERANKER_TOP_N=${RERANKER_TOP_N:-7}
       - INITIAL_RETRIEVAL_TOP_K=${INITIAL_RETRIEVAL_TOP_K:-20}
       - HYBRID_SEARCH_ENABLED=${HYBRID_SEARCH_ENABLED:-true}
-      - HYBRID_ALPHA=${HYBRID_ALPHA:-0.5}
+      - HYBRID_ALPHA=${HYBRID_ALPHA:-0.6}
+      - TRI_VECTOR_SEARCH_ENABLED=false
+      - FLAG_EMBEDDING_URL=
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - ADMIN_SECRET_TOKEN=${ADMIN_SECRET_TOKEN}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-change-me-to-a-random-64-char-string}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - TRI_VECTOR_SEARCH_ENABLED=${TRI_VECTOR_SEARCH_ENABLED:-true}
     extra_hosts:
       - "host.docker.internal:host-gateway"
-      - "flag-embed:host-gateway"
-    restart: unless-stopped
     depends_on:
+      harrier-embed:
+        condition: service_healthy
+      reranker:
+        condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; exit(0 if urllib.request.urlopen('http://localhost:8080/health').getcode() == 200 else 1)\""]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; exit(0 if urllib.request.urlopen('http://localhost:9090/health').getcode() == 200 else 1)\""]
       interval: 30s
       timeout: 10s
       retries: 3
 
-  redis:
-    image: redis:7-alpine
-    container_name: knowledgevault_redis
-    restart: unless-stopped
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-
 volumes:
+  harrier-model-cache:
+  reranker-model-cache:
   redis_data:
