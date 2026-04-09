@@ -123,7 +123,7 @@ class VectorStore:
                 (
                     "sparse_embedding",
                     pa.string(),
-                ),  # JSON string for sparse vectors (BGE-M3)
+                ),  # JSON string for sparse vectors — retained for schema compat (unused post-Harrier migration)
                 ("metadata", pa.string()),  # JSON string for flexibility
                 ("embedding", pa.list_(pa.float32(), embedding_dim)),
             ]
@@ -323,7 +323,7 @@ class VectorStore:
                 "chunk_scale": record.get("chunk_scale", "default"),  # Scale label
                 "sparse_embedding": record.get(
                     "sparse_embedding"
-                ),  # JSON string for sparse vectors
+                ),  # Retained for schema compat — unused post-Harrier migration
                 "metadata": record.get("metadata", "{}"),
                 "embedding": embedding,
             }

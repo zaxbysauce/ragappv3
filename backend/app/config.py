@@ -85,7 +85,7 @@ class Settings(BaseSettings):
     hybrid_search_enabled: bool = True
     """Combine BM25 keyword search with dense vector search using RRF fusion."""
     hybrid_alpha: float = 0.6
-    """Weight for dense vs sparse scores in RRF. 0.0 = pure BM25, 1.0 = pure dense."""
+    """Weight for dense vs BM25 scores in RRF. 0.0 = pure BM25, 1.0 = pure dense."""
 
     # ── Contextual chunking configuration ─────────────────────────────────────
     contextual_chunking_enabled: bool = True

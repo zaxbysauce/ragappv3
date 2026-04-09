@@ -45,8 +45,8 @@ export function ModelConnectionSettings({
               </p>
             )}
             <p id="ollama_embedding_url-desc" className="text-xs text-muted-foreground">
-              URL for the embedding model service (e.g., Ollama, FlagEmbedding, OpenAI-compatible).
-              Examples: http://localhost:11434 or http://flag-embed:18080/v1/embeddings
+              URL for the embedding model service (e.g., HuggingFace TEI, Ollama, OpenAI-compatible).
+              Examples: http://harrier-embed:8080/v1/embeddings (TEI) or http://localhost:11434 (Ollama)
             </p>
           </div>
 
@@ -138,8 +138,8 @@ export function ModelConnectionSettings({
               </p>
             )}
             <p id="embedding_model-desc" className="text-xs text-muted-foreground">
-              Model used for generating document embeddings. Examples: nomic-embed-text, bge-m3,
-              mxbai-embed-large
+              Model used for generating document embeddings. Examples: microsoft/harrier-oss-v1-0.6b,
+              nomic-embed-text, mxbai-embed-large
             </p>
           </div>
 
