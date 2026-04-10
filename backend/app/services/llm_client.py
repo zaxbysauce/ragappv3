@@ -266,8 +266,13 @@ class LLMClient:
         except httpx.HTTPStatusError as e:
             async with llm_cb._lock:
                 llm_cb.record_failure()
+            # Read response content first to avoid ResponseNotRead error in streaming context
+            try:
+                response_text = (await e.response.aread()).decode('utf-8', errors='replace')
+            except Exception:
+                response_text = "<unable to read response>"
             raise LLMError(
-                f"HTTP error {e.response.status_code}: {e.response.text}"
+                f"HTTP error {e.response.status_code}: {response_text}"
             ) from e
         except httpx.RequestError as e:
             async with llm_cb._lock:
