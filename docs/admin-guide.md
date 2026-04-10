@@ -240,7 +240,7 @@ find /data/knowledgevault -type f -exec ls -lh {} \; | sort -k5 -hr | head -20
 
 4. Verify health:
    ```bash
-   curl http://localhost:8080/health
+   curl http://localhost:9090/health
    ```
 
 ### Updating Ollama Models
@@ -250,11 +250,13 @@ List available updates:
 ollama list
 ```
 
-Update a model:
+Update a chat model:
 ```bash
-ollama pull nomic-embed-text
 ollama pull qwen2.5:32b
 ```
+
+Note: The embedding service (Harrier TEI) is managed by docker-compose and updates via `docker compose pull`.
+
 
 Remove old model versions:
 ```bash
@@ -286,7 +288,7 @@ docker image prune -a
 
 Check service health:
 ```bash
-curl http://localhost:8080/health
+curl http://localhost:9090/health
 ```
 
 Expected response:
@@ -328,7 +330,7 @@ curl http://localhost:11434/api/tags
 ```bash
 #!/bin/bash
 
-HEALTH_URL="http://localhost:8080/health"
+HEALTH_URL="http://localhost:9090/health"
 WEBHOOK_URL="https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
 
 response=$(curl -s -o /dev/null -w "%{http_code}" $HEALTH_URL)
@@ -481,10 +483,10 @@ Task Manager  # Windows
 **Response Times:**
 ```bash
 # Time API response
-time curl http://localhost:8080/health
+time curl http://localhost:9090/health
 
 # Load test
-ab -n 100 -c 10 http://localhost:8080/health
+ab -n 100 -c 10 http://localhost:9090/health
 ```
 
 ---
@@ -510,7 +512,7 @@ server {
     auth_basic_user_file /etc/nginx/.htpasswd;
     
     location / {
-        proxy_pass http://localhost:8080;
+        proxy_pass http://localhost:9090;
     }
 }
 ```
@@ -537,7 +539,7 @@ Upload restrictions are configured in the application. Monitor for:
 - Example with Caddy:
 ```
 knowledgevault.example.com {
-    reverse_proxy localhost:8080
+    reverse_proxy localhost:9090
 }
 ```
 
@@ -655,7 +657,7 @@ docker compose restart
 docker compose logs -f
 
 # Check health
-curl http://localhost:8080/health
+curl http://localhost:9090/health
 
 # Backup
 tar -czf backup.tar.gz /data/knowledgevault .env
@@ -678,4 +680,4 @@ docker compose pull && docker compose up -d
 
 - Main README: `README.md`
 - Setup Guide: `docs/non-technical-setup.md`
-- API Docs: `http://localhost:8080/docs`
+- API Docs: `http://localhost:9090/docs`

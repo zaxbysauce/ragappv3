@@ -39,6 +39,6 @@ COPY --from=frontend-builder /app/frontend/dist ./static
 # Create data directory
 RUN mkdir -p /data/knowledgevault
 
-EXPOSE 8080
+EXPOSE 9090
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "9090"]

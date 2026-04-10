@@ -89,14 +89,14 @@ This model helps understand your documents.
 
 **[SCREENSHOT PLACEHOLDER: Terminal showing model download]**
 
+The embedding service (Harrier) is automatically downloaded and started by Docker Compose on first launch — you do not need to install it manually.
+
 1. Open your terminal/command prompt
-2. Type this command exactly:
+2. Start KnowledgeVault and Harrier will download automatically:
    ```
-   ollama pull nomic-embed-text
+   docker compose up -d
    ```
-3. Press Enter
-4. Wait for the download to complete (about 500MB)
-5. You will see progress bars as it downloads
+3. The first startup may take a few minutes while Harrier (~1.2GB) downloads
 
 #### Model 2: Chat Model (Choose One)
 
@@ -218,7 +218,7 @@ cd /Users/YourName/RAGAPPv2
 1. Open your web browser (Chrome, Firefox, Safari, or Edge)
 2. Type this in the address bar:
    ```
-   http://localhost:8080
+   http://localhost:9090
    ```
 3. Press Enter
 4. KnowledgeVault should load
@@ -295,7 +295,7 @@ To view saved memories:
 
 - [ ] Open Docker Desktop
 - [ ] Verify Ollama is running (type `ollama list` in terminal)
-- [ ] Open browser to http://localhost:8080
+- [ ] Open browser to http://localhost:9090
 
 ### Shutting Down KnowledgeVault
 
@@ -405,8 +405,8 @@ If you encounter problems:
 
 | Service | URL |
 |---------|-----|
-| KnowledgeVault | http://localhost:8080 |
-| API Documentation | http://localhost:8080/docs |
+| KnowledgeVault | http://localhost:9090 |
+| API Documentation | http://localhost:9090/docs |
 
 ### Supported File Types
 
@@ -427,12 +427,12 @@ If you encounter problems:
 
 - [ ] Docker Desktop installed and running
 - [ ] Ollama installed and running
-- [ ] nomic-embed-text model downloaded
+- [ ] Harrier embedding service started (auto-configured via docker-compose)
 - [ ] Chat model downloaded (llama3.2 or qwen2.5:32b)
 - [ ] KnowledgeVault files extracted
 - [ ] .env file configured with correct paths
 - [ ] KnowledgeVault started with `docker compose up -d`
-- [ ] Web interface accessible at http://localhost:8080
+- [ ] Web interface accessible at http://localhost:9090
 - [ ] Test document uploaded successfully
 - [ ] Test question answered successfully
 
