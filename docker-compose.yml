@@ -79,7 +79,6 @@ services:
       - ${HOST_DATA_DIR:-./data}:/app/data
     environment:
       - DATA_DIR=/app/data
-      - UVICORN_RELOAD=false
       - OLLAMA_EMBEDDING_URL=http://harrier-embed:8080/v1/embeddings
       - OLLAMA_CHAT_URL=${OLLAMA_CHAT_URL:-http://host.docker.internal:11434}
       - EMBEDDING_MODEL=${EMBEDDING_MODEL:-microsoft/harrier-oss-v1-0.6b}
@@ -101,6 +100,10 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
+      harrier-embed:
+        condition: service_healthy
+      reranker:
+        condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
