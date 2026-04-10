@@ -423,19 +423,23 @@ class VectorStore:
             )
             fts_results = []
 
-        # RRF Fusion for this scale
+        # RRF Fusion for this scale with hybrid_alpha weighting
         k_rrf = 60
         rrf_scores: dict = {}
         id_to_record: dict = {}
 
+        # Apply hybrid_alpha weighting to dense and FTS contributions
+        dense_weight = hybrid_alpha
+        fts_weight = 1.0 - hybrid_alpha
+
         for rank, record in enumerate(dense_results):
             uid = record.get("id", f"dense_{rank}")
-            rrf_scores[uid] = rrf_scores.get(uid, 0.0) + 1.0 / (k_rrf + rank + 1)
+            rrf_scores[uid] = rrf_scores.get(uid, 0.0) + dense_weight / (k_rrf + rank + 1)
             id_to_record[uid] = record
 
         for rank, record in enumerate(fts_results):
             uid = record.get("id", f"fts_{rank}")
-            rrf_scores[uid] = rrf_scores.get(uid, 0.0) + 1.0 / (k_rrf + rank + 1)
+            rrf_scores[uid] = rrf_scores.get(uid, 0.0) + fts_weight / (k_rrf + rank + 1)
             if uid not in id_to_record:
                 id_to_record[uid] = record
 
@@ -445,6 +449,14 @@ class VectorStore:
             record = dict(id_to_record[uid])
             record["_rrf_score"] = rrf_scores[uid]
             result_list.append(record)
+
+        if hybrid and query_text and (dense_weight > 0.0 and fts_weight > 0.0):
+            logger.debug(
+                f"Multi-scale RRF fusion for scale={scale}: "
+                f"hybrid_alpha={hybrid_alpha:.2f} (dense_weight={dense_weight:.2f}, fts_weight={fts_weight:.2f}), "
+                f"dense_results={len(dense_results)}, fts_results={len(fts_results)}, fused={len(result_list)}"
+            )
+
         return result_list
 
     async def search(
