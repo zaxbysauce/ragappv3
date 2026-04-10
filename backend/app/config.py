@@ -407,6 +407,12 @@ class Settings(BaseSettings):
         """Validate multi_scale_overlap_ratio is in range 0.0-1.0."""
         return cls._validate_float_range(v, 0.0, 1.0, "multi_scale_overlap_ratio")
 
+    @field_validator("hybrid_alpha", mode="after")
+    @classmethod
+    def validate_hybrid_alpha(cls, v: float) -> float:
+        """Validate hybrid_alpha is in range 0.0-1.0."""
+        return cls._validate_float_range(v, 0.0, 1.0, "hybrid_alpha")
+
     @model_validator(mode="after")
     def validate_batch_config_consistency(self) -> "Settings":
         """Validate embedding batch configuration consistency."""
