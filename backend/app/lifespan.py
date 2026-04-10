@@ -127,8 +127,6 @@ def _load_persisted_settings(sqlite_path: str) -> None:
             "hybrid_alpha",
             "reranker_url",
             "reranker_model",
-            "ollama_embedding_url",
-            "ollama_chat_url",
             "embedding_model",
             "chat_model",
             "vector_top_k",
@@ -156,7 +154,9 @@ def _load_persisted_settings(sqlite_path: str) -> None:
                 except Exception as e:
                     logger.warning(f"Failed to restore persisted setting {key}: {e}")
     except sqlite3.OperationalError:
-        logger.debug("Settings table not yet created; skipping persisted settings load (expected on first startup)")
+        logger.debug(
+            "Settings table not yet created; skipping persisted settings load (expected on first startup)"
+        )
     finally:
         conn.close()
 
@@ -178,7 +178,10 @@ async def lifespan(app: FastAPI):
     try:
         run_migrations(str(settings.sqlite_path))
     except Exception as e:
-        logger.error("Database migration failed: %s — app will start with degraded database state", e)
+        logger.error(
+            "Database migration failed: %s — app will start with degraded database state",
+            e,
+        )
     _load_persisted_settings(str(settings.sqlite_path))
 
     # Migrate uploads to per-vault directories (run before accepting requests)
