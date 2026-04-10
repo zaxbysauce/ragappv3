@@ -649,8 +649,10 @@ class VectorStore:
             logger.warning(f"FTS search failed (falling back to dense-only): {e}")
             fts_results = []
 
-        # RRF Fusion using shared utility
-        return rrf_fuse([dense_results, fts_results], k=60, limit=limit)
+        # RRF Fusion with hybrid_alpha weighting
+        # hybrid_alpha: 1.0 = pure dense, 0.0 = pure BM25, 0.5 = equal weight
+        weights = [hybrid_alpha, 1.0 - hybrid_alpha]
+        return rrf_fuse([dense_results, fts_results], k=60, limit=limit, weights=weights)
 
     async def delete_by_file(self, file_id: str) -> int:
         """
