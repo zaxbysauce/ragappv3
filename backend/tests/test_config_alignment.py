@@ -67,9 +67,9 @@ class TestNewConfigFields:
         assert settings.tri_vector_search_enabled is False
 
     def test_flag_embedding_url_default(self):
-        """Test flag_embedding_url defaults to expected URL."""
+        """Test flag_embedding_url defaults to empty string (deprecated post-Harrier migration)."""
         settings = Settings()
-        assert settings.flag_embedding_url == "http://embedding-server:18080"
+        assert settings.flag_embedding_url == ""
 
     def test_multi_scale_indexing_enabled_default_false(self):
         """Test multi_scale_indexing_enabled defaults to False."""

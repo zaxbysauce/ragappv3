@@ -31,10 +31,10 @@ Before deploying KnowledgeVault to production, ensure the following:
   ```bash
   # Required settings
   DATA_DIR=/data/knowledgevault
-  OLLAMA_EMBEDDING_URL=http://host.docker.internal:11434
+  OLLAMA_EMBEDDING_URL=http://harrier-embed:8080/v1/embeddings
   OLLAMA_CHAT_URL=http://host.docker.internal:11434
-  EMBEDDING_MODEL=nomic-embed-text
-  CHAT_MODEL=qwen2.5:32b
+  EMBEDDING_MODEL=microsoft/harrier-oss-v1-0.6b
+  CHAT_MODEL=gemma-4-26b-a4b-it-apex
   
   # Security settings
   ADMIN_SECRET_TOKEN=<secure-random-token>
@@ -263,14 +263,14 @@ done
 #!/bin/bash
 # test-embedding.sh
 
-EMBEDDING_URL="${OLLAMA_EMBEDDING_URL:-http://localhost:11434}/api/embeddings"
-EMBEDDING_MODEL="${EMBEDDING_MODEL:-nomic-embed-text}"
+EMBEDDING_URL="${OLLAMA_EMBEDDING_URL:-http://localhost:8080/v1/embeddings}"
+EMBEDDING_MODEL="${EMBEDDING_MODEL:-microsoft/harrier-oss-v1-0.6b}"
 
 echo "Testing embedding service at $EMBEDDING_URL..."
 
 response=$(curl -s -X POST "$EMBEDDING_URL" \
   -H "Content-Type: application/json" \
-  -d "{\"model\": \"$EMBEDDING_MODEL\", \"prompt\": \"test\"}" \
+  -d "{\"model\": \"$EMBEDDING_MODEL\", \"input\": \"test\"}" \
   -w "\n%{http_code}")
 
 http_code=$(echo "$response" | tail -n1)

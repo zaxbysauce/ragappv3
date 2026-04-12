@@ -37,7 +37,7 @@ KnowledgeVault enables you to:
 ```
 +------------------+     +------------------+     +------------------+
 |   React Frontend |---->|  FastAPI Backend |---->|   LanceDB Vector |
-|   (Port 5173*)   |     |   (Port 8080)    |     |   Store          |
+|   (Port 5173*)   |     |   (Port 9090)    |     |   Store          |
 +------------------+     +------------------+     +------------------+
                                |                           |
                                |                    +------v------+
@@ -47,11 +47,13 @@ KnowledgeVault enables you to:
                                |
                         +------v---------------------------+
                         |  Ollama (External)               |
-                        |  - Embeddings (nomic-embed-text) |
                         |  - Chat (your choice of model)   |
                         +----------------------------------+
+                        |  Harrier TEI (harrier-embed)     |
+                        |  - Embeddings (dense, 1024-dim)  |
+                        +----------------------------------+
 
-*Port 5173 is for development only. Production access is via port 8080.
+*Port 5173 is for development only. In Docker, the backend runs on port 9090.
 ```
 
 ### Backend Structure
@@ -155,12 +157,11 @@ ollama serve
 ollama list
 ```
 
-### 3. Pull Required Models
+### 3. Pull Required Chat Model
+
+The embedding service (Harrier TEI) is pre-configured in `docker-compose.yml` and downloads automatically on first start. You only need to pull the chat model:
 
 ```bash
-# Required: Embedding model
-ollama pull nomic-embed-text
-
 # Required: Chat model (choose one)
 ollama pull qwen2.5:32b    # Recommended for technical content
 ollama pull llama3.2:latest # Lighter alternative
@@ -174,7 +175,7 @@ docker compose up -d
 
 ### 5. Access the Application
 
-Open your browser to: `http://localhost:8080`
+Open your browser to: `http://localhost:9090`
 
 On first launch, you'll be redirected to the **Setup Wizard** (`/setup`) to create the initial superadmin account. After setup, log in with your credentials.
 
@@ -186,13 +187,13 @@ On first launch, you'll be redirected to the **Setup Wizard** (`/setup`) to crea
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PORT` | 8080 | Web server port |
+| `PORT` | 9090 | Web server port |
 | `HOST_DATA_DIR` | ./data | Host path for data persistence |
 | `DATA_DIR` | /app/data | Container data path |
-| `OLLAMA_EMBEDDING_URL` | http://host.docker.internal:11434 | Ollama embedding endpoint |
+| `OLLAMA_EMBEDDING_URL` | http://harrier-embed:8080/v1/embeddings | Embedding service endpoint (TEI) |
 | `OLLAMA_CHAT_URL` | http://host.docker.internal:11434 | Ollama chat endpoint |
-| `EMBEDDING_MODEL` | nomic-embed-text | Embedding model name |
-| `CHAT_MODEL` | qwen2.5:32b | Chat model name |
+| `EMBEDDING_MODEL` | microsoft/harrier-oss-v1-0.6b | Embedding model name |
+| `CHAT_MODEL` | gemma-4-26b-a4b-it-apex | Chat model name |
 | `CHUNK_SIZE_CHARS` | 2000 | Document chunk size in characters (~500 tokens) |
 | `CHUNK_OVERLAP_CHARS` | 200 | Chunk overlap in characters (~50 tokens) |
 | `RETRIEVAL_TOP_K` | 12 | Number of chunks to retrieve for RAG context |
@@ -241,15 +242,11 @@ data/
 
 #### Embedding Model
 
-**nomic-embed-text** (Required)
-- 768 dimensions
-- 2048 token context
-- ~0.2GB VRAM
-- Excellent for technical content
-
-```bash
-ollama pull nomic-embed-text
-```
+**microsoft/harrier-oss-v1-0.6b** (via HuggingFace TEI — pre-configured in docker-compose)
+- 1024 dimensions
+- 32K token context
+- Served by the `harrier-embed` TEI service (auto-downloaded on first start)
+- No Ollama required for embeddings
 
 #### Chat Models
 
@@ -265,17 +262,19 @@ ollama pull nomic-embed-text
 ollama pull qwen2.5:32b
 ```
 
-### Verifying Ollama Connection
+### Verifying Connections
 
 ```bash
-# Test Ollama is running
+# Test Ollama (chat) is running
 curl http://localhost:11434/api/tags
 
-# Test embedding model
-curl http://localhost:11434/api/embeddings -d '{
-  "model": "nomic-embed-text",
-  "prompt": "test"
-}'
+# Test Harrier embedding service (TEI)
+curl http://localhost:8080/health
+
+# Test embedding endpoint
+curl http://localhost:8080/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{"model": "microsoft/harrier-oss-v1-0.6b", "input": "test"}'
 ```
 
 ## Troubleshooting
@@ -290,8 +289,9 @@ curl http://localhost:11434/api/embeddings -d '{
 docker info
 
 # Check port availability
-lsof -i :8080  # macOS/Linux
-netstat -ano | findstr :8080  # Windows
+lsof -i :9090  # macOS/Linux (backend)
+lsof -i :8080  # macOS/Linux (harrier-embed)
+netstat -ano | findstr :9090  # Windows
 
 # View logs
 docker compose logs knowledgevault
@@ -456,9 +456,9 @@ docker compose logs knowledgevault
 
 ### API Documentation
 
-Interactive API docs available at: `http://localhost:8080/docs`
+Interactive API docs available at: `http://localhost:9090/docs`
 
-OpenAPI schema: `http://localhost:8080/openapi.json`
+OpenAPI schema: `http://localhost:9090/openapi.json`
 
 ### Source Citations
 

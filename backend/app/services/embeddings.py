@@ -8,7 +8,7 @@ import httpx
 import logging
 from collections import OrderedDict
 from typing import List, Optional
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urlparse
 from app.config import settings
 from app.services.circuit_breaker import embeddings_cb, CircuitBreakerError
 
@@ -114,16 +114,6 @@ class EmbeddingService:
         # Detect provider mode based on URL path
         self.provider_mode, self.embeddings_url = self._detect_provider_mode(base_url)
 
-        # Tri-vector embedding configuration
-        self._tri_vector_enabled = settings.tri_vector_search_enabled
-        self._supports_tri_vector: bool = False  # Lazy-detected via property
-        self._flag_base_url: str | None = None
-
-        if self._tri_vector_enabled:
-            # Use FlagEmbedding URL if tri-vector is enabled
-            self._flag_base_url = settings.flag_embedding_url or base_url
-            self.embeddings_url = urljoin(self._flag_base_url, "/v1/embeddings")
-
         self.timeout = 60.0
 
         # Read embedding prefixes from settings
@@ -147,37 +137,6 @@ class EmbeddingService:
         # LRU cache for embed_single requests (disabled for local models if embedding_url is not set)
         # Cache is enabled when using external embedding services
         self._embed_cache = LRUCache(maxsize=1000)
-
-    async def detect_tri_vector_support(self) -> bool:
-        """
-        Lazy detection - returns True if FlagEmbedding server detected.
-
-        Performs async detection on first access using the persistent async client.
-        """
-        if self._supports_tri_vector:
-            return True
-        if not self._tri_vector_enabled or not self._flag_base_url:
-            return False
-
-        # Run detection asynchronously using the persistent async client (only first time)
-        self._supports_tri_vector = await self._detect_flag_embedding_server_async()
-        if self._supports_tri_vector:
-            logger.info("FlagEmbedding server detected - tri-vector embeddings enabled")
-        else:
-            logger.warning(
-                "Tri-vector enabled but FlagEmbedding server not detected - falling back to dense-only"
-            )
-        return self._supports_tri_vector
-
-    @property
-    def supports_tri_vector(self) -> bool:
-        """
-        Property accessor for cached tri-vector support status.
-
-        Note: This returns the cached value. Call detect_tri_vector_support()
-        to perform the actual detection.
-        """
-        return self._supports_tri_vector
 
     def _detect_provider_mode(self, base_url: str) -> tuple:
         """
@@ -213,33 +172,14 @@ class EmbeddingService:
             # LM Studio default port - use OpenAI mode
             base_url = base_url.rstrip("/") + "/v1/embeddings"
             return ("openai", base_url)
+        elif port == 8080:
+            # TEI default port - use OpenAI mode
+            base_url = base_url.rstrip("/") + "/v1/embeddings"
+            return ("openai", base_url)
         else:
             # Default to Ollama mode
             base_url = base_url.rstrip("/") + "/api/embeddings"
             return ("ollama", base_url)
-
-    async def _detect_flag_embedding_server_async(self) -> bool:
-        """
-        Asynchronously detect if the embedding server is a FlagEmbedding server with tri-vector support.
-
-        Used for lazy detection during initialization.
-
-        Returns:
-            True if FlagEmbedding server detected, False otherwise.
-        """
-        # Type guard: urljoin requires non-None base URL
-        assert self._flag_base_url is not None, (
-            "Flag base URL must be set for tri-vector detection"
-        )
-        try:
-            health_url = urljoin(self._flag_base_url, "/health")
-            response = await self._client.get(health_url, timeout=5.0)
-            if response.status_code == 200:
-                data = response.json()
-                return data.get("supports_sparse", False)
-        except (httpx.TimeoutException, httpx.HTTPError, ValueError, OSError) as e:
-            logger.debug(f"FlagEmbedding detection failed: {e}")
-        return False
 
     def _build_payload(self, text: str) -> dict:
         """
@@ -455,64 +395,6 @@ class EmbeddingService:
             all_embeddings.extend(embeddings)
 
         return all_embeddings
-
-    async def embed_multi(self, texts: List[str]) -> List[dict]:
-        """
-        Generate tri-vector embeddings (dense + sparse + colbert) for multiple texts.
-
-        Args:
-            texts: List of texts to embed
-
-        Returns:
-            List of dicts with keys: 'dense' (list), 'sparse' (dict), 'colbert' (None)
-            If server doesn't support tri-vector, returns dense-only with sparse=None.
-        """
-        # Async detection on first access
-        if not await self.detect_tri_vector_support():
-            # Fall back to dense-only
-            dense_embeddings = await self.embed_batch(texts)
-            return [
-                {"dense": emb, "sparse": None, "colbert": None}
-                for emb in dense_embeddings
-            ]
-
-        # Call FlagEmbedding /embed endpoint
-        try:
-            embed_url = urljoin(self.embeddings_url, "/embed")
-            texts_to_embed = [
-                self.embedding_doc_prefix + t if self.embedding_doc_prefix else t
-                for t in texts
-            ]
-            response = await self._client.post(
-                embed_url,
-                json={
-                    "texts": texts_to_embed,
-                    "return_dense": True,
-                    "return_sparse": True,
-                    "return_colbert_vecs": False,
-                },
-                headers={"Content-Type": "application/json"},
-            )
-            response.raise_for_status()
-            raw = response.json()
-            # Production server (flag-embed-server) returns a dict with
-            # dense_embeddings/sparse_embeddings/colbert_vecs keys.
-            # Dev server returns a list of {dense, sparse, colbert} dicts.
-            if isinstance(raw, dict):
-                dense_list = raw.get("dense_embeddings") or [[] for _ in texts]
-                sparse_list = raw.get("sparse_embeddings") or [None for _ in texts]
-                return [
-                    {
-                        "dense": dense_list[i] if i < len(dense_list) else [],
-                        "sparse": sparse_list[i] if i < len(sparse_list) else None,
-                        "colbert": None,
-                    }
-                    for i in range(len(texts))
-                ]
-            return raw
-        except (httpx.TimeoutException, httpx.HTTPError, ValueError, OSError) as e:
-            logger.error(f"Tri-vector embedding failed: {e}")
-            raise EmbeddingError(f"Failed to generate tri-vector embeddings: {e}")
 
     async def _embed_batch_api(self, texts: List[str]) -> List[List[float]]:
         """
@@ -979,60 +861,6 @@ class EmbeddingService:
             return True
 
         return False
-
-    async def embed_query_sparse(self, text: str) -> dict:
-        """
-        Generate a sparse vector for a single query text using FlagEmbedding /embed endpoint.
-
-        Args:
-            text: Query text to embed.
-
-        Returns:
-            dict mapping token IDs (str) to float weights.
-
-        Raises:
-            EmbeddingError: If the server call fails or returns no sparse vector.
-        """
-        if not self._flag_base_url:
-            raise EmbeddingError(
-                "FlagEmbedding server not configured (flag_embedding_url is empty)"
-            )
-
-        text_to_embed = (
-            (self.embedding_query_prefix + text)
-            if self.embedding_query_prefix
-            else text
-        )
-        try:
-            async with asyncio.timeout(settings.sparse_embedding_timeout):
-                embed_url = urljoin(self._flag_base_url, "/embed")
-                response = await self._client.post(
-                    embed_url,
-                    json={
-                        "texts": [text_to_embed],
-                        "return_dense": False,
-                        "return_sparse": True,
-                        "return_colbert_vecs": False,
-                    },
-                    headers={"Content-Type": "application/json"},
-                )
-                response.raise_for_status()
-                results = response.json()
-                sparse_list = results.get("sparse_embeddings") if isinstance(results, dict) else None
-                sparse = sparse_list[0] if sparse_list else None
-                if not sparse:
-                    raise EmbeddingError(
-                        "FlagEmbedding /embed returned no sparse vector"
-                    )
-                return sparse
-        except asyncio.TimeoutError:
-            raise EmbeddingError(
-                f"Sparse embedding request timed out ({settings.sparse_embedding_timeout}s)"
-            )
-        except EmbeddingError:
-            raise
-        except Exception as e:
-            raise EmbeddingError(f"Failed to generate sparse query vector: {e}") from e
 
     async def close(self) -> None:
         """Close the persistent HTTP client and release connection pool resources.

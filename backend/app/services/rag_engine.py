@@ -210,25 +210,7 @@ class RAGEngine:
             len(query_embeddings[0]) if query_embeddings else "N/A",
         )
 
-        # Generate sparse query vector for learned sparse retrieval (feature-flag gated)
-        query_sparse: Optional[dict] = None
-        if settings.tri_vector_search_enabled:
-            try:
-                query_sparse = await self.embedding_service.embed_query_sparse(
-                    user_input
-                )
-                logger.info(
-                    "Sparse query vector generated: %d tokens", len(query_sparse)
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Sparse query vector generation failed (continuing with dense-only): %s",
-                    exc,
-                )
-                query_sparse = None
-
-        # Per-request alpha: if sparse embedding failed, use pure dense (alpha=1.0)
-        effective_alpha = 1.0 if query_sparse is None else self.hybrid_alpha
+        effective_alpha = self.hybrid_alpha
 
         # Execute retrieval and evaluation
         fallback_reason: Optional[str] = None
@@ -252,7 +234,6 @@ class RAGEngine:
                     query_embeddings,
                     user_input,
                     vault_id,
-                    query_sparse,
                     effective_alpha=effective_alpha,
                 )
                 logger.info(
@@ -359,7 +340,6 @@ class RAGEngine:
         query_embeddings: List[List[float]],
         user_input: str,
         vault_id: Optional[int],
-        query_sparse: Optional[dict] = None,
         effective_alpha: float = 0.6,
     ) -> tuple[List[Dict[str, Any]], Optional[str], str]:
         """Execute vector search and retrieval evaluation.
@@ -399,7 +379,6 @@ class RAGEngine:
                     query_text=user_input,
                     hybrid=self.hybrid_search_enabled,
                     hybrid_alpha=effective_alpha,
-                    query_sparse=query_sparse if i == 0 else None,
                 )
                 for i, embedding in enumerate(query_embeddings)
             ]
