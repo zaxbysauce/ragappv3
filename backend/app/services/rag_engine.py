@@ -225,12 +225,18 @@ class RAGEngine:
         )
 
         eval_result = "CONFIDENT"
+        rerank_success: Optional[bool] = None
+        # Initialize variables that will be set by _execute_retrieval (or fallback values)
+        score_type = "distance"
+        hybrid_status = "disabled"
+        fts_exceptions = 0
+        rerank_status = "disabled"
         if self.maintenance_mode:
             fallback_reason = "RAG index is under maintenance"
             vector_results = []
         else:
             try:
-                vector_results, relevance_hint, eval_result = await self._execute_retrieval(
+                vector_results, relevance_hint, eval_result, rerank_success, score_type, hybrid_status, fts_exceptions, rerank_status = await self._execute_retrieval(
                     query_embeddings,
                     user_input,
                     vault_id,
@@ -246,9 +252,16 @@ class RAGEngine:
             except Exception as exc:
                 fallback_reason = str(exc)
                 vector_results = []
+                rerank_success = None  # Default for fallback case
+                rerank_status = "disabled"  # Default for fallback
+                score_type = "distance"  # Default for fallback
+                hybrid_status = "disabled"  # Default for fallback
+                fts_exceptions = 0  # Default for fallback
 
         # Filter relevant chunks using document retrieval service
-        relevant_chunks = await self.document_retrieval.filter_relevant(vector_results)
+        relevant_chunks = await self.document_retrieval.filter_relevant(
+            vector_results, reranked=rerank_success if rerank_success is not None else False
+        )
         logger.info(
             "[query] After filter_relevant: relevant_chunk_count=%d",
             len(relevant_chunks),
@@ -327,7 +340,7 @@ class RAGEngine:
                 yield chunk
 
         # Yield done message with sources
-        done_msg = self._build_done_message(relevant_chunks, memories)
+        done_msg = self._build_done_message(relevant_chunks, memories, score_type, hybrid_status, fts_exceptions, rerank_status)
         logger.info(
             "[query] Yielding 'done': sources_count=%d, memories_used=%d",
             len(done_msg.get("sources", [])),
@@ -341,7 +354,7 @@ class RAGEngine:
         user_input: str,
         vault_id: Optional[int],
         effective_alpha: float = 0.6,
-    ) -> tuple[List[Dict[str, Any]], Optional[str], str]:
+    ) -> tuple[List[Dict[str, Any]], Optional[str], str, Optional[bool], str, str, int, str]:
         """Execute vector search and retrieval evaluation.
 
         Args:
@@ -350,7 +363,7 @@ class RAGEngine:
             vault_id: Optional vault ID to filter by
 
         Returns:
-            Tuple of (vector_results, relevance_hint, eval_result)
+            Tuple of (vector_results, relevance_hint, eval_result, rerank_success, score_type, hybrid_status, fts_exceptions, rerank_status)
         """
         logger.info(
             "[_execute_retrieval] ENTER: vault_id=%s, top_k=%s, query_embeddings=%d",
@@ -359,6 +372,8 @@ class RAGEngine:
             len(query_embeddings),
         )
         eval_result = "CONFIDENT"
+        rerank_success: Optional[bool] = None
+        fts_exceptions = 0  # Initialize before try in case get_fts_exceptions() raises
         try:
             # Stage 1: Initial retrieval
             fetch_k = (
@@ -458,19 +473,68 @@ class RAGEngine:
             # Stage 2: Reranking (if enabled)
             if self.reranking_enabled and self.reranking_service and vector_results:
                 try:
-                    vector_results = await self.reranking_service.rerank(
+                    reranked_chunks, rerank_success = await self.reranking_service.rerank(
                         query=user_input,
                         chunks=vector_results,
                         top_n=self.reranker_top_n,
                     )
+                    if reranked_chunks:
+                        vector_results = reranked_chunks
                     logger.info(
                         "[_execute_retrieval] After reranking: result_count=%d",
                         len(vector_results),
                     )
                 except Exception as e:
                     logger.warning("Reranking failed, using original results: %s", e)
+                    # rerank_success remains None (unattempted due to exception)
 
-            # Pack context by token budget (feature-flag gated by context_max_tokens > 0)
+            # Determine final rerank_success value
+            # rerank_success is set inside the reranking block (from unpacking)
+            # or remains None if reranking wasn't attempted
+            if not self.reranking_enabled:
+                # Reranking is globally disabled
+                rerank_success = None
+            elif rerank_success is None:
+                # We attempted reranking but exception occurred, so no success value from service
+                rerank_success = None
+            else:
+                # rerank_success is the boolean from the service (True=succeeded, False=fallback)
+                # Keep the value as-is
+                pass
+            logger.debug(
+                "[_execute_retrieval] Rerank success: %s",
+                rerank_success,
+            )
+
+            # Compute score_type from actual rerank_success (not config flag)
+            if rerank_success:
+                score_type = "rerank"
+            else:
+                score_type = "distance"
+
+            # Compute hybrid_status from _fts_status in results
+            if not self.hybrid_search_enabled:
+                hybrid_status = "disabled"
+            else:
+                # Check if any result has _fts_status='ok'
+                has_fts_ok = any(
+                    r.get("_fts_status") == "ok" for r in vector_results
+                )
+                hybrid_status = "both" if has_fts_ok else "dense_only"
+
+            # Get FTS exceptions (call ONCE per query — resets counter)
+            fts_exceptions = self.vector_store.get_fts_exceptions()
+
+            # Compute rerank_status string from rerank_success boolean
+            if rerank_success is True:
+                rerank_status = "ok"
+            elif rerank_success is False:
+                rerank_status = "fallback"
+            else:
+                rerank_status = "disabled"
+
+            return vector_results, final_relevance_hint, eval_result, rerank_success, score_type, hybrid_status, fts_exceptions, rerank_status
+        except Exception as exc:
             if vector_results and settings.context_max_tokens > 0:
                 temp_sources = [
                     RAGSource(
@@ -513,7 +577,7 @@ class RAGEngine:
             vector_results = vector_results[: self.retrieval_top_k]
 
             # Retrieval evaluation (CRAG-style self-evaluation)
-            relevance_hint: Optional[str] = None
+            relevance_hint_eval: Optional[str] = None
             if settings.retrieval_evaluation_enabled and self.llm_client is not None:
                 try:
                     if self._retrieval_evaluator is None:
@@ -527,7 +591,7 @@ class RAGEngine:
                                 "Retrieval evaluation: NO_MATCH for query '%s'",
                                 user_input,
                             )
-                        relevance_hint = "Note: The retrieved documents may not be directly relevant to your query."
+                        relevance_hint_eval = "Note: The retrieved documents may not be directly relevant to your query."
                     elif eval_result == "AMBIGUOUS":
                         if logger.isEnabledFor(logging.DEBUG):
                             logger.debug(
@@ -536,16 +600,37 @@ class RAGEngine:
                             )
                 except Exception as e:
                     logger.warning("Retrieval evaluation failed: %s", e)
+            # Final relevance_hint from evaluation, or None
+            final_relevance_hint = relevance_hint_eval
 
-            return vector_results, relevance_hint, eval_result
-        except Exception as exc:
-            logger.exception(
-                "[_execute_retrieval] UNHANDLED EXCEPTION in retrieval pipeline: %s, query=%.100s, vault_id=%s",
-                type(exc).__name__,
-                user_input,
-                vault_id,
-            )
-            raise
+            # Compute score_type from actual rerank_success (not config flag)
+            if rerank_success:
+                score_type = "rerank"
+            else:
+                score_type = "distance"
+
+            # Compute hybrid_status from _fts_status in results
+            if not self.hybrid_search_enabled:
+                hybrid_status = "disabled"
+            else:
+                # Check if any result has _fts_status='ok'
+                has_fts_ok = any(
+                    r.get("_fts_status") == "ok" for r in vector_results
+                )
+                hybrid_status = "both" if has_fts_ok else "dense_only"
+
+            # FTS exceptions counter was already reset in the normal path above
+            # (line 546). In this exception handler, we don't need to call it again.
+
+            # Compute rerank_status string from rerank_success boolean
+            if rerank_success is True:
+                rerank_status = "ok"
+            elif rerank_success is False:
+                rerank_status = "fallback"
+            else:
+                rerank_status = "disabled"
+
+            return vector_results, final_relevance_hint, eval_result, rerank_success, score_type, hybrid_status, fts_exceptions, rerank_status
 
     async def _stream_llm_response(
         self,
@@ -591,12 +676,20 @@ class RAGEngine:
         self,
         relevant_chunks: List[RAGSource],
         memories: List[Any],
+        score_type: str,
+        hybrid_status: str,
+        fts_exceptions: int,
+        rerank_status: str,
     ) -> Dict[str, Any]:
         """Build the final done message with sources.
 
         Args:
             relevant_chunks: Filtered relevant chunks
             memories: Retrieved memories
+            score_type: Score type used ("rerank" or "distance")
+            hybrid_status: Hybrid search status ("disabled", "dense_only", or "both")
+            fts_exceptions: Number of FTS exceptions encountered
+            rerank_status: Reranking status ("ok", "fallback", or "disabled")
 
         Returns:
             Done message dictionary
@@ -605,9 +698,10 @@ class RAGEngine:
             "max_distance_threshold": self.max_distance_threshold,
             "vector_metric": self.vector_metric,
             "retrieval_top_k": self.retrieval_top_k,
+            "hybrid_status": hybrid_status,
+            "fts_exceptions": fts_exceptions,
+            "rerank_status": rerank_status,
         }
-
-        score_type = "rerank" if self.reranking_enabled else "distance"
 
         # Split into primary and supporting (same split as prompt builder)
         primary_count = calculate_primary_count(len(relevant_chunks))

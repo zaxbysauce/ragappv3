@@ -110,7 +110,7 @@ class RetrievalLoggingTests(unittest.IsolatedAsyncioTestCase):
 
         # Capture logs
         with self.assertLogs("app.services.rag_engine", level="INFO") as log:
-            result, _ = await engine._execute_retrieval(
+            result, _, _, _, _, _, _, _ = await engine._execute_retrieval(
                 query_embeddings, "test query", vault_id=1
             )
 
@@ -146,7 +146,7 @@ class RetrievalLoggingTests(unittest.IsolatedAsyncioTestCase):
 
         # Capture logs
         with self.assertLogs("app.services.rag_engine", level="INFO") as log:
-            result, _ = await engine._execute_retrieval(
+            result, _, _, _, _, _, _, _ = await engine._execute_retrieval(
                 query_embeddings, "test query", vault_id=42
             )
 
@@ -201,7 +201,7 @@ class RetrievalLoggingTests(unittest.IsolatedAsyncioTestCase):
 
             # Capture logs
             with self.assertLogs("app.services.rag_engine", level="INFO") as log:
-                result, _ = await engine._execute_retrieval(
+                result, _, _, _, _, _, _, _ = await engine._execute_retrieval(
                     query_embeddings, "test query", vault_id=1
                 )
 
@@ -255,7 +255,7 @@ class RetrievalLoggingTests(unittest.IsolatedAsyncioTestCase):
 
             # Capture logs
             with self.assertLogs("app.services.rag_engine", level="INFO") as log:
-                result, _ = await engine._execute_retrieval(
+                result, _, _, _, _, _, _, _ = await engine._execute_retrieval(
                     query_embeddings, "test query", vault_id=1
                 )
 
@@ -305,7 +305,7 @@ class RetrievalLoggingTests(unittest.IsolatedAsyncioTestCase):
 
             # Capture logs
             with self.assertLogs("app.services.rag_engine", level="INFO") as log:
-                result, _ = await engine._execute_retrieval(
+                result, _, _, _, _, _, _, _ = await engine._execute_retrieval(
                     query_embeddings, "test query", vault_id=1
                 )
 

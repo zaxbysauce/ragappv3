@@ -126,7 +126,7 @@ class DocumentRetrievalService:
 
         # When reranking has been applied, skip distance threshold — the reranker
         # score is the quality signal; _distance is stale.
-        skip_distance_filter = reranked or any("_rerank_score" in r for r in results)
+        skip_distance_filter = reranked
 
         for record in results:
             has_distance = "_distance" in record
