@@ -464,6 +464,17 @@ class Settings(BaseSettings):
         return v
 
     @model_validator(mode="after")
+    def validate_rrf_weight_sanity(self) -> "Settings":
+        """Validate at least one RRF arm weight is > 0.0 to prevent silent retrieval outage."""
+        if (
+            self.rrf_weight_original == 0.0
+            and self.rrf_weight_stepback == 0.0
+            and self.rrf_weight_hyde == 0.0
+        ):
+            raise ValueError("At least one RRF arm weight must be > 0.0")
+        return self
+
+    @model_validator(mode="after")
     def validate_batch_config_consistency(self) -> "Settings":
         """Validate embedding batch configuration consistency."""
         if self.embedding_batch_min_sub_size > self.embedding_batch_size:
