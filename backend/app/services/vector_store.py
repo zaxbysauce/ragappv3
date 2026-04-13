@@ -447,28 +447,11 @@ class VectorStore:
                 self._fts_exceptions += 1
 
         # RRF Fusion for this scale
-        k_rrf = 60
-        rrf_scores: dict = {}
-        id_to_record: dict = {}
-
-        for rank, record in enumerate(dense_results):
-            uid = record.get("id", f"dense_{rank}")
-            rrf_scores[uid] = rrf_scores.get(uid, 0.0) + 1.0 / (k_rrf + rank + 1)
-            id_to_record[uid] = record
-
-        for rank, record in enumerate(fts_results):
-            uid = record.get("id", f"fts_{rank}")
-            rrf_scores[uid] = rrf_scores.get(uid, 0.0) + 1.0 / (k_rrf + rank + 1)
-            if uid not in id_to_record:
-                id_to_record[uid] = record
-
-        # Return results with RRF scores (unsorted, to be sorted in cross-scale RRF)
-        result_list = []
-        for uid in rrf_scores:
-            record = dict(id_to_record[uid])
-            record["_rrf_score"] = rrf_scores[uid]
+        k_rrf = 60 if settings.rrf_legacy_mode else settings.hybrid_rrf_k
+        result_list = rrf_fuse([dense_results, fts_results], k=k_rrf)
+        # Attach FTS status to each result
+        for record in result_list:
             record["_fts_status"] = fts_status
-            result_list.append(record)
         return result_list
 
     async def search(
@@ -597,7 +580,9 @@ class VectorStore:
                         )
 
                 # Cross-scale RRF fusion
-                k_rrf = 60
+                # NOTE: Cross-scale fusion sums per-scale _rrf_score accumulations directly.
+                # It does NOT re-rank by position, so multi_scale_rrf_k is not applicable here.
+                # The per-scale scores were computed using hybrid_rrf_k above.
                 cross_scale_scores: dict = {}
                 id_to_record: dict = {}
 
@@ -688,7 +673,8 @@ class VectorStore:
                 self._fts_exceptions += 1
 
         # RRF Fusion using shared utility
-        fused = rrf_fuse([dense_results, fts_results], k=60, limit=limit)
+        k_rrf = 60 if settings.rrf_legacy_mode else settings.hybrid_rrf_k
+        fused = rrf_fuse([dense_results, fts_results], k=k_rrf, limit=limit)
         # Attach FTS status to each result
         for record in fused:
             record["_fts_status"] = fts_status

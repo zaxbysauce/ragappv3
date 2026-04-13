@@ -91,6 +91,24 @@ class Settings(BaseSettings):
     hybrid_alpha: float = 0.6
     """Weight for dense vs BM25 scores in RRF. 0.0 = pure BM25, 1.0 = pure dense."""
 
+    # ── RRF fusion tuning ───────────────────────────────────────────────────
+    hybrid_rrf_k: int = 60
+    """RRF k parameter for per-arm dense/FTS fusion within a single scale. Lower = sharper top-list preference."""
+    multi_query_rrf_k: int = 60
+    """RRF k parameter for cross-variant fusion (original + stepback + HyDE). Lower = sharper top-list preference. Operators may lower to 20 for recall-heavy workloads."""
+    multi_scale_rrf_k: int = 60
+    """RRF k parameter for multi-scale fusion across chunk sizes."""
+    rrf_weight_original: float = 1.0
+    """Weight for original query arm in cross-variant RRF fusion. Applied directly (not normalized). Defaults sum to 2.0."""
+    rrf_weight_stepback: float = 0.5
+    """Weight for step-back variant arm in cross-variant RRF fusion. Applied directly (not normalized). Set to 0.0 to exclude."""
+    rrf_weight_hyde: float = 0.5
+    """Weight for HyDE variant arm in cross-variant RRF fusion. Applied directly (not normalized). Set to 0.0 to exclude."""
+    exact_match_promote: bool = True
+    """Promote the top-1 dense result from the original query into the top-5 of fused results if missing. Belt-and-suspenders safeguard against fusion math demoting exact matches."""
+    rrf_legacy_mode: bool = False
+    """When True, forces k=60 uniform weights and disables exact-match promotion. Fast rollback to pre-change behavior."""
+
     # ── Contextual chunking configuration ─────────────────────────────────────
     contextual_chunking_enabled: bool = True
     """Enable LLM-based contextual chunking (prepends document context to each chunk)."""
@@ -428,6 +446,22 @@ class Settings(BaseSettings):
     def validate_hybrid_alpha(cls, v: float) -> float:
         """Validate hybrid_alpha is in range 0.0-1.0."""
         return cls._validate_float_range(v, 0.0, 1.0, "hybrid_alpha")
+
+    @field_validator("rrf_weight_original", "rrf_weight_stepback", "rrf_weight_hyde", mode="after")
+    @classmethod
+    def validate_rrf_weights(cls, v: float) -> float:
+        """Validate RRF weights are non-negative."""
+        if v < 0.0:
+            raise ValueError("RRF weights must be >= 0.0")
+        return v
+
+    @field_validator("hybrid_rrf_k", "multi_query_rrf_k", "multi_scale_rrf_k", mode="after")
+    @classmethod
+    def validate_rrf_k(cls, v: int) -> int:
+        """Validate RRF k parameters are >= 1 (prevents ZeroDivisionError in 1/(k+rank))."""
+        if v < 1:
+            raise ValueError("RRF k must be >= 1")
+        return v
 
     @model_validator(mode="after")
     def validate_batch_config_consistency(self) -> "Settings":
