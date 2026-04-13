@@ -217,6 +217,29 @@ async def lifespan(app: FastAPI):
         timeout=10,
     )
 
+    # Initialize vector store table before FTS validation
+    await _safe_await(
+        app.state.vector_store.init_table(settings.embedding_dim),
+        "Vector store init_table",
+        timeout=10,
+    )
+
+    # Validate FTS index exists if hybrid search is enabled
+    if settings.hybrid_search_enabled:
+        try:
+            indices = await app.state.vector_store.table.list_indices()
+            fts_index_exists = any(idx.name == "fts_text" for idx in indices)
+            if not fts_index_exists:
+                logger.error(
+                    "Hybrid search is enabled but the FTS index is missing on the 'text' column. "
+                    "FTS search will not function. Recreate the index by calling "
+                    "await vector_store.init_table() or recreate the table."
+                )
+        except Exception as e:
+            logger.error(
+                f"Failed to check FTS index status (hybrid search may not work): {e}"
+            )
+
     # Initialize RerankingService
     app.state.reranking_service = RerankingService(
         reranker_url=settings.reranker_url,
