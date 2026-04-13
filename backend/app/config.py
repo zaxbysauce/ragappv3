@@ -69,6 +69,10 @@ class Settings(BaseSettings):
     embedding_batch_min_sub_size: int = 1
     """Minimum sub-batch size for adaptive batching fallback."""
 
+    # ── Embedding model validation configuration ───────────────────────────────────
+    strict_embedding_model_check: bool = True
+    """Enable strict validation that the live TEI model matches EMBEDDING_MODEL at startup."""
+
     # ── Reranker configuration ────────────────────────────────────────────────
     reranker_url: str = ""
     """TEI-compatible reranker endpoint URL. Empty = use sentence-transformers locally."""
@@ -105,6 +109,18 @@ class Settings(BaseSettings):
     query_transformation_enabled: bool = True
     """Enable query transformation using step-back prompting for broader retrieval."""
 
+    stepback_enabled: bool = True
+    """Enable step-back prompting: generate a broader, more general version of the query to improve recall."""
+
+    query_transform_temperature: float = 0.0
+    """Temperature for LLM calls during query transformation (step-back). Set to 0.0 for deterministic results."""
+
+    hyde_temperature: float = 0.0
+    """Temperature for LLM calls during HyDE hypothetical document generation. Set to 0.0 for deterministic results."""
+
+    query_transform_cache_ttl_sec: int = 86400
+    """Time-to-live in seconds for cached query transformation results. Default 24 hours."""
+
     # ── Retrieval evaluation configuration ────────────────────────────────────
     retrieval_evaluation_enabled: bool = True
     """Enable CRAG-style retrieval evaluation (CONFIDENT/AMBIGUOUS/NO_MATCH classification)."""
@@ -129,7 +145,7 @@ class Settings(BaseSettings):
 
     # ── HyDE (Hypothetical Document Embeddings) configuration ──
     hyde_enabled: bool = True
-    """Enable HyDE: generate a hypothetical answer passage and embed it as additional query vector."""
+    """Enable HyDE: generate a hypothetical answer passage and embed it as additional query vector. Default True."""
 
     # ── Sparse search configuration ──────────────────────────────────
     sparse_search_max_candidates: int = 1000
@@ -496,33 +512,6 @@ class Settings(BaseSettings):
     @property
     def sqlite_path(self) -> Path:
         return self.data_dir / "app.db"
-
-    @property
-    def effective_embedding_doc_prefix(self) -> str:
-        """Effective document prefix for embedding. Harrier and BGE-M3 don't use prefixes."""
-        if self.embedding_doc_prefix:
-            return self.embedding_doc_prefix
-        # Harrier base model: symmetric retrieval — no prefix needed
-        if "harrier" in self.embedding_model.lower():
-            return ""
-        # Auto-apply Qwen3 instruction prefix only for Qwen models
-        if "qwen" in self.embedding_model.lower():
-            return "Instruct: Represent this technical documentation passage for retrieval.\nDocument: "
-        return ""
-
-    @property
-    def effective_embedding_query_prefix(self) -> str:
-        """Effective query prefix for embedding. Harrier and BGE-M3 don't use prefixes."""
-        if self.embedding_query_prefix:
-            return self.embedding_query_prefix
-        # Harrier base model: symmetric retrieval — no prefix needed
-        if "harrier" in self.embedding_model.lower():
-            return ""
-        if "qwen" in self.embedding_model.lower():
-            return (
-                "Instruct: Retrieve relevant technical documentation passages.\nQuery: "
-            )
-        return ""
 
 
 # Global settings instance

@@ -119,6 +119,7 @@ class EmbeddingService:
         # Read embedding prefixes from settings
         self.embedding_doc_prefix = settings.embedding_doc_prefix
         self.embedding_query_prefix = settings.embedding_query_prefix
+        self.embedding_model = settings.embedding_model
 
         # Auto-apply Qwen3 instruction prefixes for better retrieval quality
         # With llama.cpp -ub 8192, we have plenty of headroom for these prefixes
@@ -238,19 +239,18 @@ class EmbeddingService:
 
         return embedding
 
-    async def embed_single(self, text: str) -> List[float]:
+    async def _embed_with_prefix(self, text: str, prefix: str) -> List[float]:
         """
-        Generate embedding for a single text.
+        Shared embedding logic with prefix application.
 
-        Applies the query prefix (if configured) to the input text before embedding.
-        The query prefix is used for retrieval queries and must remain constant for
-        a given index to ensure consistent embedding space.
-
-        Results are cached using an LRU cache to avoid redundant API calls for
-        repeated text inputs.
+        This is a private helper method that implements the common logic for
+        both embed_single (query embeddings) and embed_passage (document embeddings).
+        It validates input, applies the provided prefix, checks cache, calls the
+        embedding API, extracts the embedding, and stores it in cache.
 
         Args:
-            text: The text to embed.
+            text: The text to embed (plain text, without prefix applied).
+            prefix: The prefix to prepend to the text (query or document prefix).
 
         Returns:
             List of float values representing the embedding vector.
@@ -262,14 +262,16 @@ class EmbeddingService:
         if not text.strip():
             raise EmbeddingError("Text cannot be empty or whitespace only")
 
-        # Apply query prefix for retrieval queries
-        text_to_embed = (
-            self.embedding_query_prefix + text if self.embedding_query_prefix else text
-        )
+        # Apply prefix to text
+        text_to_embed = prefix + text if prefix else text
 
-        # Check cache using hash of the text as key (include URL fingerprint so model changes invalidate cache)
+        # Build cache key with model + url + prefix fingerprints
+        model_fingerprint = hashlib.md5(self.embedding_model.encode("utf-8")).hexdigest()[:8]
         url_fingerprint = hashlib.md5(self.embeddings_url.encode("utf-8")).hexdigest()[:8]
-        cache_key = f"{url_fingerprint}_{hashlib.md5(text_to_embed.encode('utf-8')).hexdigest()}"
+        prefix_fingerprint = hashlib.md5((prefix or "").encode("utf-8")).hexdigest()[:8]
+        cache_key = f"{model_fingerprint}_{url_fingerprint}_{prefix_fingerprint}_{hashlib.md5(text_to_embed.encode('utf-8')).hexdigest()}"
+        
+        # Check cache
         cached = self._embed_cache.get(cache_key)
         if cached is not None:
             return cached
@@ -306,6 +308,49 @@ class EmbeddingService:
             raise EmbeddingError("Embedding request timed out")
         except httpx.HTTPError:
             raise EmbeddingError("Embedding HTTP error occurred")
+
+    async def embed_single(self, text: str) -> List[float]:
+        """
+        Generate embedding for a single text.
+
+        Applies the query prefix (if configured) to the input text before embedding.
+        The query prefix is used for retrieval queries and must remain constant for
+        a given index to ensure consistent embedding space.
+
+        Results are cached using an LRU cache to avoid redundant API calls for
+        repeated text inputs.
+
+        Args:
+            text: The text to embed.
+
+        Returns:
+            List of float values representing the embedding vector.
+
+        Raises:
+            EmbeddingError: If the API request fails or returns non-200 status.
+        """
+        return await self._embed_with_prefix(text, self.embedding_query_prefix)
+
+    async def embed_passage(self, text: str) -> List[float]:
+        """
+        Generate embedding for a passage/document.
+
+        Applies the document prefix (if configured) to the input text before embedding.
+        The document prefix is used for indexing documents and must remain constant for
+        a given index to ensure consistent embedding space.
+
+        Results are cached using an LRU cache to avoid redundant API calls.
+
+        Args:
+            text: The text to embed as a passage/document.
+
+        Returns:
+            List of float values representing the embedding vector.
+
+        Raises:
+            EmbeddingError: If the API request fails or returns non-200 status.
+        """
+        return await self._embed_with_prefix(text, self.embedding_doc_prefix)
 
     async def validate_embedding_dimension(self, expected_dim: int) -> bool:
         """

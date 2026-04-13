@@ -3,7 +3,7 @@
 import asyncio
 import logging
 from datetime import datetime
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 from app.config import settings
 from app.services.document_retrieval import DocumentRetrievalService, RAGSource
@@ -157,7 +157,7 @@ class RAGEngine:
             logger.error("Memory intent detection/add failed (%s): %s", type(exc).__name__, exc)
 
         # Query transformation for broader retrieval (if enabled)
-        transformed_queries: List[str] = [user_input]
+        transformed_queries: List[Tuple[str, str]] = [('original', user_input)]
         if settings.query_transformation_enabled and self.llm_client is not None:
             try:
                 if self._query_transformer is None:
@@ -165,34 +165,44 @@ class RAGEngine:
                 transformed_queries = await self._query_transformer.transform(
                     user_input
                 )
+                # transformed_queries is now List[Tuple[str, str]] like [('original', '...'), ('step_back', '...'), ('hyde', '...')]
                 if len(transformed_queries) > 1:
                     logger.info(
                         "Query transformation: original='%s', step_back='%s'",
-                        transformed_queries[0],
-                        transformed_queries[1],
+                        transformed_queries[0][1],
+                        transformed_queries[1][1],
                     )
             except Exception as e:
                 logger.warning(
                     "Query transformation failed (%s): %s, using original query only", type(e).__name__, e
                 )
-                transformed_queries = [user_input]
+                transformed_queries = [('original', user_input)]
 
         logger.debug("[query] transformed_queries=%s", transformed_queries)
 
         # Embed all transformed queries concurrently
-        query_embeddings: List[List[float]] = []
-        embed_results = await asyncio.gather(
-            *[self.embedding_service.embed_single(q) for q in transformed_queries],
-            return_exceptions=True,
-        )
-        for i, result in enumerate(embed_results):
-            if isinstance(result, BaseException):
-                logger.warning(
-                    "Query embedding failure [%d/%d]: query='%.50s', error=%s",
-                    i + 1, len(transformed_queries), transformed_queries[i], result,
-                )
-            else:
-                query_embeddings.append(result)
+        # query_embeddings will be List[Tuple[str, List[float]]] where tuple is (variant_type, embedding)
+        query_embeddings: List[Tuple[str, List[float]]] = []
+        variants_dropped: List[str] = []
+        # Embed each transformed query explicitly with per-task error handling
+        for variant_type, text in transformed_queries:
+            try:
+                if variant_type == 'hyde':
+                    embedding = await self.embedding_service.embed_passage(text)
+                else:
+                    embedding = await self.embedding_service.embed_single(text)
+                query_embeddings.append((variant_type, embedding))
+            except EmbeddingError as e:
+                if variant_type == 'original':
+                    logger.error(
+                        "Query embedding failure for original query: %s", e
+                    )
+                    raise RAGEngineError(f"Original query embedding failed: {e}")
+                else:
+                    logger.warning(
+                        "Query embedding failure for variant '%s': %s", variant_type, e
+                    )
+                    variants_dropped.append(variant_type)
 
         if not query_embeddings:
             error_msg = "Unable to encode any query variants"
@@ -207,7 +217,7 @@ class RAGEngine:
         logger.info(
             "[query] query_embeddings: count=%d, dim=%s",
             len(query_embeddings),
-            len(query_embeddings[0]) if query_embeddings else "N/A",
+            len(query_embeddings[0][1]) if query_embeddings else "N/A",
         )
 
         effective_alpha = self.hybrid_alpha
@@ -236,11 +246,12 @@ class RAGEngine:
             vector_results = []
         else:
             try:
-                vector_results, relevance_hint, eval_result, rerank_success, score_type, hybrid_status, fts_exceptions, rerank_status = await self._execute_retrieval(
+                vector_results, relevance_hint, eval_result, rerank_success, score_type, hybrid_status, fts_exceptions, rerank_status, variants_dropped = await self._execute_retrieval(
                     query_embeddings,
                     user_input,
                     vault_id,
                     effective_alpha=effective_alpha,
+                    variants_dropped=variants_dropped,
                 )
                 logger.info(
                     "[query] _execute_retrieval returned: result_count=%d, first_3_distances=%s",
@@ -257,6 +268,7 @@ class RAGEngine:
                 score_type = "distance"  # Default for fallback
                 hybrid_status = "disabled"  # Default for fallback
                 fts_exceptions = 0  # Default for fallback
+                variants_dropped = []  # Safety net: reset on exception
 
         # Filter relevant chunks using document retrieval service
         relevant_chunks = await self.document_retrieval.filter_relevant(
@@ -340,7 +352,7 @@ class RAGEngine:
                 yield chunk
 
         # Yield done message with sources
-        done_msg = self._build_done_message(relevant_chunks, memories, score_type, hybrid_status, fts_exceptions, rerank_status)
+        done_msg = self._build_done_message(relevant_chunks, memories, score_type, hybrid_status, fts_exceptions, rerank_status, variants_dropped)
         logger.info(
             "[query] Yielding 'done': sources_count=%d, memories_used=%d",
             len(done_msg.get("sources", [])),
@@ -350,20 +362,23 @@ class RAGEngine:
 
     async def _execute_retrieval(
         self,
-        query_embeddings: List[List[float]],
+        query_embeddings: List[Tuple[str, List[float]]],
         user_input: str,
         vault_id: Optional[int],
         effective_alpha: float = 0.6,
-    ) -> tuple[List[Dict[str, Any]], Optional[str], str, Optional[bool], str, str, int, str]:
+        variants_dropped: List[str] = None,
+    ) -> tuple[List[Dict[str, Any]], Optional[str], str, Optional[bool], str, str, int, str, List[str]]:
         """Execute vector search and retrieval evaluation.
 
         Args:
-            query_embeddings: List of query embeddings to search
+            query_embeddings: List of (variant_type, embedding) tuples to search
             user_input: Original user query
             vault_id: Optional vault ID to filter by
+            effective_alpha: Hybrid search alpha weight
+            variants_dropped: List of variant types that failed embedding (e.g., step_back, hyde)
 
         Returns:
-            Tuple of (vector_results, relevance_hint, eval_result, rerank_success, score_type, hybrid_status, fts_exceptions, rerank_status)
+            Tuple of (vector_results, relevance_hint, eval_result, rerank_success, score_type, hybrid_status, fts_exceptions, rerank_status, variants_dropped)
         """
         logger.info(
             "[_execute_retrieval] ENTER: vault_id=%s, top_k=%s, query_embeddings=%d",
@@ -371,11 +386,17 @@ class RAGEngine:
             self.retrieval_top_k,
             len(query_embeddings),
         )
+        # Ensure variants_dropped is always a list (never None)
+        if variants_dropped is None:
+            variants_dropped = []
         eval_result = "CONFIDENT"
         rerank_success: Optional[bool] = None
         fts_exceptions = 0  # Initialize before try in case get_fts_exceptions() raises
+        final_relevance_hint: Optional[str] = None  # Initialize before try block
+
+        # Phase 1: Search phase - original query failures propagate immediately
+        vector_results = []
         try:
-            # Stage 1: Initial retrieval
             fetch_k = (
                 self.initial_retrieval_top_k
                 if self.reranking_enabled
@@ -388,29 +409,38 @@ class RAGEngine:
             _vault = str(vault_id) if vault_id is not None else None
             search_tasks = [
                 self.vector_store.search(
-                    embedding,
+                    embedding_tuple[1],  # Extract embedding from (variant_type, embedding) tuple
                     _top_k,
                     vault_id=_vault,
                     query_text=user_input,
                     hybrid=self.hybrid_search_enabled,
                     hybrid_alpha=effective_alpha,
                 )
-                for i, embedding in enumerate(query_embeddings)
+                for embedding_tuple in query_embeddings
             ]
             gather_results = await asyncio.gather(*search_tasks, return_exceptions=True)
             all_results = []
             for i, result in enumerate(gather_results):
+                variant_type = query_embeddings[i][0] if i < len(query_embeddings) else f"variant_{i}"
                 if isinstance(result, BaseException):
+                    # ORIGINAL QUERY FAILURE: propagate error immediately
+                    if variant_type == 'original':
+                        raise RAGEngineError(f"Original query vector search failed: {result}") from result
+
+                    # Paraphrase/step_back/hyde failure: log and track
                     logger.warning(
-                        "[_execute_retrieval] vector search variant=%d failed: %s",
-                        i, result,
+                        "[_execute_retrieval] vector search variant=%d (%s) failed: %s",
+                        i, variant_type, result,
                     )
+                    if variant_type not in variants_dropped:
+                        variants_dropped.append(variant_type)
                     all_results.append([])  # Degrade gracefully — use empty result for failed variant
                 else:
                     all_results.append(result)
                     logger.debug(
-                        "[_execute_retrieval] vector_store.search() variant=%d returned %d results",
+                        "[_execute_retrieval] vector_store.search() variant=%d (%s) returned %d results",
                         i,
+                        variant_type,
                         len(result),
                     )
 
@@ -470,7 +500,7 @@ class RAGEngine:
                 else "N/A",
             )
 
-            # Stage 2: Reranking (if enabled)
+            # Phase 1b: Reranking (if enabled) - also part of search phase
             if self.reranking_enabled and self.reranking_service and vector_results:
                 try:
                     reranked_chunks, rerank_success = await self.reranking_service.rerank(
@@ -533,104 +563,117 @@ class RAGEngine:
             else:
                 rerank_status = "disabled"
 
-            return vector_results, final_relevance_hint, eval_result, rerank_success, score_type, hybrid_status, fts_exceptions, rerank_status
-        except Exception as exc:
-            if vector_results and settings.context_max_tokens > 0:
-                temp_sources = [
-                    RAGSource(
-                        text=r.get("text", ""),
-                        file_id=str(r.get("file_id", "")),
-                        score=r.get("_distance", 0.0),
-                        metadata=r.get("metadata", {}),
+        except RAGEngineError:
+            # Re-raise original query search failures immediately
+            raise
+        except Exception as search_error:
+            # Handle paraphrase/search task failures - log and return empty results
+            logger.warning(
+                "[_execute_retrieval] Search phase exception: %s, using partial results",
+                search_error,
+            )
+            vector_results = []
+            rerank_success = None
+            score_type = "distance"
+            hybrid_status = "disabled"
+            fts_exceptions = 0
+            rerank_status = "disabled"
+
+        # Phase 2: Evaluation/post-processing phase (only reached if search succeeds with results)
+        if vector_results:
+            try:
+                # Token packing (only if we have results)
+                if settings.context_max_tokens > 0:
+                    temp_sources = [
+                        RAGSource(
+                            text=r.get("text", ""),
+                            file_id=str(r.get("file_id", "")),
+                            score=r.get("_distance", 0.0),
+                            metadata=r.get("metadata", {}),
+                        )
+                        for r in vector_results
+                    ]
+                    packed_sources = self._pack_context_by_token_budget(
+                        temp_sources, settings.context_max_tokens
                     )
-                    for r in vector_results
-                ]
-                packed_sources = self._pack_context_by_token_budget(
-                    temp_sources, settings.context_max_tokens
-                )
-                # Rebuild vector_results in packed_sources ORDER (preserves reranker ranking).
-                # Use (file_id, text) composite key — more unique than text alone.
-                _key_to_result: Dict[tuple, Any] = {}
-                for r in vector_results:
-                    k = (str(r.get("file_id", "")), r.get("text", ""))
-                    if k not in _key_to_result:  # first-seen wins (reranker order)
-                        _key_to_result[k] = r
-                vector_results = [
-                    _key_to_result[(s.file_id, s.text)]
-                    for s in packed_sources
-                    if (s.file_id, s.text) in _key_to_result
-                ]
-                logger.info(
-                    "Token packing: %d results → %d results (budget=%d tokens)",
-                    len(temp_sources),
-                    len(packed_sources),
-                    settings.context_max_tokens,
-                )
-            else:
-                if vector_results and settings.context_max_tokens <= 0:
+                    # Rebuild vector_results in packed_sources ORDER (preserves reranker ranking).
+                    # Use (file_id, text) composite key — more unique than text alone.
+                    _key_to_result: Dict[tuple, Any] = {}
+                    for r in vector_results:
+                        k = (str(r.get("file_id", "")), r.get("text", ""))
+                        if k not in _key_to_result:  # first-seen wins (reranker order)
+                            _key_to_result[k] = r
+                    vector_results = [
+                        _key_to_result[(s.file_id, s.text)]
+                        for s in packed_sources
+                        if (s.file_id, s.text) in _key_to_result
+                    ]
                     logger.info(
-                        "Token packing: disabled (context_max_tokens=%d)",
+                        "Token packing: %d results → %d results (budget=%d tokens)",
+                        len(temp_sources),
+                        len(packed_sources),
                         settings.context_max_tokens,
                     )
 
-            # Final limit to retrieval_top_k
-            vector_results = vector_results[: self.retrieval_top_k]
+                # Final limit to retrieval_top_k
+                vector_results = vector_results[: self.retrieval_top_k]
 
-            # Retrieval evaluation (CRAG-style self-evaluation)
-            relevance_hint_eval: Optional[str] = None
-            if settings.retrieval_evaluation_enabled and self.llm_client is not None:
-                try:
-                    if self._retrieval_evaluator is None:
-                        self._retrieval_evaluator = RetrievalEvaluator(self.llm_client)
-                    eval_result = await self._retrieval_evaluator.evaluate(
-                        user_input, vector_results
-                    )
-                    if eval_result == "NO_MATCH":
-                        if logger.isEnabledFor(logging.DEBUG):
-                            logger.debug(
-                                "Retrieval evaluation: NO_MATCH for query '%s'",
-                                user_input,
-                            )
-                        relevance_hint_eval = "Note: The retrieved documents may not be directly relevant to your query."
-                    elif eval_result == "AMBIGUOUS":
-                        if logger.isEnabledFor(logging.DEBUG):
-                            logger.debug(
-                                "Retrieval evaluation: AMBIGUOUS for query '%s'",
-                                user_input,
-                            )
-                except Exception as e:
-                    logger.warning("Retrieval evaluation failed: %s", e)
-            # Final relevance_hint from evaluation, or None
-            final_relevance_hint = relevance_hint_eval
+                # Retrieval evaluation (CRAG-style self-evaluation)
+                relevance_hint_eval: Optional[str] = None
+                if settings.retrieval_evaluation_enabled and self.llm_client is not None:
+                    try:
+                        if self._retrieval_evaluator is None:
+                            self._retrieval_evaluator = RetrievalEvaluator(self.llm_client)
+                        eval_result = await self._retrieval_evaluator.evaluate(
+                            user_input, vector_results
+                        )
+                        if eval_result == "NO_MATCH":
+                            if logger.isEnabledFor(logging.DEBUG):
+                                logger.debug(
+                                    "Retrieval evaluation: NO_MATCH for query '%s'",
+                                    user_input,
+                                )
+                            relevance_hint_eval = "Note: The retrieved documents may not be directly relevant to your query."
+                        elif eval_result == "AMBIGUOUS":
+                            if logger.isEnabledFor(logging.DEBUG):
+                                logger.debug(
+                                    "Retrieval evaluation: AMBIGUOUS for query '%s'",
+                                    user_input,
+                                )
+                    except Exception as e:
+                        logger.warning("Retrieval evaluation failed: %s", e)
+                # Final relevance_hint from evaluation, or None
+                final_relevance_hint = relevance_hint_eval
 
-            # Compute score_type from actual rerank_success (not config flag)
-            if rerank_success:
-                score_type = "rerank"
-            else:
-                score_type = "distance"
+            except Exception as eval_error:
+                logger.warning("Post-retrieval evaluation failed: %s", eval_error)
+                # Continue with original results if evaluation fails
 
-            # Compute hybrid_status from _fts_status in results
-            if not self.hybrid_search_enabled:
-                hybrid_status = "disabled"
-            else:
-                # Check if any result has _fts_status='ok'
-                has_fts_ok = any(
-                    r.get("_fts_status") == "ok" for r in vector_results
-                )
-                hybrid_status = "both" if has_fts_ok else "dense_only"
+        # Compute score_type from actual rerank_success (not config flag)
+        if rerank_success:
+            score_type = "rerank"
+        else:
+            score_type = "distance"
 
-            # FTS exceptions counter was already reset in the normal path above
-            # (line 546). In this exception handler, we don't need to call it again.
+        # Compute hybrid_status from _fts_status in results
+        if not self.hybrid_search_enabled:
+            hybrid_status = "disabled"
+        else:
+            # Check if any result has _fts_status='ok'
+            has_fts_ok = any(
+                r.get("_fts_status") == "ok" for r in vector_results
+            )
+            hybrid_status = "both" if has_fts_ok else "dense_only"
 
-            # Compute rerank_status string from rerank_success boolean
-            if rerank_success is True:
-                rerank_status = "ok"
-            elif rerank_success is False:
-                rerank_status = "fallback"
-            else:
-                rerank_status = "disabled"
+        # Compute rerank_status string from rerank_success boolean
+        if rerank_success is True:
+            rerank_status = "ok"
+        elif rerank_success is False:
+            rerank_status = "fallback"
+        else:
+            rerank_status = "disabled"
 
-            return vector_results, final_relevance_hint, eval_result, rerank_success, score_type, hybrid_status, fts_exceptions, rerank_status
+        return vector_results, final_relevance_hint, eval_result, rerank_success, score_type, hybrid_status, fts_exceptions, rerank_status, variants_dropped
 
     async def _stream_llm_response(
         self,
@@ -680,6 +723,7 @@ class RAGEngine:
         hybrid_status: str,
         fts_exceptions: int,
         rerank_status: str,
+        variants_dropped: List[str] = None,
     ) -> Dict[str, Any]:
         """Build the final done message with sources.
 
@@ -701,6 +745,7 @@ class RAGEngine:
             "hybrid_status": hybrid_status,
             "fts_exceptions": fts_exceptions,
             "rerank_status": rerank_status,
+            "variants_dropped": variants_dropped or [],
         }
 
         # Split into primary and supporting (same split as prompt builder)

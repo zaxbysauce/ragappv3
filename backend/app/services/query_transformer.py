@@ -1,9 +1,12 @@
 """Query transformation service for step-back prompting."""
 
+import hashlib
+import json
 import logging
 import re
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
+from app.config import settings
 from app.services.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
@@ -41,8 +44,66 @@ class QueryTransformer:
 
     def __init__(self, llm_client: LLMClient):
         self._llm_client = llm_client
+        self._redis_client = None
+        if settings.redis_url:
+            try:
+                import redis
+                self._redis_client = redis.from_url(settings.redis_url)
+            except Exception as e:
+                logger.warning("Redis connection failed, using LRU fallback: %s", e)
+        # LRU cache for transform results (List[Tuple[str, str]])
+        self._lru_cache: dict[str, List[Tuple[str, str]]] = {}
+        self._lru_keys: list[str] = []  # For LRU ordering
+        # Separate LRU cache for HyDE results (str)
+        self._lru_hyde_cache: dict[str, str] = {}
+        self._lru_hyde_keys: list[str] = []
 
-    async def transform(self, query: str) -> List[str]:
+    def _make_cache_key(self, chat_model: str, transform_type: str, query_text: str) -> str:
+        """Generate cache key for query transformation result."""
+        key_data = json.dumps({
+            "model": chat_model,
+            "type": transform_type,
+            "query": query_text
+        }, sort_keys=True)
+        return f"query_transform:{hashlib.md5(key_data.encode()).hexdigest()}"
+
+    def _lru_get(self, key: str) -> Optional[List[Tuple[str, str]]]:
+        if key in self._lru_cache:
+            # Move to end (most recently used)
+            self._lru_keys.remove(key)
+            self._lru_keys.append(key)
+            return self._lru_cache[key]
+        return None
+
+    def _lru_set(self, key: str, value: List[Tuple[str, str]]):
+        if key in self._lru_cache:
+            self._lru_keys.remove(key)
+        elif len(self._lru_cache) >= 1024:
+            # Evict least recently used
+            oldest = self._lru_keys.pop(0)
+            del self._lru_cache[oldest]
+        self._lru_cache[key] = value
+        self._lru_keys.append(key)
+
+    def _lru_get_hyde(self, key: str) -> Optional[str]:
+        if key in self._lru_hyde_cache:
+            # Move to end (most recently used)
+            self._lru_hyde_keys.remove(key)
+            self._lru_hyde_keys.append(key)
+            return self._lru_hyde_cache[key]
+        return None
+
+    def _lru_set_hyde(self, key: str, value: str):
+        if key in self._lru_hyde_cache:
+            self._lru_hyde_keys.remove(key)
+        elif len(self._lru_hyde_cache) >= 1024:
+            # Evict least recently used
+            oldest = self._lru_hyde_keys.pop(0)
+            del self._lru_hyde_cache[oldest]
+        self._lru_hyde_cache[key] = value
+        self._lru_hyde_keys.append(key)
+
+    async def transform(self, query: str) -> List[Tuple[str, str]]:
         """
         Transform a query into [original, step_back] or [original, step_back, hyde] versions.
 
@@ -53,20 +114,44 @@ class QueryTransformer:
             query: Original user query
 
         Returns:
-            List containing original query, step-back variant, and optionally HyDE passage.
-            On LLM error for step-back, returns [original] only.
-            On HyDE failure alone, returns [original, step_back].
+            List of (variant_type, text) tuples containing original query, step-back variant,
+            and optionally HyDE passage. variant_type values are 'original', 'step_back', 'hyde'.
+            On LLM error for step-back, returns [('original', query)] only.
+            On HyDE failure alone, returns [('original', query), ('step_back', step_back_text)].
         """
-        from app.config import settings
-
         # Skip transformation for exact/document-specific queries
         if _is_exact_or_document_query(query):
             logger.info(
                 "Skipping query transformation for exact/document query: '%s'",
                 query[:80],
             )
-            return [query]
+            return [('original', query)]
 
+        # Check stepback_enabled gating
+        if not settings.stepback_enabled:
+            logger.debug("Step-back prompting disabled, returning original query only")
+            return [('original', query)]
+
+        # Generate cache key for step-back transformation
+        cache_key = self._make_cache_key(settings.chat_model, "step_back", query)
+
+        # Try Redis cache first
+        if self._redis_client:
+            try:
+                cached = self._redis_client.get(cache_key)
+                if cached:
+                    logger.debug("Cache HIT (Redis) for query transformation")
+                    return json.loads(cached)
+            except Exception as e:
+                logger.warning("Redis cache get failed: %s", e)
+
+        # Try LRU cache
+        lru_cached = self._lru_get(cache_key)
+        if lru_cached:
+            logger.debug("Cache HIT (LRU) for query transformation")
+            return lru_cached
+
+        # Cache miss - proceed with transformation
         try:
             messages = [
                 {
@@ -89,7 +174,7 @@ class QueryTransformer:
             ]
 
             step_back = await self._llm_client.chat_completion(
-                messages=messages, max_tokens=100, temperature=0.3
+                messages=messages, max_tokens=100, temperature=settings.query_transform_temperature
             )
 
             if step_back and step_back.strip():
@@ -98,24 +183,70 @@ class QueryTransformer:
                     query,
                     step_back,
                 )
-                variants = [query, step_back.strip()]
+                variants: List[Tuple[str, str]] = [('original', query), ('step_back', step_back.strip())]
             else:
                 logger.warning(
                     "Query transformation returned empty response, using original only"
                 )
-                return [query]
+                variants: List[Tuple[str, str]] = [('original', query)]
 
         except Exception as e:
             logger.warning(
                 "Query transformation failed: %s, using original query only", e
             )
-            return [query]
+            variants = [('original', query)]
+
+        # Store in Redis if available
+        if self._redis_client:
+            try:
+                self._redis_client.setex(
+                    cache_key,
+                    settings.query_transform_cache_ttl_sec,
+                    json.dumps(variants)
+                )
+            except Exception as e:
+                logger.warning("Redis cache set failed: %s", e)
+
+        # Store in LRU cache
+        self._lru_set(cache_key, variants)
 
         # Optionally append HyDE passage as third query variant
         if settings.hyde_enabled:
-            hyde_passage = await self.generate_hyde(query)
+            # Check HyDE cache (both Redis and LRU)
+            hyde_cache_key = self._make_cache_key(settings.chat_model, "hyde", query)
+            hyde_passage = None
+            
+            # Try Redis first
+            if self._redis_client:
+                try:
+                    cached_hyde = self._redis_client.get(hyde_cache_key)
+                    if cached_hyde:
+                        hyde_passage = json.loads(cached_hyde)
+                except Exception as e:
+                    logger.warning("Redis HyDE cache get failed: %s", e)
+            
+            # Try LRU fallback
+            if not hyde_passage:
+                hyde_passage = self._lru_get_hyde(hyde_cache_key)
+            
+            if hyde_passage is None:
+                hyde_passage = await self.generate_hyde(query)
+                if hyde_passage:
+                    # Store in Redis if available
+                    if self._redis_client:
+                        try:
+                            self._redis_client.setex(
+                                hyde_cache_key,
+                                settings.query_transform_cache_ttl_sec,
+                                json.dumps(hyde_passage)
+                            )
+                        except Exception as e:
+                            logger.warning("Redis HyDE cache set failed: %s", e)
+                    # Store in LRU cache
+                    self._lru_set_hyde(hyde_cache_key, hyde_passage)
+            
             if hyde_passage:
-                variants.append(hyde_passage)
+                variants.append(('hyde', hyde_passage))
 
         return variants
 
@@ -142,7 +273,7 @@ class QueryTransformer:
                 {"role": "user", "content": user_prompt},
             ]
             response = await self._llm_client.chat_completion(
-                messages, max_tokens=350, temperature=0.4
+                messages, max_tokens=350, temperature=settings.hyde_temperature
             )
             response = response.strip()
             if len(response) < 20:
