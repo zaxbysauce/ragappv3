@@ -241,12 +241,13 @@ class RAGEngine:
         hybrid_status = "disabled"
         fts_exceptions = 0
         rerank_status = "disabled"
+        exact_match_promoted = False
         if self.maintenance_mode:
             fallback_reason = "RAG index is under maintenance"
             vector_results = []
         else:
             try:
-                vector_results, relevance_hint, eval_result, rerank_success, score_type, hybrid_status, fts_exceptions, rerank_status, variants_dropped = await self._execute_retrieval(
+                vector_results, relevance_hint, eval_result, rerank_success, score_type, hybrid_status, fts_exceptions, rerank_status, variants_dropped, exact_match_promoted = await self._execute_retrieval(
                     query_embeddings,
                     user_input,
                     vault_id,
@@ -269,6 +270,7 @@ class RAGEngine:
                 hybrid_status = "disabled"  # Default for fallback
                 fts_exceptions = 0  # Default for fallback
                 variants_dropped = []  # Safety net: reset on exception
+                exact_match_promoted = False  # Default for fallback
 
         # Filter relevant chunks using document retrieval service
         relevant_chunks = await self.document_retrieval.filter_relevant(
@@ -352,7 +354,7 @@ class RAGEngine:
                 yield chunk
 
         # Yield done message with sources
-        done_msg = self._build_done_message(relevant_chunks, memories, score_type, hybrid_status, fts_exceptions, rerank_status, variants_dropped)
+        done_msg = self._build_done_message(relevant_chunks, memories, score_type, hybrid_status, fts_exceptions, rerank_status, variants_dropped, exact_match_promoted)
         logger.info(
             "[query] Yielding 'done': sources_count=%d, memories_used=%d",
             len(done_msg.get("sources", [])),
@@ -367,7 +369,7 @@ class RAGEngine:
         vault_id: Optional[int],
         effective_alpha: float = 0.6,
         variants_dropped: List[str] = None,
-    ) -> tuple[List[Dict[str, Any]], Optional[str], str, Optional[bool], str, str, int, str, List[str]]:
+    ) -> tuple[List[Dict[str, Any]], Optional[str], str, Optional[bool], str, str, int, str, List[str], bool]:
         """Execute vector search and retrieval evaluation.
 
         Args:
@@ -378,7 +380,7 @@ class RAGEngine:
             variants_dropped: List of variant types that failed embedding (e.g., step_back, hyde)
 
         Returns:
-            Tuple of (vector_results, relevance_hint, eval_result, rerank_success, score_type, hybrid_status, fts_exceptions, rerank_status, variants_dropped)
+            Tuple of (vector_results, relevance_hint, eval_result, rerank_success, score_type, hybrid_status, fts_exceptions, rerank_status, variants_dropped, exact_match_promoted)
         """
         logger.info(
             "[_execute_retrieval] ENTER: vault_id=%s, top_k=%s, query_embeddings=%d",
@@ -472,12 +474,42 @@ class RAGEngine:
                         uid: (ts - min_ts) / span for uid, ts in dates.items()
                     }
 
-            # Fuse results from all query variants using RRF
+            # Capture top-1 from original query for exact-match promotion (before fusion modifies ordering)
+            original_top1_id = None
+            exact_match_promoted = False
+            if all_results and all_results[0]:
+                original_top1_id = all_results[0][0].get("id") if all_results[0] else None
+
+            # Fuse results from all query variants using RRF with configurable k and per-arm weights
             if len(all_results) > 1:
+                # Build per-arm weights based on variant types
+                # query_embeddings is a list of (variant_type, embedding) tuples
+                if not settings.rrf_legacy_mode:
+                    weight_map = {
+                        'original': settings.rrf_weight_original,
+                        'step_back': settings.rrf_weight_stepback,
+                        'hyde': settings.rrf_weight_hyde,
+                    }
+                    variant_weights = []
+                    filtered_results = []
+                    for i, result_list in enumerate(all_results):
+                        variant_type = query_embeddings[i][0] if i < len(query_embeddings) else 'original'
+                        w = weight_map.get(variant_type, settings.rrf_weight_original)
+                        if w > 0.0:
+                            variant_weights.append(w)
+                            filtered_results.append(result_list)
+                    fusion_k = settings.multi_query_rrf_k
+                else:
+                    # Legacy mode: k=60, uniform weights, no filtering
+                    variant_weights = None
+                    filtered_results = all_results
+                    fusion_k = 60
+
                 vector_results = rrf_fuse(
-                    all_results,
-                    k=60,
+                    filtered_results,
+                    k=fusion_k,
                     limit=fetch_k,
+                    weights=variant_weights,
                     recency_scores=recency_scores,
                     recency_weight=settings.retrieval_recency_weight,
                 )
@@ -486,8 +518,36 @@ class RAGEngine:
                     len(all_results),
                     len(vector_results),
                 )
+
+                # Exact-match promotion: ensure original query's top-1 dense result
+                # is not completely demoted out of top-5 by variant fusion math
+                exact_match_promoted = False
+                if (
+                    settings.exact_match_promote
+                    and not settings.rrf_legacy_mode
+                    and original_top1_id is not None
+                    and len(vector_results) >= 5
+                ):
+                    top5_ids = {r.get("id") for r in vector_results[:5]}
+                    if original_top1_id not in top5_ids:
+                        # Find the original top-1 in fused results
+                        promote_idx = None
+                        for idx, r in enumerate(vector_results):
+                            if r.get("id") == original_top1_id:
+                                promote_idx = idx
+                                break
+                        if promote_idx is not None:
+                            # Remove from current position and insert at rank 5 (index 4)
+                            promoted_record = vector_results.pop(promote_idx)
+                            vector_results.insert(4, promoted_record)
+                            exact_match_promoted = True
+                            logger.info(
+                                "Exact-match promotion: moved original top-1 from position %d to rank 5",
+                                promote_idx,
+                            )
             else:
                 vector_results = all_results[0] if all_results else []
+                exact_match_promoted = False
 
             # Log vector search results
             logger.info(
@@ -578,6 +638,7 @@ class RAGEngine:
             hybrid_status = "disabled"
             fts_exceptions = 0
             rerank_status = "disabled"
+            exact_match_promoted = False
 
         # Phase 2: Evaluation/post-processing phase (only reached if search succeeds with results)
         if vector_results:
@@ -648,6 +709,8 @@ class RAGEngine:
             except Exception as eval_error:
                 logger.warning("Post-retrieval evaluation failed: %s", eval_error)
                 # Continue with original results if evaluation fails
+                # NOTE: Do NOT reset exact_match_promoted here — if promotion already
+                # succeeded (modifying vector_results ordering), the flag must remain True.
 
         # Compute score_type from actual rerank_success (not config flag)
         if rerank_success:
@@ -673,7 +736,7 @@ class RAGEngine:
         else:
             rerank_status = "disabled"
 
-        return vector_results, final_relevance_hint, eval_result, rerank_success, score_type, hybrid_status, fts_exceptions, rerank_status, variants_dropped
+        return vector_results, final_relevance_hint, eval_result, rerank_success, score_type, hybrid_status, fts_exceptions, rerank_status, variants_dropped, exact_match_promoted
 
     async def _stream_llm_response(
         self,
@@ -724,6 +787,7 @@ class RAGEngine:
         fts_exceptions: int,
         rerank_status: str,
         variants_dropped: List[str] = None,
+        exact_match_promoted: bool = False,
     ) -> Dict[str, Any]:
         """Build the final done message with sources.
 
@@ -746,6 +810,7 @@ class RAGEngine:
             "fts_exceptions": fts_exceptions,
             "rerank_status": rerank_status,
             "variants_dropped": variants_dropped or [],
+            "exact_match_promoted": exact_match_promoted if settings.exact_match_promote else None,
         }
 
         # Split into primary and supporting (same split as prompt builder)
