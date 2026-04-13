@@ -197,6 +197,40 @@ async def lifespan(app: FastAPI):
     app.state.llm_client = LLMClient()
     await _safe_await(app.state.llm_client.start(), "LLM client start", timeout=10)
     app.state.embedding_service = EmbeddingService()
+    
+    # Validate that live TEI model matches EMBEDDING_MODEL config
+    if settings.strict_embedding_model_check:
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                info_url = app.state.embedding_service.embeddings_url.rstrip('/') + '/info'
+                response = await client.get(info_url)
+                if response.status_code == 200:
+                    info_data = response.json()
+                    live_model_id = info_data.get('model_id', '').split('/')[-1]
+                    configured_model = settings.embedding_model.split('/')[-1]
+                    if live_model_id and live_model_id != configured_model:
+                        error_msg = (
+                            f"EMBEDDING_MODEL mismatch! Configured: '{configured_model}', "
+                            f"Live TEI: '{live_model_id}'. "
+                            f"Embedding space mismatch will cause incorrect retrieval. "
+                            f"Set STRICT_EMBEDDING_MODEL_CHECK=false to disable this check."
+                        )
+                        logger.error("=" * 60)
+                        logger.error("STARTUP VALIDATION FAILED: %s", error_msg)
+                        logger.error("=" * 60)
+                        raise RuntimeError(error_msg)
+                    else:
+                        logger.info("TEI model validation passed: %s", live_model_id)
+                else:
+                    logger.warning("TEI /info endpoint returned %d, skipping model validation", response.status_code)
+        except httpx.TimeoutException:
+            logger.warning("TEI /info endpoint timed out, skipping model validation")
+        except Exception as e:
+            if isinstance(e, RuntimeError):
+                raise  # Re-raise our own error
+            logger.warning("TEI model validation failed (continuing): %s", e)
+    
     app.state.vector_store = VectorStore()
     await _safe_await(
         app.state.vector_store.connect(), "Vector store connect", timeout=15

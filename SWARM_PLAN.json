@@ -1,0 +1,163 @@
+{
+  "schema_version": "1.0.0",
+  "title": "RAG Issues #8 & #9: Deterministic Query Expansion + Embedding Integrity",
+  "swarm": "paid",
+  "current_phase": 7,
+  "phases": [
+    {
+      "id": 7,
+      "name": "Issue #8: Deterministic Query Expansion",
+      "status": "pending",
+      "tasks": [
+        {
+          "id": "7.5",
+          "phase": 7,
+          "status": "pending",
+          "size": "small",
+          "description": "Verify hyde_enabled check at query_transformer.py line 115 is consistent with new STEPBACK_ENABLED pattern. Both should gate their respective transformations. Ensure _execute_retrieval returns variants_dropped list and query() passes it to _build_done_message which accepts it as parameter and includes it in retrieval_debug dict.",
+          "depends": [],
+          "acceptance": "stepback_enabled and hyde_enabled gates verified, variants_dropped flows correctly",
+          "files_touched": []
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "name": "Issue #9: HyDE Doc-Prefix + Embedding Cache + Model Assertion",
+      "status": "pending",
+      "tasks": [
+        {
+          "id": "8.6",
+          "phase": 8,
+          "status": "pending",
+          "size": "small",
+          "description": "Fix Critical Bug: query_transformer.py cache key uses 'step_back'/'hyde' as model name instead of actual LLM model. Change all _make_cache_key calls to pass settings.chat_model as first argument instead of static strings. This ensures cache entries differ when model changes, preventing stale transform results.",
+          "depends": [
+            "7.2"
+          ],
+          "acceptance": "Cache key includes actual model name, not static 'step_back'/'hyde' string",
+          "files_touched": []
+        },
+        {
+          "id": "8.7",
+          "phase": 8,
+          "status": "pending",
+          "size": "medium",
+          "description": "Fix Critical Bug: _execute_retrieval exception handler (lines 393-661) swallows ALL exceptions and returns results as-if-successful. The entire method body is wrapped in try/except Exception with return in both branches. RAGEngineError raised for original query failure (line 423) is caught and never propagates. Restructure so: (1) RAGEngineError and BaseException are re-raised, (2) only post-retrieval evaluation/retry logic is caught, not core search execution.",
+          "depends": [
+            "7.3"
+          ],
+          "acceptance": "Original query failure propagates as error, not silently swallowed",
+          "files_touched": []
+        },
+        {
+          "id": "8.8",
+          "phase": 8,
+          "status": "pending",
+          "size": "small",
+          "description": "Fix Medium Priority: _execute_retrieval has mutable default variants_dropped: List[str] = None. When variants_dropped is passed and then reassigned inside the except block (line 432), it creates a separate object. Callers pass a list expecting it to be mutated in-place, but get a new object. Fix: remove default None, use explicit None check, and never reassign — only append to the passed list.",
+          "depends": [
+            "8.7"
+          ],
+          "acceptance": "variants_dropped mutations visible to caller, no separate object created",
+          "files_touched": []
+        },
+        {
+          "id": "8.9",
+          "phase": 8,
+          "status": "pending",
+          "size": "small",
+          "description": "Refactor embed_passage and embed_single duplication (90% identical). Extract shared _embed_with_prefix(text: str, prefix: str) -> List[float] private method. Both embed_single and embed_passage delegate to it. This reduces duplication and ensures bug fixes apply to both.",
+          "depends": [
+            "8.1"
+          ],
+          "acceptance": "embed_passage and embed_single delegate to shared _embed_with_prefix, no duplicated logic",
+          "files_touched": []
+        },
+        {
+          "id": "8.10",
+          "phase": 8,
+          "status": "pending",
+          "size": "small",
+          "description": "Fix Medium Priority: Embedding cache key does not include prefix. Cache key = {model_fp}_{url_fp}_{text_hash}. If embedding_doc_prefix or embedding_query_prefix changes, cached embeddings remain valid but are now incorrect for the new prefix. Add prefix fingerprint to cache key: {model_fp}_{url_fp}_{prefix_fp}_{text_hash}.",
+          "depends": [
+            "8.1"
+          ],
+          "acceptance": "Cache key includes prefix fingerprint; prefix changes invalidate cache",
+          "files_touched": []
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "name": "Test Coverage for Issues #8 and #9",
+      "status": "in_progress",
+      "tasks": [
+        {
+          "id": "9.2",
+          "phase": 9,
+          "status": "in_progress",
+          "size": "medium",
+          "description": "Fix Critical Bug - Placeholder Test: test_cache_key_includes_model_when_set (test_embeddings_cache.py) only asserts methods exist, never verifies actual cache key composition. Write test that: (1) creates two EmbeddingService instances with different embedding_model settings, (2) calls embed_single with same text on both, (3) verifies they do NOT share cache entries (second call still hits API). Current test just checks hasattr.",
+          "depends": [
+            "8.6"
+          ],
+          "acceptance": "Cache key actually differs when model differs; test verifies API called twice for same text with different models",
+          "files_touched": []
+        },
+        {
+          "id": "9.4",
+          "phase": 9,
+          "status": "in_progress",
+          "size": "medium",
+          "description": "Fix Critical Bug - Placeholder Test: test_hyde_failure_adds_to_variants_dropped (test_rag_engine.py line 326) only asserts hasattr(service, 'embed_passage'). It never verifies variants_dropped is populated. Write test that: (1) uses PartialFailingEmbeddingService that fails only embed_passage, (2) calls engine.query() with HyDE enabled, (3) asserts response succeeds AND retrieval_debug.variants_dropped contains 'hyde'. Use existing FailingEmbeddingService pattern.",
+          "depends": [
+            "7.4",
+            "8.2"
+          ],
+          "acceptance": "test_hyde_failure_adds_to_variants_dropped actually asserts variants_dropped contains 'hyde', not just hasattr",
+          "files_touched": []
+        },
+        {
+          "id": "9.7",
+          "phase": 9,
+          "status": "pending",
+          "size": "medium",
+          "description": "Add zero-coverage test for _is_exact_or_document_query function (query_transformer.py line 15). This function gates whether ANY transformation occurs. Tests needed: (1) quoted exact phrase returns True, (2) filename with pdf/csv/yaml extension returns True, (3) short non-question lookup (3 words, no question word) returns True, (4) normal question returns False, (5) very long query returns False.",
+          "depends": [
+            "7.2"
+          ],
+          "acceptance": "_is_exact_or_document_query has full branch coverage",
+          "files_touched": []
+        },
+        {
+          "id": "9.8",
+          "phase": 9,
+          "status": "pending",
+          "size": "small",
+          "description": "Add Ollama-mode prefix test for embed_passage. Current TestEmbedPassagePrefix tests use OpenAI mode (/v1/embeddings) with 'input' key. Add test for Ollama mode (/api/embeddings) where payload uses 'prompt' key. Verify embed_passage applies embedding_doc_prefix in Ollama mode payload, and embed_single applies embedding_query_prefix.",
+          "depends": [
+            "9.4"
+          ],
+          "acceptance": "Both OpenAI and Ollama mode prefix handling verified",
+          "files_touched": []
+        },
+        {
+          "id": "9.9",
+          "phase": 9,
+          "status": "pending",
+          "size": "medium",
+          "description": "Run full test suite: pytest backend/tests/ -v --tb=short. All existing tests pass plus all new tests for Issues #8 and #9. Verify no regressions.",
+          "depends": [
+            "9.2",
+            "9.4",
+            "9.7",
+            "9.8"
+          ],
+          "files_touched": []
+        }
+      ]
+    }
+  ],
+  "migration_status": "native"
+}
