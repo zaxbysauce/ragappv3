@@ -153,6 +153,11 @@ class PromptBuilderService:
     def format_chunk(self, chunk: RAGSource, source_index: int) -> str:
         """Format a chunk for inclusion in the prompt context with a stable source label.
 
+        When ``parent_retrieval_enabled=True`` and the chunk has a pre-computed
+        ``parent_window_text``, the broader parent window is rendered with the
+        matched small chunk wrapped in ``[[MATCH: …]]`` markers so the LLM can see
+        both precise evidence and its surrounding context (Issue #12).
+
         Args:
             chunk: RAGSource to format
             source_index: 1-based index for the stable source label
@@ -177,6 +182,27 @@ class PromptBuilderService:
             header_parts.append(f"id: {chunk.file_id}")
 
         header = " | ".join(header_parts)
+
+        # Parent-window expansion (Issue #12): deliver wider context to LLM.
+        # The matched small chunk is bracketed with [[MATCH: …]] markers inside
+        # the parent window text so the LLM can orient the exact evidence.
+        if settings.parent_retrieval_enabled and chunk.parent_window_text:
+            # Use raw_text (pre-enrichment) for the MATCH region when available
+            match_text = (
+                chunk.metadata.get("raw_text") or chunk.text or ""
+            ).strip()
+            parent_text = chunk.parent_window_text
+
+            if match_text and match_text in parent_text:
+                marked = parent_text.replace(
+                    match_text, f"[[MATCH: {match_text}]]", 1
+                )
+            else:
+                # Fallback: append the small chunk as a MATCH annotation at the end
+                marked = f"{parent_text}\n\n[[MATCH: {match_text}]]"
+
+            return f"{header}\n{marked}"
+
         return f"{header}\n{chunk.text}"
 
     def build_system_prompt(self) -> str:

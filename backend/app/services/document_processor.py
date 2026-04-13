@@ -21,7 +21,7 @@ from ..config import settings
 from ..models.database import SQLiteConnectionPool, get_pool
 from ..utils.file_utils import compute_file_hash
 from ..utils.retry import with_retry
-from .chunking import SemanticChunker, ProcessedChunk
+from .chunking import SemanticChunker, ProcessedChunk, compute_parent_windows
 from .chunk_enrichment import ChunkEnrichmentService
 from .contextual_chunking import ContextualChunker
 from .embeddings import EmbeddingService
@@ -334,7 +334,7 @@ class DocumentProcessor:
         max_attempts=3, retry_exceptions=(sqlite3.Error,), raise_last_exception=True
     )
     def _check_duplicate(
-        self, file_hash: str, conn: sqlite3.Connection, vault_id: int = 1
+        self, file_hash: str, conn: sqlite3.Connection, vault_id: int
     ) -> Optional[sqlite3.Row]:
         """
         Check if a file with the given hash already exists and is indexed.
@@ -361,7 +361,7 @@ class DocumentProcessor:
         file_path: str,
         file_hash: str,
         conn: sqlite3.Connection,
-        vault_id: int = 1,
+        vault_id: int,
         source: str = "upload",
         email_subject: Optional[str] = None,
         email_sender: Optional[str] = None,
@@ -690,7 +690,7 @@ class DocumentProcessor:
     async def process_file(
         self,
         file_path: str,
-        vault_id: int = 1,
+        vault_id: int,
         source: str = "upload",
         email_subject: Optional[str] = None,
         email_sender: Optional[str] = None,
@@ -700,7 +700,7 @@ class DocumentProcessor:
 
         Args:
             file_path: Path to the file to process
-            vault_id: The vault ID to associate the file with (defaults to 1)
+            vault_id: The vault ID to associate the file with (required — no default)
             source: Source of the file ('upload', 'scan', 'email')
             email_subject: Subject line for email-sourced files
             email_sender: Sender address for email-sourced files
@@ -798,6 +798,23 @@ class DocumentProcessor:
                         )
                 # else: _get_contextual_chunker already logged a warning if needed
 
+            # Compute parent window offsets for small-to-big retrieval (Issue #12)
+            # Run after contextual chunking so raw_text is the pre-enrichment text.
+            # Only meaningful when document_text is available (not spreadsheets/schemas).
+            if document_text and chunks:
+                try:
+                    compute_parent_windows(
+                        chunks,
+                        document_text,
+                        window_chars=settings.parent_window_chars,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "compute_parent_windows failed for %s: %s — parent offsets will be None",
+                        Path(file_path).name,
+                        e,
+                    )
+
             if not chunks:
                 raise DocumentProcessingError(
                     "No extractable content found in document. "
@@ -892,13 +909,43 @@ class DocumentProcessor:
                         if hasattr(chunk, "raw_text") and chunk.raw_text:
                             chunk_metadata["raw_text"] = chunk.raw_text
 
+                        # Store parent window offsets + text in metadata (Issue #12)
+                        if chunk.parent_window_start is not None:
+                            chunk_metadata["parent_window_start"] = chunk.parent_window_start
+                        if chunk.parent_window_end is not None:
+                            chunk_metadata["parent_window_end"] = chunk.parent_window_end
+                        if chunk.chunk_position is not None:
+                            chunk_metadata["chunk_position"] = chunk.chunk_position
+                        # Store parent window text for fast retrieval-time expansion
+                        # (avoids re-parsing the document at query time)
+                        if (
+                            chunk.parent_window_start is not None
+                            and chunk.parent_window_end is not None
+                            and document_text
+                        ):
+                            chunk_metadata["parent_window_text"] = document_text[
+                                chunk.parent_window_start : chunk.parent_window_end
+                            ]
+
+                        # For safe re-upload, prefix chunk IDs with the new file hash
+                        # so old-generation chunks have distinguishable IDs (Issue #13)
+                        if settings.reupload_safe_order:
+                            record_id = f"{file_id}_{file_hash[:8]}_{chunk_scale}_{chunk.chunk_index}"
+                        else:
+                            record_id = chunk_uid
+
                         record = {
-                            "id": chunk_uid,
+                            "id": record_id,
                             "text": chunk.text,
                             "file_id": str(file_id),
                             "chunk_index": chunk.chunk_index,
                             "vault_id": str(vault_id),
                             "chunk_scale": chunk_scale,
+                            # Parent-document retrieval fields (Issue #12)
+                            "parent_doc_id": str(file_id),
+                            "parent_window_start": chunk.parent_window_start,
+                            "parent_window_end": chunk.parent_window_end,
+                            "chunk_position": chunk.chunk_position,
                             "metadata": json.dumps(chunk_metadata),
                             "embedding": embedding,
                         }
@@ -916,9 +963,26 @@ class DocumentProcessor:
                     # Initialize vector table with embedding dimension and add chunks
                     embedding_dim = len(embeddings[0])
                     await self.vector_store.init_table(embedding_dim)
-                    # Delete any previously orphaned chunks for idempotency on retry
-                    await self.vector_store.delete_by_file(str(file_id))
-                    await self.vector_store.add_chunks(records)
+
+                    if settings.reupload_safe_order:
+                        # Safe re-upload: insert new generation first, then delete old (Issue #13)
+                        # Step 1+2: Insert new-generation chunks (hash-prefixed IDs)
+                        await self.vector_store.add_chunks(records)
+                        # Step 3: Delete old-generation chunks for this file
+                        # (chunks whose IDs don't start with the new hash prefix)
+                        deleted = await self.vector_store.delete_old_generation_by_file(
+                            str(file_id), file_hash[:8]
+                        )
+                        if deleted > 0:
+                            logger.info(
+                                "Safe re-upload: deleted %d old-generation chunks for file_id=%s",
+                                deleted,
+                                file_id,
+                            )
+                    else:
+                        # Legacy: delete-then-insert (not crash-safe, kept for compat)
+                        await self.vector_store.delete_by_file(str(file_id))
+                        await self.vector_store.add_chunks(records)
         except Exception as e:
             # Phase 3: Update status to error on failure
             # Get connection again to update error status

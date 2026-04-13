@@ -339,6 +339,52 @@ docker compose logs knowledgevault
 3. Adjust `MAX_DISTANCE_THRESHOLD` to filter results (lower = more strict)
 4. Ensure Ollama has GPU access if available
 
+## Upgrading
+
+### Embedding Dimension Change (Harrier Migration)
+
+If you are upgrading from a version that used BGE-M3 (768-dim) embeddings to Harrier
+(`microsoft/harrier-oss-v1-0.6b`, 1024-dim), **existing documents are not automatically
+re-indexed**. The LanceDB vector store cannot be converted in-place because embeddings are
+dimension-incompatible.
+
+**Symptom:** Chat returns no document results or the `/api/health?deep=true` response
+includes `"stale_embeddings": true` in the `vector_store` section.
+
+**Required steps:**
+
+```bash
+# 1. Backup your data before proceeding
+cp -r /your/data/dir/lancedb /your/data/dir/lancedb.bak
+cp /your/data/dir/app.db /your/data/dir/app.db.bak
+
+# 2. Run the migration script to clear stale embeddings
+#    (dry-run first to see what will change)
+python scripts/migrate_embeddings.py --dry-run
+
+# 3. Run the actual migration — this wipes LanceDB and resets file statuses to pending
+python scripts/migrate_embeddings.py
+
+# 4. Restart the application — the background processor will re-index all files
+docker compose restart knowledgevault
+```
+
+The background processor automatically re-embeds all files with `status='pending'`.
+Depending on the number of documents and your hardware, this may take several minutes.
+
+**Health check after migration:**
+
+```bash
+# Verify embedding dimension is correct
+curl http://localhost:9090/api/health?deep=true | jq .vector_store
+# Expected: {"ok": true, "rows": <N>, "stale_embeddings": null or absent}
+```
+
+> **Note:** `scripts/migrate_embeddings.py` is safe to run multiple times. On a clean
+> deployment (no existing LanceDB data), it is a no-op.
+
+---
+
 ## API Endpoints
 
 ### Health & Status

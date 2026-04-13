@@ -3,7 +3,7 @@
 import asyncio
 import logging
 from datetime import datetime
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
+from typing import Any, AsyncIterator, Dict, List, Optional, Set, Tuple
 
 from app.config import settings
 from app.services.document_retrieval import DocumentRetrievalService, RAGSource
@@ -282,9 +282,23 @@ class RAGEngine:
                     "token_pack_truncated": 0,
                 }
 
+        # Fetch indexed file IDs for atomic visibility filter (Issue #13)
+        # Only chunks from fully-indexed files are returned — pending/processing files are hidden.
+        indexed_file_ids: Optional[Set[str]] = None
+        try:
+            indexed_file_ids = await asyncio.to_thread(
+                self._get_indexed_file_ids, vault_id
+            )
+        except Exception as _exc:
+            logger.warning(
+                "Failed to fetch indexed_file_ids (visibility filter disabled): %s", _exc
+            )
+
         # Filter relevant chunks using document retrieval service
         relevant_chunks = await self.document_retrieval.filter_relevant(
-            vector_results, reranked=rerank_success if rerank_success is not None else False
+            vector_results,
+            reranked=rerank_success if rerank_success is not None else False,
+            indexed_file_ids=indexed_file_ids,
         )
         logger.info(
             "[query] After filter_relevant: relevant_chunk_count=%d",
@@ -307,6 +321,12 @@ class RAGEngine:
                 )
             except Exception as exc:
                 logger.warning("Context distillation failed, continuing: %s", exc)
+
+        # Parent window expansion: deliver parent context to LLM (Issue #12)
+        # Reads pre-computed parent_window_text from chunk metadata and assigns it to
+        # source.parent_window_text; prompt_builder renders it with [[MATCH:]] markers.
+        if settings.parent_retrieval_enabled and relevant_chunks:
+            relevant_chunks = self._expand_parent_windows(relevant_chunks)
 
         # Check if distance filtering removed all results (no_match)
         if not relevant_chunks and self.document_retrieval.no_match:
@@ -1043,6 +1063,66 @@ class RAGEngine:
         except Exception as exc:
             logger.warning("Supersession check failed (suppressed): %s", exc)
         return None
+
+    def _get_indexed_file_ids(self, vault_id: Optional[int]) -> Optional[Set[str]]:
+        """Return the set of file IDs with status='indexed' from SQLite (Issue #13).
+
+        Used to filter out chunks belonging to files still being ingested (pending /
+        processing) so that partial-ingest state is never visible to the LLM.
+
+        Args:
+            vault_id: If provided, restrict to files in this vault.
+
+        Returns:
+            Set of str file IDs, or None if the lookup fails (caller falls back to
+            no filtering rather than blocking the query).
+        """
+        try:
+            pool = _get_pool()
+            conn = pool.get_connection()
+            try:
+                if vault_id is not None:
+                    cursor = conn.execute(
+                        "SELECT id FROM files WHERE status='indexed' AND vault_id=?",
+                        (vault_id,),
+                    )
+                else:
+                    cursor = conn.execute("SELECT id FROM files WHERE status='indexed'")
+                rows = cursor.fetchall()
+                return {str(row["id"]) for row in rows}
+            finally:
+                pool.release_connection(conn)
+        except Exception as exc:
+            logger.debug("_get_indexed_file_ids failed: %s", exc)
+            return None
+
+    def _expand_parent_windows(self, sources: List[RAGSource]) -> List[RAGSource]:
+        """Populate parent_window_text on each source when available (Issue #12).
+
+        Reads the pre-computed ``parent_window_text`` from chunk metadata (stored
+        at ingest time) and assigns it to ``source.parent_window_text``.  The
+        prompt_builder renders this wider context with ``[[MATCH: …]]`` markers
+        around the original small-chunk text so the LLM sees both the precise match
+        and its surrounding context.
+
+        Only active when ``PARENT_RETRIEVAL_ENABLED=True``.  If a chunk has no
+        stored parent window (legacy chunks, spreadsheets, schema files), the field
+        remains None and the chunk's own text is used as-is.
+        """
+        expanded = 0
+        for source in sources:
+            pw_text = source.metadata.get("parent_window_text")
+            if pw_text:
+                source.parent_window_text = pw_text
+                expanded += 1
+
+        if expanded:
+            logger.debug(
+                "_expand_parent_windows: expanded %d/%d chunks with parent window context",
+                expanded,
+                len(sources),
+            )
+        return sources
 
     async def _expand_window(self, sources: List[RAGSource]) -> List[RAGSource]:
         """Expand search results by fetching adjacent chunks (backward compatibility).
