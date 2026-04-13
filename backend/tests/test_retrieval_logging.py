@@ -110,7 +110,7 @@ class RetrievalLoggingTests(unittest.IsolatedAsyncioTestCase):
 
         # Capture logs
         with self.assertLogs("app.services.rag_engine", level="INFO") as log:
-            result, _, _, _, _, _, _, _ = await engine._execute_retrieval(
+            result, _, _, _, _, _, _, _, _, _ = await engine._execute_retrieval(
                 query_embeddings, "test query", vault_id=1
             )
 
@@ -146,7 +146,7 @@ class RetrievalLoggingTests(unittest.IsolatedAsyncioTestCase):
 
         # Capture logs
         with self.assertLogs("app.services.rag_engine", level="INFO") as log:
-            result, _, _, _, _, _, _, _ = await engine._execute_retrieval(
+            result, _, _, _, _, _, _, _, _, _ = await engine._execute_retrieval(
                 query_embeddings, "test query", vault_id=42
             )
 
@@ -201,7 +201,7 @@ class RetrievalLoggingTests(unittest.IsolatedAsyncioTestCase):
 
             # Capture logs
             with self.assertLogs("app.services.rag_engine", level="INFO") as log:
-                result, _, _, _, _, _, _, _ = await engine._execute_retrieval(
+                result, _, _, _, _, _, _, _, _, _ = await engine._execute_retrieval(
                     query_embeddings, "test query", vault_id=1
                 )
 
@@ -221,7 +221,7 @@ class RetrievalLoggingTests(unittest.IsolatedAsyncioTestCase):
             )
 
     async def test_token_packing_skip_log_when_disabled(self):
-        """When context_max_tokens=0, skip log fires."""
+        """When context_max_tokens <= 0, no packing log fires (packing is silently skipped)."""
         # Create engine with mocked dependencies
         engine = RAGEngine()
         engine.embedding_service = cast(
@@ -255,21 +255,19 @@ class RetrievalLoggingTests(unittest.IsolatedAsyncioTestCase):
 
             # Capture logs
             with self.assertLogs("app.services.rag_engine", level="INFO") as log:
-                result, _, _, _, _, _, _, _ = await engine._execute_retrieval(
+                result, _, _, _, _, _, _, _, _, _ = await engine._execute_retrieval(
                     query_embeddings, "test query", vault_id=1
                 )
 
-            # Verify "Token packing: disabled" log was emitted
-            disabled_log_found = False
+            # Verify NO token packing log was emitted when disabled
+            packing_log_found = False
             for log_record in log.output:
-                if "Token packing: disabled" in log_record:
-                    disabled_log_found = True
-                    # Verify it mentions context_max_tokens=0
-                    self.assertIn("context_max_tokens=0", log_record)
+                if "Token packing" in log_record:
+                    packing_log_found = True
 
-            self.assertTrue(
-                disabled_log_found,
-                "Token packing disabled log should fire when context_max_tokens <= 0",
+            self.assertFalse(
+                packing_log_found,
+                "Token packing log should NOT fire when context_max_tokens <= 0",
             )
 
     async def test_no_packing_log_when_no_results(self):
@@ -305,7 +303,7 @@ class RetrievalLoggingTests(unittest.IsolatedAsyncioTestCase):
 
             # Capture logs
             with self.assertLogs("app.services.rag_engine", level="INFO") as log:
-                result, _, _, _, _, _, _, _ = await engine._execute_retrieval(
+                result, _, _, _, _, _, _, _, _, _ = await engine._execute_retrieval(
                     query_embeddings, "test query", vault_id=1
                 )
 

@@ -154,7 +154,7 @@ async def test_hybrid_status_disabled_when_hybrid_search_disabled():
         user_input="test query",
         vault_id=None,
     )
-    vector_results, relevance_hint, eval_result, rerank_success, score_type, hybrid_status, fts_exceptions, rerank_status = result_tuple
+    vector_results, relevance_hint, eval_result, rerank_success, score_type, hybrid_status, fts_exceptions, rerank_status, variants_dropped, exact_match_promoted = result_tuple
 
     assert hybrid_status == "disabled", f"Expected 'disabled', got '{hybrid_status}'"
 
@@ -173,7 +173,7 @@ async def test_hybrid_status_both_when_fts_ok():
         user_input="test query",
         vault_id=None,
     )
-    _, _, _, _, _, hybrid_status, fts_exceptions, _ = result_tuple
+    _, _, _, _, _, hybrid_status, fts_exceptions, _, _, _ = result_tuple
 
     assert hybrid_status == "both", f"Expected 'both', got '{hybrid_status}'"
 
@@ -193,7 +193,7 @@ async def test_hybrid_status_dense_only_when_no_fts_status_key():
         user_input="test query",
         vault_id=None,
     )
-    _, _, _, _, _, hybrid_status, fts_exceptions, _ = result_tuple
+    _, _, _, _, _, hybrid_status, fts_exceptions, _, _, _ = result_tuple
 
     assert hybrid_status == "dense_only", f"Expected 'dense_only', got '{hybrid_status}'"
 
@@ -212,7 +212,7 @@ async def test_hybrid_status_dense_only_when_fts_failed():
         user_input="test query",
         vault_id=None,
     )
-    _, _, _, _, _, hybrid_status, fts_exceptions, _ = result_tuple
+    _, _, _, _, _, hybrid_status, fts_exceptions, _, _, _ = result_tuple
 
     assert hybrid_status == "dense_only", f"Expected 'dense_only', got '{hybrid_status}'"
 
@@ -231,7 +231,7 @@ async def test_hybrid_status_both_with_mixed_fts_status():
         user_input="test query",
         vault_id=None,
     )
-    _, _, _, _, _, hybrid_status, fts_exceptions, _ = result_tuple
+    _, _, _, _, _, hybrid_status, fts_exceptions, _, _, _ = result_tuple
 
     assert hybrid_status == "both", f"Expected 'both', got '{hybrid_status}'"
 
@@ -321,7 +321,7 @@ async def test_hybrid_status_included_in_done_message():
         # Note: rerank_success=True (4th elem) → rerank_status="ok" (8th elem)
         async def mock_retrieval(*args, **kwargs):
             from app.services.document_retrieval import RAGSource
-            return [{"id": "1", "text": "doc", "file_id": "f1", "_distance": 0.1, "_fts_status": "ok", "metadata": {}}], None, "CONFIDENT", True, "rerank", "both", 0, "ok"
+            return [{"id": "1", "text": "doc", "file_id": "f1", "_distance": 0.1, "_fts_status": "ok", "metadata": {}}], None, "CONFIDENT", True, "rerank", "both", 0, "ok", False, False
         with patch.object(engine, '_execute_retrieval', mock_retrieval):
             async for msg in engine.query("test query", []):
                 if msg.get("type") == "done":
@@ -350,7 +350,7 @@ async def test_hybrid_status_dense_only_in_done_message():
         patch("app.services.rag_engine.settings.retrieval_recency_weight", 0.0), \
         patch("app.services.rag_engine.settings.context_max_tokens", 0):
         async def mock_retrieval(*args, **kwargs):
-            return [{"id": "1", "text": "doc", "file_id": "f1", "_distance": 0.1, "metadata": {}}], None, "CONFIDENT", True, "rerank", "dense_only", 0, "ok"
+            return [{"id": "1", "text": "doc", "file_id": "f1", "_distance": 0.1, "metadata": {}}], None, "CONFIDENT", True, "rerank", "dense_only", 0, "ok", False, False
         with patch.object(engine, '_execute_retrieval', mock_retrieval):
             async for msg in engine.query("test query", []):
                 if msg.get("type") == "done":
@@ -482,14 +482,14 @@ async def test_hybrid_status_dense_only_empty_results():
     # Patch _execute_retrieval to return a controlled tuple, bypassing the
     # score_type UnboundLocalError bug in rag_engine.py's except handler.
     async def mock_retrieval(*args, **kwargs):
-        return [], None, "CONFIDENT", False, "distance", "dense_only", 0, "ok"
+        return [], None, "CONFIDENT", False, "distance", "dense_only", 0, "ok", False, False
     with patch.object(engine, '_execute_retrieval', mock_retrieval):
         result_tuple = await engine._execute_retrieval(
             query_embeddings=[[0.1] * 384],
             user_input="test query",
             vault_id=None,
         )
-    _, _, _, _, _, hybrid_status, fts_exceptions, _ = result_tuple
+    _, _, _, _, _, hybrid_status, fts_exceptions, _, _, _ = result_tuple
 
     assert hybrid_status == "dense_only", f"Expected 'dense_only', got '{hybrid_status}'"
 

@@ -357,7 +357,7 @@ class TestRAGEngineScoreTracking:
         # Patch _execute_retrieval to return the correct tuple format with False for rerank_success
         async def mock_retrieval(*args, **kwargs):
             # Return properly formatted dicts (not RAGSource) to avoid AttributeError in .get() calls
-            return [{"id": "chunk1", "text": "Relevant chunk 1", "file_id": "doc1", "_distance": 0.2, "metadata": {}}], None, "CONFIDENT", False, "distance", "dense_only", 0, "fallback"
+            return [{"id": "chunk1", "text": "Relevant chunk 1", "file_id": "doc1", "_distance": 0.2, "metadata": {}}], None, "CONFIDENT", False, "distance", "dense_only", 0, "fallback", False, False
         
         with patch.object(engine, '_execute_retrieval', mock_retrieval):
             results = []
