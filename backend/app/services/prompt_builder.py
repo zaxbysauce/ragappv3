@@ -23,9 +23,23 @@ CITATION_INSTRUCTION = (
 def calculate_primary_count(total_chunks: int) -> int:
     """Calculate the number of primary evidence chunks from total chunk count.
 
-    Uses at least 3 chunks (or all if fewer) and at most half the total.
+    If PRIMARY_EVIDENCE_COUNT > 0 in settings, that value is used directly
+    (capped by total_chunks).
+
+    Otherwise uses the formula: min(max(n - 2, 3), min(n, 5))
+    which gives:
+      n=0 → 0, n=1 → 1, n=2 → 2, n=3 → 3, n=4 → 3, n=5 → 3,
+      n=6 → 4, n=7+ → 5
+
+    This ensures that with the default reranker_top_n=7, five chunks receive
+    primary treatment (instead of three under the old n//2 formula).
     """
-    return min(max(total_chunks // 2, 3), total_chunks)
+    if total_chunks == 0:
+        return 0
+    override = settings.primary_evidence_count
+    if override > 0:
+        return min(override, total_chunks)
+    return min(max(total_chunks - 2, 3), min(total_chunks, 5))
 
 
 class PromptBuilderService:
@@ -113,6 +127,18 @@ class PromptBuilderService:
 
         if not primary_sections and not supporting_sections:
             user_content_parts.append("No relevant documents found for this query.")
+
+        # Anchor best chunk: repeat top-ranked chunk at the end of the context region.
+        # Mitigates LLM "lost-in-the-middle" effect. Skipped when the top chunk already
+        # dominates the budget (> 50% of context_max_tokens tokens).
+        if settings.anchor_best_chunk and primary_chunks:
+            top_chunk = primary_chunks[0]
+            top_chunk_tokens = max(1, int(len(top_chunk.text) / 3.5))
+            if top_chunk_tokens <= settings.context_max_tokens * 0.5:
+                anchor_section = self.format_chunk(top_chunk, 1)
+                user_content_parts.append(
+                    f"[BEST MATCH — repeated for emphasis]\n{anchor_section}"
+                )
 
         user_content = "\n\n".join(user_content_parts) + "\n\n"
 

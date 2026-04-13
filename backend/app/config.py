@@ -157,6 +157,17 @@ class Settings(BaseSettings):
     context_max_tokens: int = 6000
     """Maximum approximate tokens for packed context before prompt building."""
 
+    primary_evidence_count: int = 0
+    """Override for primary evidence chunk count in prompt builder. 0 = use formula (min(max(n-2, 3), min(n, 5)))."""
+
+    anchor_best_chunk: bool = True
+    """Anchor the top-ranked chunk at both the start and end of the context region.
+    Standard mitigation for lost-in-the-middle. Skipped if the top chunk exceeds 50% of context_max_tokens."""
+
+    token_pack_strategy: str = "reserved_best_fit"
+    """Token packing strategy: 'reserved_best_fit' reserves top-3 (never skipped) and uses best-fit for
+    remaining chunks (no early break). 'greedy' is the legacy first-fit with early break."""
+
     # ── Chunking strategy ──────────────────────────────────────────────
     semantic_chunking_strategy: str = "title"
     """Chunking strategy: 'title' for fixed-size, 'embedding' for cosine-similarity breakpoints."""
@@ -417,6 +428,12 @@ class Settings(BaseSettings):
         return cls._validate_enum(
             v, {"fast", "hi_res", "auto"}, "document_parsing_strategy"
         )
+
+    @field_validator("token_pack_strategy", mode="after")
+    @classmethod
+    def validate_token_pack_strategy(cls, v: str) -> str:
+        """Validate token_pack_strategy is one of: reserved_best_fit, greedy."""
+        return cls._validate_enum(v, {"reserved_best_fit", "greedy"}, "token_pack_strategy")
 
     @field_validator("multi_scale_chunk_sizes", mode="after")
     @classmethod
