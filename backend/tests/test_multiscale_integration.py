@@ -49,7 +49,11 @@ class FakeVectorStore:
 
     def __init__(self, results: List[Dict]):
         self._results = results
+        self._fts_exceptions = 0
         self.search_call_count = 0
+
+    def get_fts_exceptions(self) -> int:
+        return self._fts_exceptions
 
     async def search(
         self,
@@ -185,7 +189,7 @@ class TestRecencyFusionIntegration(unittest.IsolatedAsyncioTestCase):
         # Patch settings for recency
         with patch.object(settings, "retrieval_recency_weight", 0.5):
             # Pass 2 query embeddings to get 2 result lists (len(all_results) = 2)
-            results, _ = await engine._execute_retrieval(
+            results, _, _, _, _, _, _, _ = await engine._execute_retrieval(
                 [[0.1] * 384, [0.1] * 384],  # 2 embeddings = 2 result lists
                 "test query",
                 vault_id=1,
@@ -230,7 +234,7 @@ class TestRecencyFusionIntegration(unittest.IsolatedAsyncioTestCase):
 
         # Patch settings to use weight=0
         with patch.object(settings, "retrieval_recency_weight", 0.0):
-            results, _ = await engine._execute_retrieval(
+            results, _, _, _, _, _, _, _ = await engine._execute_retrieval(
                 [[0.1] * 384, [0.1] * 384],
                 "test query",
                 vault_id=1,
@@ -265,7 +269,7 @@ class TestRecencyFusionIntegration(unittest.IsolatedAsyncioTestCase):
         # With weight > 0 but only 1 result list, recency should be skipped
         engine = self._create_engine_with_results(result_lists)
         with patch.object(settings, "retrieval_recency_weight", 0.5):
-            results, _ = await engine._execute_retrieval(
+            results, _, _, _, _, _, _, _ = await engine._execute_retrieval(
                 [[0.1] * 384],  # single embedding = single result list
                 "test query",
                 vault_id=1,
@@ -289,7 +293,7 @@ class TestRecencyFusionIntegration(unittest.IsolatedAsyncioTestCase):
 
         engine = self._create_engine_with_results(result_lists)
         with patch.object(settings, "retrieval_recency_weight", 0.5):
-            results, _ = await engine._execute_retrieval(
+            results, _, _, _, _, _, _, _ = await engine._execute_retrieval(
                 [[0.1] * 384, [0.1] * 384],  # 2 embeddings = 2 result lists
                 "test query",
                 vault_id=1,
@@ -345,7 +349,7 @@ class TestRecencyFusionIntegration(unittest.IsolatedAsyncioTestCase):
 
         engine = self._create_engine_with_results(result_lists)
         with patch.object(settings, "retrieval_recency_weight", 1.0):
-            results, _ = await engine._execute_retrieval(
+            results, _, _, _, _, _, _, _ = await engine._execute_retrieval(
                 [[0.1] * 384, [0.1] * 384],  # 2 embeddings for fusion
                 "test query",
                 vault_id=1,
@@ -400,7 +404,7 @@ class TestRecencyFusionIntegration(unittest.IsolatedAsyncioTestCase):
 
         # Should not raise an exception
         with patch.object(settings, "retrieval_recency_weight", 0.5):
-            results, _ = await engine._execute_retrieval(
+            results, _, _, _, _, _, _, _ = await engine._execute_retrieval(
                 [[0.1] * 384, [0.1] * 384],
                 "test query",
                 vault_id=1,
@@ -490,7 +494,7 @@ class TestRecencyFusionIntegration(unittest.IsolatedAsyncioTestCase):
 
         engine = self._create_engine_with_results(result_lists)
         with patch.object(settings, "retrieval_recency_weight", 0.5):
-            results, _ = await engine._execute_retrieval(
+            results, _, _, _, _, _, _, _ = await engine._execute_retrieval(
                 [[0.1] * 384, [0.1] * 384],
                 "test query",
                 vault_id=1,
@@ -525,7 +529,7 @@ class TestRecencyFusionIntegration(unittest.IsolatedAsyncioTestCase):
 
         # Should not raise - recency should be skipped when only 1 valid date
         with patch.object(settings, "retrieval_recency_weight", 0.5):
-            results, _ = await engine._execute_retrieval(
+            results, _, _, _, _, _, _, _ = await engine._execute_retrieval(
                 [[0.1] * 384, [0.1] * 384],
                 "test query",
                 vault_id=1,
@@ -568,7 +572,7 @@ class TestRecencyFusionIntegration(unittest.IsolatedAsyncioTestCase):
 
         # Should not raise - span=1.0 handles zero difference
         with patch.object(settings, "retrieval_recency_weight", 0.5):
-            results, _ = await engine._execute_retrieval(
+            results, _, _, _, _, _, _, _ = await engine._execute_retrieval(
                 [[0.1] * 384, [0.1] * 384],
                 "test query",
                 vault_id=1,

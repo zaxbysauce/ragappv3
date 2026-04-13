@@ -32,8 +32,8 @@ class TestCitationInstruction:
         """Verify CITATION_INSTRUCTION contains the source citation format."""
         from app.services.prompt_builder import CITATION_INSTRUCTION
 
-        assert "[Source: filename]" in CITATION_INSTRUCTION, (
-            "CITATION_INSTRUCTION should contain '[Source: filename]' format instruction"
+        assert "[S1]" in CITATION_INSTRUCTION or "[S" in CITATION_INSTRUCTION, (
+            "CITATION_INSTRUCTION should include source citation labels like [S1]"
         )
 
     def test_citation_instruction_contains_not_available(self):
@@ -114,7 +114,7 @@ class TestBuildDoneMessageScoreType:
         engine = RAGEngine()
         engine.reranking_enabled = False
 
-        result = engine._build_done_message([], [])
+        result = engine._build_done_message([], [], score_type='distance', hybrid_status='disabled', fts_exceptions=0, rerank_status='disabled')
 
         assert "score_type" in result, (
             "_build_done_message result should include 'score_type' field"
@@ -132,7 +132,7 @@ class TestBuildDoneMessageScoreType:
         engine = RAGEngine()
         engine.reranking_enabled = True
 
-        result = engine._build_done_message([], [])
+        result = engine._build_done_message([], [], score_type='rerank', hybrid_status='both', fts_exceptions=0, rerank_status='ok')
 
         assert "score_type" in result, (
             "_build_done_message result should include 'score_type' field"
@@ -149,7 +149,7 @@ class TestBuildDoneMessageScoreType:
         engine = RAGEngine()
         engine.reranking_enabled = False
 
-        result = engine._build_done_message([], [])
+        result = engine._build_done_message([], [], score_type='distance', hybrid_status='disabled', fts_exceptions=0, rerank_status='disabled')
 
         assert isinstance(result["score_type"], str), (
             f"score_type should be a string, got {type(result['score_type'])}"
@@ -161,7 +161,7 @@ class TestBuildDoneMessageScoreType:
 
         engine = RAGEngine()
 
-        result = engine._build_done_message([], [])
+        result = engine._build_done_message([], [], score_type='distance', hybrid_status='disabled', fts_exceptions=0, rerank_status='disabled')
 
         expected_fields = {
             "type",
@@ -224,11 +224,11 @@ class TestScoreTypeEdgeCases:
 
         # Test toggling reranking_enabled
         engine.reranking_enabled = False
-        result = engine._build_done_message([], [])
+        result = engine._build_done_message([], [], score_type='distance', hybrid_status='disabled', fts_exceptions=0, rerank_status='disabled')
         assert result["score_type"] == "distance"
 
         engine.reranking_enabled = True
-        result = engine._build_done_message([], [])
+        result = engine._build_done_message([], [], score_type='rerank', hybrid_status='both', fts_exceptions=0, rerank_status='ok')
         assert result["score_type"] == "rerank"
 
     def test_done_message_with_actual_sources(self):
@@ -249,7 +249,7 @@ class TestScoreTypeEdgeCases:
             )
         ]
 
-        result = engine._build_done_message(mock_sources, [])
+        result = engine._build_done_message(mock_sources, [], score_type='distance', hybrid_status='disabled', fts_exceptions=0, rerank_status='disabled')
 
         assert result["score_type"] == "distance"
         assert len(result["sources"]) == 1

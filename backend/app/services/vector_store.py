@@ -4,6 +4,7 @@ LanceDB vector store service for semantic search.
 
 import asyncio
 import json
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, cast
@@ -20,6 +21,9 @@ logger = logging.getLogger(__name__)
 
 # Multi-scale search concurrency limit
 _MULTI_SCALE_CONCURRENCY = 4
+
+# Thread lock for FTS exceptions counter
+_fts_lock = threading.Lock()
 
 # Minimum rows before creating vector index (deferred creation)
 VECTOR_INDEX_MIN_ROWS = 256
@@ -71,6 +75,7 @@ class VectorStore:
         self.db: Optional[lancedb.AsyncConnection] = None
         self.table: Optional[lancedb.table.AsyncTable] = None
         self._embedding_dim: Optional[int] = None
+        self._fts_exceptions: int = 0
 
     async def connect(self) -> "VectorStore":
         """Connect to LanceDB.
@@ -184,6 +189,13 @@ class VectorStore:
             logger.debug("FTS index already exists, skipping creation")
 
         return self
+
+    def get_fts_exceptions(self) -> int:
+        """Return the number of FTS exceptions since last reset and reset counter."""
+        with _fts_lock:
+            count = self._fts_exceptions
+            self._fts_exceptions = 0
+            return count
 
     async def _get_expected_embedding_dim(self) -> Optional[int]:
         """Get the expected embedding dimension from the table schema."""
@@ -405,7 +417,8 @@ class VectorStore:
         if not hybrid or not query_text:
             return dense_results
 
-        # BM25 FTS hybrid search
+        # BM25 FTS hybrid search with fts_status tracking
+        fts_status = 'ok'
         try:
             fts_query = await self.table.search(query_text, query_type="fts")
             fts_filter_parts = [scale_filter]
@@ -417,29 +430,35 @@ class VectorStore:
             fts_combined_filter = " AND ".join(f"({f})" for f in fts_filter_parts)
             fts_query = fts_query.where(fts_combined_filter)
             fts_results = await fts_query.limit(fetch_k).to_list()
+            if fts_results:
+                logger.info(
+                    f"Hybrid search (BM25 FTS) succeeded for scale {scale}: {len(fts_results)} FTS results (alpha={hybrid_alpha})"
+                )
+                fts_status = 'ok'
+            else:
+                fts_status = 'empty'
         except Exception as e:
             logger.warning(
-                f"FTS search failed for scale {scale} (falling back to dense-only): {e}"
+                f"FTS search failed for scale {scale} (falling back to dense-only): {type(e).__name__}"
             )
             fts_results = []
+            fts_status = 'failed'
+            with _fts_lock:
+                self._fts_exceptions += 1
 
-        # RRF Fusion for this scale with hybrid_alpha weighting
+        # RRF Fusion for this scale
         k_rrf = 60
         rrf_scores: dict = {}
         id_to_record: dict = {}
 
-        # Apply hybrid_alpha weighting to dense and FTS contributions
-        dense_weight = hybrid_alpha
-        fts_weight = 1.0 - hybrid_alpha
-
         for rank, record in enumerate(dense_results):
             uid = record.get("id", f"dense_{rank}")
-            rrf_scores[uid] = rrf_scores.get(uid, 0.0) + dense_weight / (k_rrf + rank + 1)
+            rrf_scores[uid] = rrf_scores.get(uid, 0.0) + 1.0 / (k_rrf + rank + 1)
             id_to_record[uid] = record
 
         for rank, record in enumerate(fts_results):
             uid = record.get("id", f"fts_{rank}")
-            rrf_scores[uid] = rrf_scores.get(uid, 0.0) + fts_weight / (k_rrf + rank + 1)
+            rrf_scores[uid] = rrf_scores.get(uid, 0.0) + 1.0 / (k_rrf + rank + 1)
             if uid not in id_to_record:
                 id_to_record[uid] = record
 
@@ -448,15 +467,8 @@ class VectorStore:
         for uid in rrf_scores:
             record = dict(id_to_record[uid])
             record["_rrf_score"] = rrf_scores[uid]
+            record["_fts_status"] = fts_status
             result_list.append(record)
-
-        if hybrid and query_text and (dense_weight > 0.0 and fts_weight > 0.0):
-            logger.debug(
-                f"Multi-scale RRF fusion for scale={scale}: "
-                f"hybrid_alpha={hybrid_alpha:.2f} (dense_weight={dense_weight:.2f}, fts_weight={fts_weight:.2f}), "
-                f"dense_results={len(dense_results)}, fts_results={len(fts_results)}, fused={len(result_list)}"
-            )
-
         return result_list
 
     async def search(
@@ -646,9 +658,13 @@ class VectorStore:
 
         # If hybrid disabled, return dense results only
         if not hybrid or not query_text:
+            logger.debug(
+                f"Dense-only search (hybrid disabled or no query text)"
+            )
             return dense_results
 
-        # BM25 FTS hybrid search
+        # BM25 FTS hybrid search with fts_status tracking
+        fts_status = 'ok'
         try:
             fts_query = await self.table.search(query_text, query_type="fts")
             if vault_id:
@@ -657,14 +673,26 @@ class VectorStore:
             if filter_expr:
                 fts_query = fts_query.where(filter_expr)
             fts_results = await fts_query.limit(fetch_k).to_list()
-        except (OSError, RuntimeError, ValueError) as e:
-            logger.warning(f"FTS search failed (falling back to dense-only): {e}")
+            if fts_results:
+                logger.info(
+                    f"Hybrid search (BM25 FTS) succeeded: {len(fts_results)} FTS results (alpha={hybrid_alpha})"
+                )
+                fts_status = 'ok'
+            else:
+                fts_status = 'empty'
+        except Exception as e:
+            logger.warning(f"FTS search failed (falling back to dense-only): {type(e).__name__}")
             fts_results = []
+            fts_status = 'failed'
+            with _fts_lock:
+                self._fts_exceptions += 1
 
-        # RRF Fusion with hybrid_alpha weighting
-        # hybrid_alpha: 1.0 = pure dense, 0.0 = pure BM25, 0.5 = equal weight
-        weights = [hybrid_alpha, 1.0 - hybrid_alpha]
-        return rrf_fuse([dense_results, fts_results], k=60, limit=limit, weights=weights)
+        # RRF Fusion using shared utility
+        fused = rrf_fuse([dense_results, fts_results], k=60, limit=limit, weights=[hybrid_alpha, 1 - hybrid_alpha])
+        # Attach FTS status to each result
+        for record in fused:
+            record["_fts_status"] = fts_status
+        return fused
 
     async def delete_by_file(self, file_id: str) -> int:
         """

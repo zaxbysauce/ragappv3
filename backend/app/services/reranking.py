@@ -10,6 +10,7 @@ Supports two backends:
 """
 
 import logging
+import math
 import threading
 from typing import List, Dict, Any, Optional, Tuple
 
@@ -21,6 +22,15 @@ logger = logging.getLogger(__name__)
 
 _local_model = None  # lazy-loaded CrossEncoder instance
 _model_lock = threading.Lock()  # lock for thread-safe lazy initialization
+
+
+def _safe_sigmoid(logit: float) -> float:
+    """Unconditional sigmoid with overflow protection for BGE-M3 logits."""
+    if logit > 709:
+        return 1.0
+    if logit < -709:
+        return 0.0
+    return 1.0 / (1.0 + math.exp(-logit))
 
 
 def _get_local_model(model_id: str):
@@ -63,7 +73,7 @@ class RerankingService:
         query: str,
         chunks: List[Dict[str, Any]],
         top_n: Optional[int] = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> Tuple[List[Dict[str, Any]], bool]:
         """
         Rerank chunks given a query. Returns top_n chunks sorted by score desc.
 
@@ -73,13 +83,13 @@ class RerankingService:
             top_n: Override instance top_n for this call.
 
         Returns:
-            Reranked and trimmed list of chunk dicts with '_rerank_score' added.
+            Tuple of (reranked and trimmed list of chunk dicts with '_rerank_score', success).
         """
         n = top_n or self.top_n
         if not chunks:
-            return []
+            return ([], True)
         if len(chunks) <= 1:
-            return chunks
+            return (chunks, False)  # False = no reranking actually applied
 
         texts = [c.get("text", "") for c in chunks]
 
@@ -89,8 +99,8 @@ class RerankingService:
             else:
                 scored = await self._rerank_local(query, texts, n)
         except Exception as e:
-            logger.error(f"Reranking failed, returning original order: {e}")
-            return chunks[:n]
+            logger.error(f"Reranking failed, returning original order: {type(e).__name__}")
+            return (chunks[:n], False)
 
         # Attach score and return top_n
         result = []
@@ -98,7 +108,7 @@ class RerankingService:
             chunk = dict(chunks[idx])
             chunk["_rerank_score"] = score
             result.append(chunk)
-        return result
+        return (result, True)
 
     async def _rerank_via_endpoint(
         self, query: str, texts: List[str], top_n: int
@@ -130,7 +140,12 @@ class RerankingService:
         # data is list of {"index": int, "score": float}
         # Sort by score descending before slicing to ensure correct results
         sorted_data = sorted(data, key=lambda x: x.get("score", 0), reverse=True)
-        return [(item["index"], item["score"]) for item in sorted_data[:top_n]]
+        raw_scores = [item["score"] for item in sorted_data[:top_n]]
+        
+        # Unconditional sigmoid with overflow protection for BGE-M3 logits
+        normalized_scores = [_safe_sigmoid(score) for score in raw_scores]
+        
+        return [(item["index"], score) for item, score in zip(sorted_data[:top_n], normalized_scores)]
 
     async def close(self):
         """Close the persistent HTTP client."""
@@ -152,6 +167,11 @@ class RerankingService:
             pairs = [(query, text) for text in texts]
             scores = model.predict(pairs)
             indexed = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
-            return indexed[:top_n]
+            
+            # Unconditional sigmoid with overflow protection for BGE-M3 logits
+            raw_scores = [score for _, score in indexed[:top_n]]
+            normalized_scores = [_safe_sigmoid(score) for score in raw_scores]
+            
+            return list(zip([idx for idx, _ in indexed[:top_n]], normalized_scores))
 
         return await asyncio.to_thread(_score)
