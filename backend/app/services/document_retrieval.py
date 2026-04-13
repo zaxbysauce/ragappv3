@@ -153,11 +153,24 @@ class DocumentRetrievalService:
             if should_skip:
                 continue
 
+            # Use sigmoid-normalized _rerank_score when reranked, otherwise fall back to distance
+            source_score = distance  # default
+            if reranked and "_rerank_score" in record:
+                raw_score = record["_rerank_score"]
+                if isinstance(raw_score, (int, float)) and 0.0 <= float(raw_score) <= 1.0:
+                    source_score = float(raw_score)
+                else:
+                    logger.warning(
+                        "Invalid _rerank_score value %r for chunk %s, falling back to distance",
+                        raw_score,
+                        record.get("id", "unknown"),
+                    )
+
             sources.append(
                 RAGSource(
                     text=record.get("text", ""),
                     file_id=record.get("file_id", ""),
-                    score=distance,
+                    score=source_score,
                     metadata=self._normalize_metadata(record.get("metadata")),
                 )
             )

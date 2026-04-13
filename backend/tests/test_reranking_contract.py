@@ -16,6 +16,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.services.reranking import RerankingService
+from app.services.document_retrieval import DocumentRetrievalService, RAGSource
 
 
 # ---------------------------------------------------------------------------
@@ -421,3 +422,86 @@ async def test_rerank_circuit_breaker_returns_fallback(service_with_url, sample_
 
         assert success is False
         assert len(chunks) == 3
+
+
+# ---------------------------------------------------------------------------
+# End-to-end score contract: rerank_score → RAGSource.score → score_type
+# ---------------------------------------------------------------------------
+
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+
+class TestEndToEndScoreContract:
+    """Contract tests verifying the full reranking → RAGSource.score pipeline."""
+
+    @pytest.mark.asyncio
+    async def test_reranked_chunks_flow_to_rag_source_score(self):
+        """Reranked chunks: _rerank_score flows through filter_relevant to RAGSource.score."""
+        # Create reranked chunks with _rerank_score in [0, 1] and _distance (stale)
+        reranked_chunks = [
+            {"text": "chunk a", "id": "1", "_rerank_score": 0.95, "_distance": 0.5},
+            {"text": "chunk b", "id": "2", "_rerank_score": 0.87, "_distance": 0.3},
+            {"text": "chunk c", "id": "3", "_rerank_score": 0.72, "_distance": 0.7},
+        ]
+
+        with patch("app.services.document_retrieval.settings") as mock:
+            mock.max_distance_threshold = 1.0
+            mock.retrieval_top_k = 10
+            mock.retrieval_window = 0
+            mock.rag_relevance_threshold = 0.5
+            service = DocumentRetrievalService(
+                vector_store=None,
+                max_distance_threshold=1.0,
+                retrieval_top_k=10,
+                retrieval_window=0,
+            )
+
+        # filter_relevant with reranked=True should use _rerank_score, not _distance
+        sources = await service.filter_relevant(reranked_chunks, reranked=True)
+
+        assert len(sources) == 3
+        for chunk, source in zip(reranked_chunks, sources):
+            assert isinstance(source, RAGSource)
+            assert source.score == chunk["_rerank_score"], (
+                f"RAGSource.score ({source.score}) should equal _rerank_score "
+                f"({chunk['_rerank_score']}), not _distance ({chunk['_distance']})"
+            )
+            # Ensure it is NOT the distance value
+            assert source.score != chunk["_distance"]
+
+    @pytest.mark.asyncio
+    async def test_fallback_chunks_flow_to_rag_source_as_distance(self):
+        """Non-reranked chunks: _distance flows through filter_relevant to RAGSource.score."""
+        # Create non-reranked chunks with _distance but no _rerank_score
+        non_reranked_chunks = [
+            {"text": "chunk x", "id": "10", "_distance": 0.2},
+            {"text": "chunk y", "id": "11", "_distance": 0.4},
+            {"text": "chunk z", "id": "12", "_distance": 0.6},
+        ]
+
+        with patch("app.services.document_retrieval.settings") as mock:
+            mock.max_distance_threshold = 1.0
+            mock.retrieval_top_k = 10
+            mock.retrieval_window = 0
+            mock.rag_relevance_threshold = 0.5
+            service = DocumentRetrievalService(
+                vector_store=None,
+                max_distance_threshold=1.0,
+                retrieval_top_k=10,
+                retrieval_window=0,
+            )
+
+        # filter_relevant with reranked=False should use _distance
+        sources = await service.filter_relevant(non_reranked_chunks, reranked=False)
+
+        assert len(sources) == 3
+        for chunk, source in zip(non_reranked_chunks, sources):
+            assert isinstance(source, RAGSource)
+            assert source.score == chunk["_distance"], (
+                f"RAGSource.score ({source.score}) should equal _distance ({chunk['_distance']})"
+            )
+
+
