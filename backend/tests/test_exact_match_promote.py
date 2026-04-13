@@ -153,7 +153,7 @@ class TestExactMatchPromotion(unittest.IsolatedAsyncioTestCase):
             query_embeddings = [("original", [0.1] * 768), ("step_back", [0.2] * 768)]
             result = await self._call_execute_retrieval(engine, query_embeddings)
 
-            vector_results, relevance_hint, eval_result, rerank_success, score_type, hybrid_status, fts_exceptions, rerank_status, variants_dropped, exact_match_promoted = result
+            vector_results, relevance_hint, eval_result, rerank_success, score_type, hybrid_status, fts_exceptions, rerank_status, variants_dropped, exact_match_promoted, token_pack_stats = result
 
             # Assert promotion happened
             assert exact_match_promoted is True, "exact_match_promoted should be True"
@@ -196,7 +196,7 @@ class TestExactMatchPromotion(unittest.IsolatedAsyncioTestCase):
             query_embeddings = [("original", [0.1] * 768), ("step_back", [0.2] * 768)]
             result = await self._call_execute_retrieval(engine, query_embeddings)
 
-            vector_results, _, _, _, _, _, _, _, _, exact_match_promoted = result
+            vector_results, _, _, _, _, _, _, _, _, exact_match_promoted, _ = result
 
             # Assert NO promotion happened
             assert exact_match_promoted is False, "exact_match_promoted should be False"
@@ -244,7 +244,7 @@ class TestExactMatchPromotion(unittest.IsolatedAsyncioTestCase):
             query_embeddings = [("original", [0.1] * 768), ("step_back", [0.2] * 768)]
             result = await self._call_execute_retrieval(engine, query_embeddings)
 
-            _, _, _, _, _, _, _, _, _, exact_match_promoted = result
+            _, _, _, _, _, _, _, _, _, exact_match_promoted, _ = result
 
             assert exact_match_promoted is False, "exact_match_promoted should be False when feature disabled"
 
@@ -289,7 +289,7 @@ class TestExactMatchPromotion(unittest.IsolatedAsyncioTestCase):
             query_embeddings = [("original", [0.1] * 768), ("step_back", [0.2] * 768)]
             result = await self._call_execute_retrieval(engine, query_embeddings)
 
-            _, _, _, _, _, _, _, _, _, exact_match_promoted = result
+            _, _, _, _, _, _, _, _, _, exact_match_promoted, _ = result
 
             assert exact_match_promoted is False, "exact_match_promoted should be False in legacy mode"
 
@@ -314,7 +314,7 @@ class TestExactMatchPromotion(unittest.IsolatedAsyncioTestCase):
         query_embeddings = [("original", [0.1] * 768)]
         result = await self._call_execute_retrieval(engine, query_embeddings)
 
-        _, _, _, _, _, _, _, _, _, exact_match_promoted = result
+        _, _, _, _, _, _, _, _, _, exact_match_promoted, _ = result
 
         assert exact_match_promoted is False, "exact_match_promoted should be False with single variant"
 
@@ -347,7 +347,7 @@ class TestExactMatchPromotion(unittest.IsolatedAsyncioTestCase):
             query_embeddings = [("original", [0.1] * 768), ("step_back", [0.2] * 768)]
             result = await self._call_execute_retrieval(engine, query_embeddings)
 
-            _, _, _, _, _, _, _, _, _, exact_match_promoted = result
+            _, _, _, _, _, _, _, _, _, exact_match_promoted, _ = result
 
             assert exact_match_promoted is False, "exact_match_promoted should be False when < 5 results"
 

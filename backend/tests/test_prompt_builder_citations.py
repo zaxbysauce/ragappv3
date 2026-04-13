@@ -126,5 +126,125 @@ class TestPromptBuilderCitations(unittest.TestCase):
         self.assertIn("[S3]", user_msg)
 
 
+class TestAnchorBestChunk(unittest.TestCase):
+    """Tests for the ANCHOR_BEST_CHUNK lost-in-the-middle mitigation."""
+
+    def _builder_with_settings(self, anchor_best_chunk=True, context_max_tokens=6000, primary_evidence_count=0):
+        """Create a PromptBuilderService with mocked settings."""
+        with patch("app.services.prompt_builder.settings") as mock_settings:
+            mock_settings.max_context_chunks = 10
+            mock_settings.anchor_best_chunk = anchor_best_chunk
+            mock_settings.context_max_tokens = context_max_tokens
+            mock_settings.primary_evidence_count = primary_evidence_count
+            from app.services.prompt_builder import PromptBuilderService
+            return PromptBuilderService()
+
+    def _build_messages(self, builder, chunks, anchor_best_chunk=True, context_max_tokens=6000, primary_evidence_count=0):
+        """Call build_messages with mocked settings."""
+        with patch("app.services.prompt_builder.settings") as mock_settings:
+            mock_settings.anchor_best_chunk = anchor_best_chunk
+            mock_settings.context_max_tokens = context_max_tokens
+            mock_settings.primary_evidence_count = primary_evidence_count
+            return builder.build_messages("What is X?", [], chunks, [])
+
+    def test_anchor_enabled_top_chunk_appears_at_end(self):
+        """When ANCHOR_BEST_CHUNK=True, top-ranked chunk is repeated at end of context."""
+        chunks = [
+            MockRAGSource(
+                text="The definitive answer to everything.",
+                file_id="doc1",
+                score=0.99,
+                metadata={"source_file": "top.pdf"},
+            ),
+            MockRAGSource(
+                text="Secondary context.",
+                file_id="doc2",
+                score=0.7,
+                metadata={"source_file": "other.pdf"},
+            ),
+        ]
+        builder = self._builder_with_settings(anchor_best_chunk=True)
+        messages = self._build_messages(builder, chunks, anchor_best_chunk=True)
+        user_msg = messages[-1]["content"]
+        # Top chunk text must appear at least twice (once in Primary Evidence, once anchored)
+        assert user_msg.count("The definitive answer to everything.") == 2, (
+            "Top chunk should appear twice when anchor is enabled"
+        )
+        # The anchor label must be present
+        assert "[BEST MATCH — repeated for emphasis]" in user_msg
+
+    def test_anchor_disabled_top_chunk_appears_once(self):
+        """When ANCHOR_BEST_CHUNK=False, top-ranked chunk appears exactly once."""
+        chunks = [
+            MockRAGSource(
+                text="The definitive answer.",
+                file_id="doc1",
+                score=0.99,
+                metadata={"source_file": "top.pdf"},
+            ),
+            MockRAGSource(
+                text="Secondary context.",
+                file_id="doc2",
+                score=0.7,
+                metadata={"source_file": "other.pdf"},
+            ),
+        ]
+        builder = self._builder_with_settings(anchor_best_chunk=False)
+        messages = self._build_messages(builder, chunks, anchor_best_chunk=False)
+        user_msg = messages[-1]["content"]
+        assert user_msg.count("The definitive answer.") == 1
+        assert "[BEST MATCH — repeated for emphasis]" not in user_msg
+
+    def test_anchor_skipped_for_oversized_top_chunk(self):
+        """Anchor is skipped when top chunk exceeds 50% of context_max_tokens."""
+        # context_max_tokens = 100; top chunk ~ 60 tokens = > 50%
+        large_text = "X" * 250  # ~71 tokens (> 100 * 0.5 = 50)
+        chunks = [
+            MockRAGSource(
+                text=large_text,
+                file_id="doc1",
+                score=0.99,
+                metadata={"source_file": "big.pdf"},
+            ),
+            MockRAGSource(
+                text="Small context.",
+                file_id="doc2",
+                score=0.6,
+                metadata={"source_file": "small.pdf"},
+            ),
+        ]
+        builder = self._builder_with_settings(anchor_best_chunk=True, context_max_tokens=100)
+        messages = self._build_messages(
+            builder, chunks, anchor_best_chunk=True, context_max_tokens=100
+        )
+        user_msg = messages[-1]["content"]
+        # Top chunk should appear only once (anchor skipped due to size)
+        assert user_msg.count(large_text) == 1
+        assert "[BEST MATCH — repeated for emphasis]" not in user_msg
+
+    def test_anchor_not_added_when_no_chunks(self):
+        """Anchor is not added when there are no chunks."""
+        builder = self._builder_with_settings(anchor_best_chunk=True)
+        messages = self._build_messages(builder, [], anchor_best_chunk=True)
+        user_msg = messages[-1]["content"]
+        assert "[BEST MATCH — repeated for emphasis]" not in user_msg
+
+    def test_anchor_top_chunk_uses_s1_label(self):
+        """Anchored chunk uses the [S1] label (same source index as original)."""
+        chunks = [
+            MockRAGSource(
+                text="Answer here.",
+                file_id="doc1",
+                score=0.9,
+                metadata={"source_file": "doc.pdf"},
+            ),
+        ]
+        builder = self._builder_with_settings(anchor_best_chunk=True)
+        messages = self._build_messages(builder, chunks, anchor_best_chunk=True)
+        user_msg = messages[-1]["content"]
+        # [S1] label should appear at least twice (original + anchor)
+        assert user_msg.count("[S1]") >= 2
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -242,12 +242,17 @@ class RAGEngine:
         fts_exceptions = 0
         rerank_status = "disabled"
         exact_match_promoted = False
+        token_pack_stats: Dict[str, int] = {
+            "token_pack_included": 0,
+            "token_pack_skipped": 0,
+            "token_pack_truncated": 0,
+        }
         if self.maintenance_mode:
             fallback_reason = "RAG index is under maintenance"
             vector_results = []
         else:
             try:
-                vector_results, relevance_hint, eval_result, rerank_success, score_type, hybrid_status, fts_exceptions, rerank_status, variants_dropped, exact_match_promoted = await self._execute_retrieval(
+                vector_results, relevance_hint, eval_result, rerank_success, score_type, hybrid_status, fts_exceptions, rerank_status, variants_dropped, exact_match_promoted, token_pack_stats = await self._execute_retrieval(
                     query_embeddings,
                     user_input,
                     vault_id,
@@ -271,6 +276,11 @@ class RAGEngine:
                 fts_exceptions = 0  # Default for fallback
                 variants_dropped = []  # Safety net: reset on exception
                 exact_match_promoted = False  # Default for fallback
+                token_pack_stats = {
+                    "token_pack_included": 0,
+                    "token_pack_skipped": 0,
+                    "token_pack_truncated": 0,
+                }
 
         # Filter relevant chunks using document retrieval service
         relevant_chunks = await self.document_retrieval.filter_relevant(
@@ -354,7 +364,7 @@ class RAGEngine:
                 yield chunk
 
         # Yield done message with sources
-        done_msg = self._build_done_message(relevant_chunks, memories, score_type, hybrid_status, fts_exceptions, rerank_status, variants_dropped, exact_match_promoted)
+        done_msg = self._build_done_message(relevant_chunks, memories, score_type, hybrid_status, fts_exceptions, rerank_status, variants_dropped, exact_match_promoted, token_pack_stats)
         logger.info(
             "[query] Yielding 'done': sources_count=%d, memories_used=%d",
             len(done_msg.get("sources", [])),
@@ -369,7 +379,7 @@ class RAGEngine:
         vault_id: Optional[int],
         effective_alpha: float = 0.6,
         variants_dropped: List[str] = None,
-    ) -> tuple[List[Dict[str, Any]], Optional[str], str, Optional[bool], str, str, int, str, List[str], bool]:
+    ) -> tuple[List[Dict[str, Any]], Optional[str], str, Optional[bool], str, str, int, str, List[str], bool, Dict[str, int]]:
         """Execute vector search and retrieval evaluation.
 
         Args:
@@ -380,7 +390,9 @@ class RAGEngine:
             variants_dropped: List of variant types that failed embedding (e.g., step_back, hyde)
 
         Returns:
-            Tuple of (vector_results, relevance_hint, eval_result, rerank_success, score_type, hybrid_status, fts_exceptions, rerank_status, variants_dropped, exact_match_promoted)
+            Tuple of (vector_results, relevance_hint, eval_result, rerank_success, score_type,
+            hybrid_status, fts_exceptions, rerank_status, variants_dropped, exact_match_promoted,
+            token_pack_stats)
         """
         logger.info(
             "[_execute_retrieval] ENTER: vault_id=%s, top_k=%s, query_embeddings=%d",
@@ -641,6 +653,11 @@ class RAGEngine:
             exact_match_promoted = False
 
         # Phase 2: Evaluation/post-processing phase (only reached if search succeeds with results)
+        token_pack_stats: Dict[str, int] = {
+            "token_pack_included": 0,
+            "token_pack_skipped": 0,
+            "token_pack_truncated": 0,
+        }
         if vector_results:
             try:
                 # Token packing (only if we have results)
@@ -654,7 +671,7 @@ class RAGEngine:
                         )
                         for r in vector_results
                     ]
-                    packed_sources = self._pack_context_by_token_budget(
+                    packed_sources, token_pack_stats = self._pack_context_by_token_budget(
                         temp_sources, settings.context_max_tokens
                     )
                     # Rebuild vector_results in packed_sources ORDER (preserves reranker ranking).
@@ -670,10 +687,14 @@ class RAGEngine:
                         if (s.file_id, s.text) in _key_to_result
                     ]
                     logger.info(
-                        "Token packing: %d results → %d results (budget=%d tokens)",
+                        "Token packing: %d results → %d results (budget=%d tokens, "
+                        "included=%d, skipped=%d, truncated=%d)",
                         len(temp_sources),
                         len(packed_sources),
                         settings.context_max_tokens,
+                        token_pack_stats["token_pack_included"],
+                        token_pack_stats["token_pack_skipped"],
+                        token_pack_stats["token_pack_truncated"],
                     )
 
                 # Final limit to retrieval_top_k
@@ -736,7 +757,7 @@ class RAGEngine:
         else:
             rerank_status = "disabled"
 
-        return vector_results, final_relevance_hint, eval_result, rerank_success, score_type, hybrid_status, fts_exceptions, rerank_status, variants_dropped, exact_match_promoted
+        return vector_results, final_relevance_hint, eval_result, rerank_success, score_type, hybrid_status, fts_exceptions, rerank_status, variants_dropped, exact_match_promoted, token_pack_stats
 
     async def _stream_llm_response(
         self,
@@ -788,6 +809,7 @@ class RAGEngine:
         rerank_status: str,
         variants_dropped: List[str] = None,
         exact_match_promoted: bool = False,
+        token_pack_stats: Optional[Dict[str, int]] = None,
     ) -> Dict[str, Any]:
         """Build the final done message with sources.
 
@@ -798,10 +820,18 @@ class RAGEngine:
             hybrid_status: Hybrid search status ("disabled", "dense_only", or "both")
             fts_exceptions: Number of FTS exceptions encountered
             rerank_status: Reranking status ("ok", "fallback", or "disabled")
+            variants_dropped: Query variant types that failed embedding/search
+            exact_match_promoted: Whether exact-match promotion was triggered
+            token_pack_stats: Token packing counters (included, skipped, truncated)
 
         Returns:
             Done message dictionary
         """
+        _pack_stats = token_pack_stats or {
+            "token_pack_included": 0,
+            "token_pack_skipped": 0,
+            "token_pack_truncated": 0,
+        }
         retrieval_debug: Dict[str, Any] = {
             "max_distance_threshold": self.max_distance_threshold,
             "vector_metric": self.vector_metric,
@@ -811,6 +841,9 @@ class RAGEngine:
             "rerank_status": rerank_status,
             "variants_dropped": variants_dropped or [],
             "exact_match_promoted": exact_match_promoted if settings.exact_match_promote else None,
+            "token_pack_included": _pack_stats["token_pack_included"],
+            "token_pack_skipped": _pack_stats["token_pack_skipped"],
+            "token_pack_truncated": _pack_stats["token_pack_truncated"],
         }
 
         # Split into primary and supporting (same split as prompt builder)
@@ -872,27 +905,98 @@ class RAGEngine:
 
     def _pack_context_by_token_budget(
         self, chunks: List[RAGSource], max_tokens: int = 6000
-    ) -> List[RAGSource]:
+    ) -> Tuple[List[RAGSource], Dict[str, int]]:
         """
         Pack context chunks by token budget, respecting max token limit.
 
+        Strategy is controlled by settings.token_pack_strategy:
+
+        - ``reserved_best_fit`` (default): Always includes the top
+          ``min(3, len(chunks))`` chunks regardless of budget (never skipped).
+          For remaining chunks, uses best-fit: a chunk that doesn't fit is
+          *skipped* but evaluation continues for smaller subsequent chunks
+          (no early ``break``).  Oversize reserved chunks are tracked in
+          ``token_pack_truncated`` — they inflate the running total but are
+          never dropped.
+
+        - ``greedy`` (legacy): First-fit scan; stops entirely on first overflow
+          (original behavior, kept for rollback).
+
         Args:
-            chunks: List of RAGSource chunks to pack
-            max_tokens: Maximum tokens allowed (default 6000)
+            chunks: List of RAGSource chunks to pack (in rank order).
+            max_tokens: Approximate token budget (default 6000).
 
         Returns:
-            List of RAGSource chunks that fit within the token budget
+            Tuple of (packed_chunks, debug_stats) where debug_stats contains:
+              - token_pack_included: count of chunks included
+              - token_pack_skipped:  count of rank-4+ chunks that didn't fit
+              - token_pack_truncated: count of reserved top-3 chunks whose
+                                      token estimate exceeded the remaining budget
+                                      (included anyway; no actual text modification)
         """
-        packed, token_count = [], 0
-        for chunk in chunks:
-            # ~3.5 chars/token for English; errs on the side of overestimation
-            # to prevent context overflow (safer than the previous len//4 undercount)
+        _empty_stats: Dict[str, int] = {
+            "token_pack_included": 0,
+            "token_pack_skipped": 0,
+            "token_pack_truncated": 0,
+        }
+        if not chunks:
+            return [], _empty_stats
+
+        strategy = settings.token_pack_strategy
+
+        if strategy == "greedy":
+            packed, token_count = [], 0
+            for chunk in chunks:
+                # ~3.5 chars/token for English; overestimates to prevent overflow
+                chunk_tokens = max(1, int(len(chunk.text) / 3.5))
+                if token_count + chunk_tokens > max_tokens and packed:
+                    break
+                packed.append(chunk)
+                token_count += chunk_tokens
+            stats: Dict[str, int] = {
+                "token_pack_included": len(packed),
+                "token_pack_skipped": max(0, len(chunks) - len(packed)),
+                "token_pack_truncated": 0,
+            }
+            return packed, stats
+
+        # reserved_best_fit (default)
+        n_reserved = min(3, len(chunks))
+        reserved_chunks = chunks[:n_reserved]
+        remaining_chunks = chunks[n_reserved:]
+
+        packed = []
+        token_count = 0
+        truncated = 0
+
+        # Phase 1: reserved top-N — always include, even if over budget.
+        # Track when a reserved chunk pushes past the remaining budget.
+        for chunk in reserved_chunks:
             chunk_tokens = max(1, int(len(chunk.text) / 3.5))
             if token_count + chunk_tokens > max_tokens and packed:
-                break
+                # Over budget for this reserved slot — include anyway, mark truncated.
+                # (The LLM context window provides the final safety net.)
+                truncated += 1
             packed.append(chunk)
             token_count += chunk_tokens
-        return packed
+
+        # Phase 2: best-fit for rank 4+ — skip overflows but keep evaluating.
+        skipped = 0
+        for chunk in remaining_chunks:
+            chunk_tokens = max(1, int(len(chunk.text) / 3.5))
+            if token_count + chunk_tokens <= max_tokens:
+                packed.append(chunk)
+                token_count += chunk_tokens
+            else:
+                skipped += 1
+                # Intentionally no ``break``: continue checking smaller chunks.
+
+        stats = {
+            "token_pack_included": len(packed),
+            "token_pack_skipped": skipped,
+            "token_pack_truncated": truncated,
+        }
+        return packed, stats
 
     async def _check_supersession(self, sources: List[RAGSource]) -> Optional[str]:
         """Query SQLite to check if any retrieved files have been superseded by newer versions.
