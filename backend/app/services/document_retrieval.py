@@ -5,12 +5,30 @@ Handles document retrieval, filtering by relevance thresholds, and window expans
 
 import json
 import logging
+import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
+
+# Matches the 8-hex-char hash produced by reupload_safe_order ID scheme
+_RE_HASH8 = re.compile(r"^[0-9a-f]{8}$")
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_reupload_hash(chunk_id: str, file_id: str) -> Optional[str]:
+    """Return the 8-hex hash from a reupload-safe chunk ID, or None for legacy IDs.
+
+    New format: {file_id}_{hash8}_{scale}_{idx}
+    Legacy format: {file_id}_{scale}_{idx} or {file_id}_{idx}
+    """
+    prefix = f"{file_id}_"
+    if not chunk_id.startswith(prefix):
+        return None
+    rest = chunk_id[len(prefix):]
+    candidate = rest.split("_", 1)[0]
+    return candidate if _RE_HASH8.fullmatch(candidate) else None
 
 
 def _normalize_uid_for_dedup(uid: str) -> str:
@@ -44,6 +62,51 @@ def _normalize_uid_for_dedup(uid: str) -> str:
     return uid
 
 
+def _group_aware_dedup(
+    sources: List["RAGSource"],
+    per_doc_chunk_cap: int,
+    unique_docs_in_top_k: int,
+) -> List["RAGSource"]:
+    """Group-aware dedup for final result list (Issue #12).
+
+    Replaces UID-strip dedup that collapsed the best document's multiple strong
+    chunks to a single entry.  This policy:
+    - Preserves up to *per_doc_chunk_cap* chunks per document (default 2).
+    - Caps breadth at *unique_docs_in_top_k* distinct documents (default 5).
+
+    Sources are assumed to be in descending relevance order; iteration order is
+    preserved so the final list is still ranked.
+
+    Args:
+        sources: Candidate RAGSource list, ranked by relevance.
+        per_doc_chunk_cap: Maximum chunks allowed from the same document.
+        unique_docs_in_top_k: Maximum distinct documents in the output.
+
+    Returns:
+        Filtered list respecting both caps.
+    """
+    selected: List["RAGSource"] = []
+    count_per_doc: Dict[str, int] = {}
+    selected_docs: Set[str] = set()
+
+    for source in sources:
+        file_id = source.file_id
+        doc_count = count_per_doc.get(file_id, 0)
+
+        # Cap: too many chunks already from this document
+        if doc_count >= per_doc_chunk_cap:
+            continue
+        # Cap: already at max distinct docs and this is a new one
+        if len(selected_docs) >= unique_docs_in_top_k and file_id not in selected_docs:
+            continue
+
+        selected.append(source)
+        count_per_doc[file_id] = doc_count + 1
+        selected_docs.add(file_id)
+
+    return selected
+
+
 @dataclass
 class RAGSource:
     """Represents a retrieved document source."""
@@ -52,6 +115,9 @@ class RAGSource:
     file_id: str
     score: float
     metadata: Dict[str, Any]
+    # Parent-document retrieval field (Issue #12) — set by rag_engine when
+    # parent_retrieval_enabled=True and the chunk has a stored parent window.
+    parent_window_text: Optional[str] = None
 
 
 class DocumentRetrievalService:
@@ -88,6 +154,7 @@ class DocumentRetrievalService:
         results: List[Dict[str, Any]],
         top_k: Optional[int] = None,
         reranked: bool = False,
+        indexed_file_ids: Optional[Set[str]] = None,
     ) -> List[RAGSource]:
         """Filter retrieved documents by relevance threshold.
 
@@ -98,6 +165,10 @@ class DocumentRetrievalService:
         Args:
             results: List of raw search results from vector store
             top_k: Maximum number of results to return (defaults to retrieval_top_k)
+            reranked: If True, skip distance filtering (reranker score is the signal)
+            indexed_file_ids: If provided, filter out chunks whose file_id is not in
+                this set. Used to hide chunks belonging to files still being ingested
+                (status != 'indexed') — Issue #13 atomic visibility.
 
         Returns:
             List of filtered RAGSource objects
@@ -129,6 +200,16 @@ class DocumentRetrievalService:
         skip_distance_filter = reranked
 
         for record in results:
+            # Issue #13: Atomic visibility — skip chunks from non-indexed files
+            if indexed_file_ids is not None:
+                chunk_file_id = record.get("file_id", "")
+                if chunk_file_id and chunk_file_id not in indexed_file_ids:
+                    logger.debug(
+                        "Skipping chunk from non-indexed file_id=%s (status pending or processing)",
+                        chunk_file_id,
+                    )
+                    continue
+
             has_distance = "_distance" in record
             distance = record.get("_distance")
             if distance is None:
@@ -166,12 +247,16 @@ class DocumentRetrievalService:
                         record.get("id", "unknown"),
                     )
 
+            raw_meta = self._normalize_metadata(record.get("metadata"))
+            # Carry the actual stored chunk ID so expand_window can handle
+            # reupload-safe hash-prefixed IDs (e.g. "42_abc12345_default_0")
+            raw_meta["_chunk_id"] = record.get("id", "")
             sources.append(
                 RAGSource(
                     text=record.get("text", ""),
                     file_id=record.get("file_id", ""),
                     score=source_score,
-                    metadata=self._normalize_metadata(record.get("metadata")),
+                    metadata=raw_meta,
                 )
             )
 
@@ -191,6 +276,23 @@ class DocumentRetrievalService:
                 mean_dist,
                 self.max_distance_threshold,
             )
+
+        # Apply group-aware dedup before window expansion (Issue #12)
+        if settings.new_dedup_policy and sources:
+            before_dedup = len(sources)
+            sources = _group_aware_dedup(
+                sources,
+                per_doc_chunk_cap=settings.per_doc_chunk_cap,
+                unique_docs_in_top_k=settings.unique_docs_in_top_k,
+            )
+            if len(sources) != before_dedup:
+                logger.debug(
+                    "Group-aware dedup: %d → %d sources (cap=%d per-doc, %d unique-docs)",
+                    before_dedup,
+                    len(sources),
+                    settings.per_doc_chunk_cap,
+                    settings.unique_docs_in_top_k,
+                )
 
         # Apply window expansion if enabled
         if self.retrieval_window > 0:
@@ -260,12 +362,24 @@ class DocumentRetrievalService:
                 for s in file_sources
             ]
 
+            # Detect reupload-safe hash prefix from any source in this group.
+            # New-format IDs: {file_id}_{hash8}_{scale}_{idx}
+            # Legacy IDs: {file_id}_{scale}_{idx} or {file_id}_{idx}
+            hash_prefix: Optional[str] = None
+            for s in file_sources:
+                h = _extract_reupload_hash(s.metadata.get("_chunk_id", ""), file_id)
+                if h:
+                    hash_prefix = h
+                    break
+
             for chunk_index in indices:
                 start_idx = max(0, chunk_index - window)
                 end_idx = chunk_index + window
 
                 for idx in range(start_idx, end_idx + 1):
-                    if chunk_scale != "default":
+                    if hash_prefix:
+                        chunk_uid = f"{file_id}_{hash_prefix}_{chunk_scale}_{idx}"
+                    elif chunk_scale != "default":
                         chunk_uid = f"{file_id}_{chunk_scale}_{idx}"
                     else:
                         chunk_uid = f"{file_id}_{idx}"
@@ -333,9 +447,12 @@ class DocumentRetrievalService:
                     if chunk_scale:
                         metadata["chunk_scale"] = chunk_scale
 
+                    # Use file_id from the record, not parsed from the UID string
+                    # (UID parsing breaks with hash-prefixed new-format IDs)
+                    record_file_id = chunk.get("file_id") or file_id
                     expanded_source = RAGSource(
                         text=chunk.get("text", ""),
-                        file_id=file_id,
+                        file_id=record_file_id,
                         score=distance,
                         metadata=metadata,
                     )

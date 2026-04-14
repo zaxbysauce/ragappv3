@@ -43,13 +43,38 @@ async def health_check(
         llm_status = await llm_checker.check_all()
         models_status = await model_checker.check_models()
 
-        # Probe vector store connectivity
+        # Probe vector store connectivity and embedding dimension consistency
         vector_status = {"ok": False}
         try:
             vector_store = getattr(request.app.state, "vector_store", None)
             if vector_store and vector_store.table:
                 row_count = await vector_store.table.count_rows()
                 vector_status = {"ok": True, "rows": row_count}
+
+                # Issue #2: Warn if stored embedding dimension mismatches configured dim.
+                # A mismatch means documents were indexed with a different model and
+                # searches will return empty or incorrect results until re-embedded.
+                try:
+                    from app.config import settings as _settings
+                    stored_dim = await vector_store._get_expected_embedding_dim()
+                    configured_dim = _settings.embedding_dim
+                    if stored_dim and stored_dim != configured_dim:
+                        vector_status["stale_embeddings"] = True
+                        vector_status["stale_embeddings_detail"] = (
+                            f"LanceDB index was built with {stored_dim}-dim embeddings but "
+                            f"EMBEDDING_DIM is now {configured_dim}. "
+                            f"Run scripts/migrate_embeddings.py to re-index."
+                        )
+                        logger.warning(
+                            "Stale embedding dimensions detected: stored=%d, configured=%d. "
+                            "Documents will not be searchable until re-embedded. "
+                            "Run scripts/migrate_embeddings.py.",
+                            stored_dim,
+                            configured_dim,
+                        )
+                except Exception as _dim_exc:
+                    logger.debug("Embedding dimension check failed (non-fatal): %s", _dim_exc)
+
             elif vector_store:
                 vector_status = {"ok": True, "rows": 0}
             else:

@@ -76,6 +76,8 @@ class VectorStore:
         self.table: Optional[lancedb.table.AsyncTable] = None
         self._embedding_dim: Optional[int] = None
         self._fts_exceptions: int = 0
+        # Track the row count at last IVF_PQ build to detect post-delete churn (Issue #13)
+        self._last_index_build_row_count: int = 0
 
     async def connect(self) -> "VectorStore":
         """Connect to LanceDB.
@@ -130,6 +132,11 @@ class VectorStore:
                     pa.string(),
                 ),  # JSON string for sparse vectors — retained for schema compat (unused post-Harrier migration)
                 ("metadata", pa.string()),  # JSON string for flexibility
+                # Parent-document retrieval columns (Issue #12) — nullable, backfilled by migration
+                pa.field("parent_doc_id", pa.string(), nullable=True),
+                pa.field("parent_window_start", pa.int32(), nullable=True),
+                pa.field("parent_window_end", pa.int32(), nullable=True),
+                pa.field("chunk_position", pa.int32(), nullable=True),
                 ("embedding", pa.list_(pa.float32(), embedding_dim)),
             ]
         )
@@ -140,6 +147,23 @@ class VectorStore:
             if "chunks" in table_names:
                 try:
                     self.table = await self.db.open_table("chunks")
+                    # Seed churn baseline so post-delete rebuild fires on existing indexes.
+                    # Without this, _last_index_build_row_count stays 0 after restart
+                    # and the churn-based rebuild path never triggers.
+                    try:
+                        existing_indices = await self.table.list_indices()
+                        has_ivfpq = any(
+                            "IVF_PQ" in str(getattr(idx, "index_type", ""))
+                            for idx in existing_indices
+                        )
+                        if has_ivfpq:
+                            self._last_index_build_row_count = await self.table.count_rows()
+                            logger.debug(
+                                "Seeded _last_index_build_row_count=%d from existing IVF_PQ index",
+                                self._last_index_build_row_count,
+                            )
+                    except Exception as _seed_exc:
+                        logger.debug("Could not seed index row count baseline: %s", _seed_exc)
                 except (OSError, RuntimeError, ValueError):
                     # Stale table reference — drop and recreate
                     try:
@@ -262,6 +286,7 @@ class VectorStore:
                 ),
                 replace=True,
             )
+            self._last_index_build_row_count = row_count  # Track for post-delete churn check
             logger.info(
                 "Vector index creation completed in %.2fs", time.monotonic() - t0
             )
@@ -272,6 +297,84 @@ class VectorStore:
             )
         except (OSError, RuntimeError, ValueError) as e:
             logger.warning("Vector index creation failed: %s", e)
+
+    async def _maybe_rebuild_or_drop_vector_index(self, deleted_count: int) -> None:
+        """Post-delete ANN index lifecycle management (Issue #13).
+
+        After bulk deletes the IVF_PQ index may be stale because it was trained
+        on rows that no longer exist, or we may have crossed the 256-row threshold
+        downward and should fall back to brute-force search.
+
+        Rules:
+        - If current row count drops below VECTOR_INDEX_MIN_ROWS and an IVF_PQ
+          index exists, drop the index so LanceDB falls back to brute-force.
+        - If churn (deleted_count / last_build_row_count) >= INDEX_REBUILD_DELTA,
+          rebuild the index on the remaining rows.
+        """
+        if self.table is None or deleted_count == 0:
+            return
+
+        try:
+            current_rows = await self.table.count_rows()
+        except (OSError, RuntimeError, ValueError) as e:
+            logger.debug("Could not count rows for post-delete index check: %s", e)
+            return
+
+        # Check if index exists
+        has_ivfpq = False
+        try:
+            indices = await self.table.list_indices()
+            has_ivfpq = any(idx.name == "embedding_idx" for idx in indices)
+        except (OSError, RuntimeError, ValueError):
+            pass
+
+        if not has_ivfpq:
+            return  # No index to manage
+
+        # Case 1: Dropped below brute-force threshold — drop the IVF_PQ index
+        if current_rows < VECTOR_INDEX_MIN_ROWS:
+            try:
+                await self.table.drop_index("embedding_idx")
+                self._last_index_build_row_count = 0
+                logger.info(
+                    "Dropped IVF_PQ index: row count (%d) fell below %d threshold; "
+                    "falling back to brute-force search.",
+                    current_rows,
+                    VECTOR_INDEX_MIN_ROWS,
+                )
+            except (OSError, RuntimeError, ValueError) as e:
+                logger.warning("Failed to drop IVF_PQ index after threshold crossed: %s", e)
+            return
+
+        # Case 2: Churn threshold exceeded — rebuild the index
+        if self._last_index_build_row_count > 0:
+            churn = deleted_count / self._last_index_build_row_count
+            if churn >= settings.index_rebuild_delta:
+                t0 = time.monotonic()
+                try:
+                    num_sub_vectors = settings.embedding_dim // 8
+                    await self.table.create_index(
+                        column="embedding",
+                        config=IvfPq(
+                            distance_type=cast(
+                                "Literal['l2', 'cosine', 'dot']", settings.vector_metric
+                            ),
+                            num_partitions=256,
+                            num_sub_vectors=num_sub_vectors,
+                        ),
+                        replace=True,
+                    )
+                    self._last_index_build_row_count = current_rows
+                    logger.info(
+                        "IVF_PQ index rebuilt after %.0f%% row churn (%d deleted, %d remaining) "
+                        "in %.2fs",
+                        churn * 100,
+                        deleted_count,
+                        current_rows,
+                        time.monotonic() - t0,
+                    )
+                except (OSError, RuntimeError, ValueError) as e:
+                    logger.warning("IVF_PQ index rebuild after delete churn failed: %s", e)
 
     async def add_chunks(self, records: List[Dict[str, Any]]) -> None:
         """
@@ -337,6 +440,11 @@ class VectorStore:
                     "sparse_embedding"
                 ),  # Retained for schema compat — unused post-Harrier migration
                 "metadata": record.get("metadata", "{}"),
+                # Parent-document retrieval fields (Issue #12) — None for legacy chunks
+                "parent_doc_id": record.get("parent_doc_id"),
+                "parent_window_start": record.get("parent_window_start"),
+                "parent_window_end": record.get("parent_window_end"),
+                "chunk_position": record.get("chunk_position"),
                 "embedding": embedding,
             }
 
@@ -352,6 +460,12 @@ class VectorStore:
             processed_records.append(processed_record)
 
         await self.table.add(processed_records)
+
+        # Compact the table after every ingest batch (Issue #13: ANN index lifecycle)
+        try:
+            await self.table.optimize()
+        except Exception as e:
+            logger.warning("table.optimize() after add_chunks failed (non-fatal): %s", e)
 
         # Check if we should create the vector index after adding chunks
         await self._maybe_create_vector_index()
@@ -731,15 +845,18 @@ class VectorStore:
             return 0
 
         # Query count before delete to return accurate deletion count
-        safe_file_id = str(file_id).replace('"', '\\"')
+        safe_file_id = _lance_escape(file_id)
         try:
-            count_before = await self.table.count_rows(f'file_id = "{safe_file_id}"')
+            count_before = await self.table.count_rows(f"file_id = '{safe_file_id}'")
         except (OSError, RuntimeError, ValueError):
             # If count_rows fails, safely default to 0
             count_before = 0
 
         # LanceDB delete using filter expression
-        await self.table.delete(f'file_id = "{safe_file_id}"')
+        await self.table.delete(f"file_id = '{safe_file_id}'")
+
+        # Manage ANN index lifecycle after delete (Issue #13)
+        await self._maybe_rebuild_or_drop_vector_index(count_before)
 
         return count_before
 
@@ -786,7 +903,74 @@ class VectorStore:
             count_before = 0
 
         await self.table.delete(f"vault_id = '{safe_vault_id}'")
+
+        # Manage ANN index lifecycle after delete (Issue #13)
+        await self._maybe_rebuild_or_drop_vector_index(count_before)
+
         return count_before
+
+    async def delete_old_generation_by_file(
+        self, file_id: str, new_hash_short: str
+    ) -> int:
+        """Delete stale-generation chunks for a file after a safe re-upload (Issue #13).
+
+        During safe re-upload the new chunks are inserted with IDs of the form
+        ``{file_id}_{new_hash_short}_…``.  This method deletes every chunk for
+        *file_id* whose ``id`` does NOT start with ``{file_id}_{new_hash_short}_``,
+        i.e. chunks from the previous generation.
+
+        Called only when ``REUPLOAD_SAFE_ORDER=True`` and after the new-generation
+        chunks are already visible in the index.
+
+        Args:
+            file_id: The file ID whose old-generation chunks should be removed.
+            new_hash_short: First 8 characters of the new file hash used as
+                generation prefix for the newly inserted chunks.
+
+        Returns:
+            Number of stale-generation chunks deleted.
+        """
+        if self.db is None:
+            await self.connect()
+
+        if self.table is None:
+            try:
+                if self.db is not None:
+                    table_names = await self.db.table_names()
+                    if "chunks" not in table_names:
+                        return 0
+                    self.table = await self.db.open_table("chunks")
+            except (OSError, RuntimeError, ValueError):
+                return 0
+
+        if self.table is None:
+            return 0
+
+        safe_file_id = _lance_escape(file_id)
+        safe_hash = _lance_escape(new_hash_short)
+        # Keep only chunks whose id starts with "{file_id}_{hash_short}_"
+        new_prefix = f"{safe_file_id}_{safe_hash}_"
+        try:
+            count_before = await self.table.count_rows(
+                f"file_id = '{safe_file_id}'"
+            )
+            # Count how many we're keeping (new generation)
+            count_new = await self.table.count_rows(
+                f"file_id = '{safe_file_id}' AND id LIKE '{new_prefix}%'"
+            )
+            old_count = count_before - count_new
+            if old_count <= 0:
+                return 0
+            # Delete the old ones: file_id matches but id does NOT have new prefix
+            await self.table.delete(
+                f"file_id = '{safe_file_id}' AND NOT (id LIKE '{new_prefix}%')"
+            )
+            # Manage ANN index lifecycle after delete (Issue #13)
+            await self._maybe_rebuild_or_drop_vector_index(old_count)
+            return old_count
+        except (OSError, RuntimeError, ValueError) as e:
+            logger.warning("delete_old_generation_by_file failed: %s", e)
+            return 0
 
     async def _safe_table_to_pandas(self, table, operation_name: str):
         """Load a LanceDB table into pandas with OOM protection.
@@ -1181,6 +1365,143 @@ class VectorStore:
             return migrated_count
         except (OSError, RuntimeError, ValueError) as e:
             logger.warning(f"LanceDB sparse_embedding migration failed: {e}")
+            return 0
+
+    async def migrate_add_parent_window(self, dry_run: bool = False) -> int:
+        """Migration: Add parent_doc_id, parent_window_start, parent_window_end, and
+        chunk_position columns to existing chunks that lack them (Issue #12).
+
+        Idempotent — safe to run multiple times. Existing rows receive:
+        - parent_doc_id = file_id (denormalized for query-time access)
+        - parent_window_start = None (backfilled to 0 for first chunk of each file)
+        - parent_window_end = None
+        - chunk_position = chunk_index (sequential index already stored)
+
+        Args:
+            dry_run: If True, report rows that would be updated but make no changes.
+
+        Returns:
+            Number of rows that were (or would be, in dry-run) updated.
+        """
+        if self.db is None:
+            await self.connect()
+
+        if self.db is None:
+            logger.info("LanceDB parent_window migration: no connection available")
+            return 0
+
+        try:
+            table_names = await self.db.table_names()
+        except (OSError, RuntimeError, ValueError) as e:
+            logger.warning(f"LanceDB parent_window migration failed: {e}")
+            return 0
+
+        if "chunks" not in table_names:
+            logger.info("LanceDB parent_window migration: no table exists — nothing to migrate")
+            return 0
+
+        try:
+            table = await self.db.open_table("chunks")
+        except (OSError, RuntimeError, ValueError) as e:
+            logger.warning(f"LanceDB parent_window migration failed to open table: {e}")
+            return 0
+
+        schema = await table.schema()
+        field_names = [schema.field(i).name for i in range(len(schema))]
+        new_cols = {"parent_doc_id", "parent_window_start", "parent_window_end", "chunk_position"}
+        missing_cols = new_cols - set(field_names)
+
+        if not missing_cols:
+            # All columns present — check if any rows still have null parent_doc_id
+            try:
+                df = await self._safe_table_to_pandas(table, "parent_window migration (check)")
+                null_count = int(df["parent_doc_id"].isna().sum())
+                if null_count == 0:
+                    logger.info("LanceDB parent_window migration: all rows already backfilled")
+                    return 0
+                if dry_run:
+                    logger.info(
+                        "[DRY RUN] parent_window migration: %d rows would be backfilled "
+                        "(parent_doc_id is null)", null_count
+                    )
+                    return null_count
+                # Backfill rows where parent_doc_id is null
+                mask = df["parent_doc_id"].isna()
+                df.loc[mask, "parent_doc_id"] = df.loc[mask, "file_id"]
+                df.loc[mask, "chunk_position"] = df.loc[mask, "chunk_index"]
+                # parent_window_start/end remain null — populated on next re-ingest
+                await self.db.drop_table("chunks")
+                self.table = await self.db.create_table("chunks", data=df)
+                logger.info(
+                    "LanceDB parent_window migration: backfilled parent_doc_id on %d rows",
+                    null_count,
+                )
+                return null_count
+            except (OSError, RuntimeError, ValueError) as e:
+                logger.warning(f"LanceDB parent_window migration check failed: {e}")
+                return 0
+
+        # Some columns are missing — add them all
+        try:
+            df = await self._safe_table_to_pandas(table, "parent_window migration (add columns)")
+            if len(df) == 0:
+                logger.info(
+                    "LanceDB parent_window migration: empty table — new schema will be "
+                    "applied on first ingest"
+                )
+                return 0
+
+            migrated_count = len(df)
+            if dry_run:
+                logger.info(
+                    "[DRY RUN] parent_window migration: %d rows would receive new columns: %s",
+                    migrated_count,
+                    ", ".join(sorted(missing_cols)),
+                )
+                return migrated_count
+
+            # Add missing columns with sensible defaults
+            if "parent_doc_id" in missing_cols:
+                df["parent_doc_id"] = df["file_id"]
+            if "chunk_position" in missing_cols:
+                df["chunk_position"] = df["chunk_index"]
+            # parent_window_start / end remain null — populated on next re-ingest
+            for col in ("parent_window_start", "parent_window_end"):
+                if col in missing_cols:
+                    df[col] = None
+
+            await self.db.drop_table("chunks")
+            try:
+                self.table = await self.db.create_table("chunks", data=df)
+                # Restore indices
+                await self.table.create_index(column="text", config=FTS(), replace=True)
+                num_sub_vectors = (self._embedding_dim or settings.embedding_dim) // 8
+                if migrated_count >= VECTOR_INDEX_MIN_ROWS:
+                    await self.table.create_index(
+                        column="embedding",
+                        config=IvfPq(
+                            distance_type=cast(
+                                "Literal['l2', 'cosine', 'dot']", settings.vector_metric
+                            ),
+                            num_partitions=256,
+                            num_sub_vectors=num_sub_vectors,
+                        ),
+                        replace=True,
+                    )
+                    self._last_index_build_row_count = migrated_count
+            except (OSError, RuntimeError, ValueError) as create_err:
+                logger.critical(
+                    "parent_window migration: table dropped but recreate failed: %s. "
+                    "Data may need manual recovery from backup.",
+                    create_err,
+                )
+                raise
+            logger.info(
+                "LanceDB parent_window migration: added columns to %d rows", migrated_count
+            )
+            return migrated_count
+        except (OSError, RuntimeError, ValueError) as e:
+            logger.warning(f"LanceDB parent_window migration failed: {e}")
             return 0
 
     async def get_chunks_by_uid(self, chunk_uids: List[str]) -> List[Dict[str, Any]]:

@@ -190,6 +190,41 @@ class Settings(BaseSettings):
     recency_decay_lambda: float = 0.001
     """Exponential decay rate (lambda) for recency scoring. Higher values decay faster."""
 
+    # ── Parent-document retrieval configuration (Issue #12) ──────────────────
+    parent_retrieval_enabled: bool = False
+    """Enable parent-window expansion at prompt time: retrieve on small chunks, deliver the
+    surrounding parent window to the LLM for broader context. Default False until migration
+    (add_parent_window) has been run and verified in staging.  Flip to True after migration."""
+
+    new_dedup_policy: bool = True
+    """Enable group-aware dedup: preserve up to PER_DOC_CHUNK_CAP chunks per document and
+    cap breadth at UNIQUE_DOCS_IN_TOP_K distinct documents. Replaces UID-strip dedup that
+    collapsed the best document's multiple strong chunks to one. Default True (safe improvement)."""
+
+    per_doc_chunk_cap: int = 2
+    """Maximum chunks kept per document after group-aware dedup. Higher values give more
+    context from each document at the cost of less diversity across sources."""
+
+    unique_docs_in_top_k: int = 5
+    """Maximum distinct documents allowed in the final dedup output when new_dedup_policy is
+    enabled. Balances breadth vs. depth in source diversity."""
+
+    parent_window_chars: int = 6000
+    """Size of the parent window (in characters) delivered to the prompt when
+    parent_retrieval_enabled=True. The matched small chunk is bracketed with [[MATCH:…]]
+    markers inside this window for the LLM to orient itself."""
+
+    # ── Ingestion integrity configuration (Issue #13) ────────────────────────
+    index_rebuild_delta: float = 0.2
+    """Fraction of row churn (deletes / previous row count) that triggers an IVF_PQ index
+    rebuild. Default 0.2 = 20% row loss triggers rebuild. Keeps ANN search accurate after
+    bulk deletes without rebuilding on every small delete."""
+
+    reupload_safe_order: bool = True
+    """Use insert-then-delete ordering for re-uploads with a changed file hash. When True,
+    new chunks are inserted and the file pointer is flipped BEFORE old chunks are deleted,
+    ensuring the corpus is never in a zero-chunk state for a live document."""
+
     # ── Tri-vector embedding configuration (deprecated) ───────────────────────
     tri_vector_search_enabled: bool = False
     """Deprecated: BGE-M3 replaced by Harrier. Field retained for config compatibility."""
@@ -457,6 +492,24 @@ class Settings(BaseSettings):
     def validate_multi_scale_overlap_ratio(cls, v: float) -> float:
         """Validate multi_scale_overlap_ratio is in range 0.0-1.0."""
         return cls._validate_float_range(v, 0.0, 1.0, "multi_scale_overlap_ratio")
+
+    @field_validator("index_rebuild_delta", mode="after")
+    @classmethod
+    def validate_index_rebuild_delta(cls, v: float) -> float:
+        """Validate index_rebuild_delta is in range 0.0-1.0."""
+        return cls._validate_float_range(v, 0.0, 1.0, "index_rebuild_delta")
+
+    @field_validator("per_doc_chunk_cap", mode="after")
+    @classmethod
+    def validate_per_doc_chunk_cap(cls, v: int) -> int:
+        """Validate per_doc_chunk_cap is >= 1."""
+        return cls._validate_int_range(v, 1, None, "per_doc_chunk_cap")
+
+    @field_validator("unique_docs_in_top_k", mode="after")
+    @classmethod
+    def validate_unique_docs_in_top_k(cls, v: int) -> int:
+        """Validate unique_docs_in_top_k is >= 1."""
+        return cls._validate_int_range(v, 1, None, "unique_docs_in_top_k")
 
     @field_validator("hybrid_alpha", mode="after")
     @classmethod
