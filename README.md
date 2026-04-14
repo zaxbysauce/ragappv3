@@ -212,6 +212,13 @@ On first launch, you'll be redirected to the **Setup Wizard** (`/setup`) to crea
 | `JWT_SECRET_KEY` | change-me-... | Secret key for JWT signing (generate with `python -c "import secrets; print(secrets.token_urlsafe(48))"`) |
 | `JWT_ALGORITHM` | HS256 | JWT signing algorithm |
 | `ADMIN_SECRET_TOKEN` | "" | Legacy admin token for API key auth mode |
+| `PARENT_RETRIEVAL_ENABLED` | `false` | Enable small-to-big context expansion (parent window retrieval) |
+| `PARENT_WINDOW_CHARS` | `6000` | Total parent window size in characters (±3000 around matched chunk) |
+| `NEW_DEDUP_POLICY` | `true` | Use group-aware dedup (caps per-doc chunks and distinct docs in results) |
+| `PER_DOC_CHUNK_CAP` | `2` | Max chunks per document in retrieval results |
+| `UNIQUE_DOCS_IN_TOP_K` | `5` | Max distinct documents in retrieval result set |
+| `INDEX_REBUILD_DELTA` | `0.2` | Delete churn fraction (0–1) that triggers ANN index rebuild |
+| `REUPLOAD_SAFE_ORDER` | `true` | Insert new chunks before deleting old on re-upload (eliminates zero-chunk window) |
 
 ### Data Directory Structure
 
