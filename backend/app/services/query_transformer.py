@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import re
+from collections import OrderedDict
 from typing import List, Optional, Tuple
 
 from app.config import settings
@@ -51,12 +52,11 @@ class QueryTransformer:
                 self._redis_client = redis.from_url(settings.redis_url)
             except Exception as e:
                 logger.warning("Redis connection failed, using LRU fallback: %s", e)
-        # LRU cache for transform results (List[Tuple[str, str]])
-        self._lru_cache: dict[str, List[Tuple[str, str]]] = {}
-        self._lru_keys: list[str] = []  # For LRU ordering
+        # LRU cache for transform results — OrderedDict preserves insertion order,
+        # move_to_end() is O(1) vs the previous list.remove() which was O(n).
+        self._lru_cache: OrderedDict[str, List[Tuple[str, str]]] = OrderedDict()
         # Separate LRU cache for HyDE results (str)
-        self._lru_hyde_cache: dict[str, str] = {}
-        self._lru_hyde_keys: list[str] = []
+        self._lru_hyde_cache: OrderedDict[str, str] = OrderedDict()
 
     def _make_cache_key(self, chat_model: str, transform_type: str, query_text: str) -> str:
         """Generate cache key for query transformation result."""
@@ -69,39 +69,31 @@ class QueryTransformer:
 
     def _lru_get(self, key: str) -> Optional[List[Tuple[str, str]]]:
         if key in self._lru_cache:
-            # Move to end (most recently used)
-            self._lru_keys.remove(key)
-            self._lru_keys.append(key)
+            self._lru_cache.move_to_end(key)
             return self._lru_cache[key]
         return None
 
     def _lru_set(self, key: str, value: List[Tuple[str, str]]):
         if key in self._lru_cache:
-            self._lru_keys.remove(key)
-        elif len(self._lru_cache) >= 1024:
-            # Evict least recently used
-            oldest = self._lru_keys.pop(0)
-            del self._lru_cache[oldest]
+            self._lru_cache.move_to_end(key)
+        else:
+            if len(self._lru_cache) >= 1024:
+                self._lru_cache.popitem(last=False)
         self._lru_cache[key] = value
-        self._lru_keys.append(key)
 
     def _lru_get_hyde(self, key: str) -> Optional[str]:
         if key in self._lru_hyde_cache:
-            # Move to end (most recently used)
-            self._lru_hyde_keys.remove(key)
-            self._lru_hyde_keys.append(key)
+            self._lru_hyde_cache.move_to_end(key)
             return self._lru_hyde_cache[key]
         return None
 
     def _lru_set_hyde(self, key: str, value: str):
         if key in self._lru_hyde_cache:
-            self._lru_hyde_keys.remove(key)
-        elif len(self._lru_hyde_cache) >= 1024:
-            # Evict least recently used
-            oldest = self._lru_hyde_keys.pop(0)
-            del self._lru_hyde_cache[oldest]
+            self._lru_hyde_cache.move_to_end(key)
+        else:
+            if len(self._lru_hyde_cache) >= 1024:
+                self._lru_hyde_cache.popitem(last=False)
         self._lru_hyde_cache[key] = value
-        self._lru_hyde_keys.append(key)
 
     async def transform(self, query: str) -> List[Tuple[str, str]]:
         """

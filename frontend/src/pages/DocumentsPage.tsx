@@ -50,6 +50,7 @@ export default function DocumentsPage() {
   }>({ open: false, title: "", description: "", onConfirm: () => {} });
   const [filenameColWidth, setFilenameColWidth] = useState<number>(250);
   const dragState = useRef<{ startX: number; startWidth: number }>({ startX: 0, startWidth: 0 });
+  const pollIntervalMsRef = useRef(2_000);
 
   // Cleanup on unmount: restore cursor if component is destroyed during a drag
   useEffect(() => {
@@ -114,20 +115,27 @@ export default function DocumentsPage() {
     loadData();
   }, [fetchDocuments, fetchStats]);
 
-  // Status polling for documents in processing state
+  // Status polling for documents in processing state — adaptive backoff.
+  // Starts fast (2 s) and backs off up to 30 s when no status change is detected,
+  // resetting to fast whenever processing restarts.
   useEffect(() => {
     const hasProcessingDocs = documents?.some(
       (doc) => doc.metadata?.status === "processing" || doc.metadata?.status === "pending"
     );
 
-    if (!hasProcessingDocs) return;
+    if (!hasProcessingDocs) {
+      pollIntervalMsRef.current = 2_000;
+      return;
+    }
 
-    const interval = setInterval(() => {
+    const delay = pollIntervalMsRef.current;
+    const timer = setTimeout(() => {
+      pollIntervalMsRef.current = Math.min(pollIntervalMsRef.current * 1.5, 30_000);
       fetchDocuments();
       fetchStats();
-    }, 5000);
+    }, delay);
 
-    return () => clearInterval(interval);
+    return () => clearTimeout(timer);
   }, [documents, fetchDocuments, fetchStats]);
 
   // Refresh documents when uploads complete
