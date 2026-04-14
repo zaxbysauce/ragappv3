@@ -828,15 +828,15 @@ class VectorStore:
             return 0
 
         # Query count before delete to return accurate deletion count
-        safe_file_id = str(file_id).replace('"', '\\"')
+        safe_file_id = _lance_escape(file_id)
         try:
-            count_before = await self.table.count_rows(f'file_id = "{safe_file_id}"')
+            count_before = await self.table.count_rows(f"file_id = '{safe_file_id}'")
         except (OSError, RuntimeError, ValueError):
             # If count_rows fails, safely default to 0
             count_before = 0
 
         # LanceDB delete using filter expression
-        await self.table.delete(f'file_id = "{safe_file_id}"')
+        await self.table.delete(f"file_id = '{safe_file_id}'")
 
         # Manage ANN index lifecycle after delete (Issue #13)
         await self._maybe_rebuild_or_drop_vector_index(count_before)

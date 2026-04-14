@@ -801,6 +801,12 @@ class DocumentProcessor:
             # Compute parent window offsets for small-to-big retrieval (Issue #12)
             # Run after contextual chunking so raw_text is the pre-enrichment text.
             # Only meaningful when document_text is available (not spreadsheets/schemas).
+            if not document_text and chunks and settings.parent_retrieval_enabled:
+                logger.debug(
+                    "parent_retrieval_enabled but document_text unavailable for %s "
+                    "(schema/spreadsheet files do not support parent windows)",
+                    Path(file_path).name,
+                )
             if document_text and chunks:
                 try:
                     compute_parent_windows(

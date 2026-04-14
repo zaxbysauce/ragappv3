@@ -684,7 +684,7 @@ def compute_parent_windows(
         chunk.parent_window_start = window_start
         chunk.parent_window_end = window_end
 
-        # Advance cursor to the start of this chunk (next chunk will be at or after here)
-        search_cursor = idx
+        # Advance cursor past this match so the next chunk searches forward from here
+        search_cursor = chunk_end
 
     return chunks

@@ -93,6 +93,21 @@ class TestComputeParentWindows:
         for i, c in enumerate(chunks):
             assert c.chunk_position == i
 
+    def test_duplicate_chunk_text_advances_cursor(self):
+        """Repeated chunk text: second occurrence should be matched past the first."""
+        # Build source with the same phrase appearing twice at distinct offsets
+        repeated = "the answer is 42"
+        padding = "x" * 100
+        source_text = padding + repeated + padding + repeated + padding
+        chunk0 = self._make_chunk(repeated, 0)
+        chunk1 = self._make_chunk(repeated, 1)
+        compute_parent_windows([chunk0, chunk1], source_text, window_chars=60)
+        # Both chunks must get non-None offsets
+        assert chunk0.parent_window_start is not None
+        assert chunk1.parent_window_start is not None
+        # The two windows must not be identical — they should point to different occurrences
+        assert chunk0.parent_window_start != chunk1.parent_window_start
+
     def test_empty_chunks_list(self):
         result = compute_parent_windows([], "some text", window_chars=100)
         assert result == []
