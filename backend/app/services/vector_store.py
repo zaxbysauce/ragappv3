@@ -147,6 +147,23 @@ class VectorStore:
             if "chunks" in table_names:
                 try:
                     self.table = await self.db.open_table("chunks")
+                    # Seed churn baseline so post-delete rebuild fires on existing indexes.
+                    # Without this, _last_index_build_row_count stays 0 after restart
+                    # and the churn-based rebuild path never triggers.
+                    try:
+                        existing_indices = await self.table.list_indices()
+                        has_ivfpq = any(
+                            "IVF_PQ" in str(getattr(idx, "index_type", ""))
+                            for idx in existing_indices
+                        )
+                        if has_ivfpq:
+                            self._last_index_build_row_count = await self.table.count_rows()
+                            logger.debug(
+                                "Seeded _last_index_build_row_count=%d from existing IVF_PQ index",
+                                self._last_index_build_row_count,
+                            )
+                    except Exception as _seed_exc:
+                        logger.debug("Could not seed index row count baseline: %s", _seed_exc)
                 except (OSError, RuntimeError, ValueError):
                     # Stale table reference — drop and recreate
                     try:

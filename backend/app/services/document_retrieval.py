@@ -5,12 +5,30 @@ Handles document retrieval, filtering by relevance thresholds, and window expans
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set
+
+# Matches the 8-hex-char hash produced by reupload_safe_order ID scheme
+_RE_HASH8 = re.compile(r"^[0-9a-f]{8}$")
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_reupload_hash(chunk_id: str, file_id: str) -> Optional[str]:
+    """Return the 8-hex hash from a reupload-safe chunk ID, or None for legacy IDs.
+
+    New format: {file_id}_{hash8}_{scale}_{idx}
+    Legacy format: {file_id}_{scale}_{idx} or {file_id}_{idx}
+    """
+    prefix = f"{file_id}_"
+    if not chunk_id.startswith(prefix):
+        return None
+    rest = chunk_id[len(prefix):]
+    candidate = rest.split("_", 1)[0]
+    return candidate if _RE_HASH8.fullmatch(candidate) else None
 
 
 def _normalize_uid_for_dedup(uid: str) -> str:
@@ -229,12 +247,16 @@ class DocumentRetrievalService:
                         record.get("id", "unknown"),
                     )
 
+            raw_meta = self._normalize_metadata(record.get("metadata"))
+            # Carry the actual stored chunk ID so expand_window can handle
+            # reupload-safe hash-prefixed IDs (e.g. "42_abc12345_default_0")
+            raw_meta["_chunk_id"] = record.get("id", "")
             sources.append(
                 RAGSource(
                     text=record.get("text", ""),
                     file_id=record.get("file_id", ""),
                     score=source_score,
-                    metadata=self._normalize_metadata(record.get("metadata")),
+                    metadata=raw_meta,
                 )
             )
 
@@ -340,12 +362,24 @@ class DocumentRetrievalService:
                 for s in file_sources
             ]
 
+            # Detect reupload-safe hash prefix from any source in this group.
+            # New-format IDs: {file_id}_{hash8}_{scale}_{idx}
+            # Legacy IDs: {file_id}_{scale}_{idx} or {file_id}_{idx}
+            hash_prefix: Optional[str] = None
+            for s in file_sources:
+                h = _extract_reupload_hash(s.metadata.get("_chunk_id", ""), file_id)
+                if h:
+                    hash_prefix = h
+                    break
+
             for chunk_index in indices:
                 start_idx = max(0, chunk_index - window)
                 end_idx = chunk_index + window
 
                 for idx in range(start_idx, end_idx + 1):
-                    if chunk_scale != "default":
+                    if hash_prefix:
+                        chunk_uid = f"{file_id}_{hash_prefix}_{chunk_scale}_{idx}"
+                    elif chunk_scale != "default":
                         chunk_uid = f"{file_id}_{chunk_scale}_{idx}"
                     else:
                         chunk_uid = f"{file_id}_{idx}"
@@ -413,9 +447,12 @@ class DocumentRetrievalService:
                     if chunk_scale:
                         metadata["chunk_scale"] = chunk_scale
 
+                    # Use file_id from the record, not parsed from the UID string
+                    # (UID parsing breaks with hash-prefixed new-format IDs)
+                    record_file_id = chunk.get("file_id") or file_id
                     expanded_source = RAGSource(
                         text=chunk.get("text", ""),
-                        file_id=file_id,
+                        file_id=record_file_id,
                         score=distance,
                         metadata=metadata,
                     )
