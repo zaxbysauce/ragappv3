@@ -112,11 +112,13 @@ export default function RegisterPage() {
                   disabled={isLoading}
                   autoFocus
                   aria-required="true"
+                  aria-describedby={errors.username ? "register-username-error" : undefined}
+                  aria-invalid={!!errors.username}
                   className="pl-10"
                 />
               </div>
               {errors.username && (
-                <p className="text-sm text-destructive">{errors.username}</p>
+                <p id="register-username-error" className="text-sm text-destructive">{errors.username}</p>
               )}
             </div>
 
@@ -149,11 +151,13 @@ export default function RegisterPage() {
                   onChange={handleChange("password")}
                   disabled={isLoading}
                   aria-required="true"
+                  aria-describedby={errors.password ? "register-password-error" : undefined}
+                  aria-invalid={!!errors.password}
                   className="pl-10"
                 />
               </div>
               {errors.password && (
-                <p className="text-sm text-destructive">{errors.password}</p>
+                <p id="register-password-error" className="text-sm text-destructive">{errors.password}</p>
               )}
             </div>
 
@@ -169,11 +173,13 @@ export default function RegisterPage() {
                   onChange={handleChange("confirmPassword")}
                   disabled={isLoading}
                   aria-required="true"
+                  aria-describedby={errors.confirmPassword ? "register-confirm-password-error" : undefined}
+                  aria-invalid={!!errors.confirmPassword}
                   className="pl-10"
                 />
               </div>
               {errors.confirmPassword && (
-                <p className="text-sm text-destructive">{errors.confirmPassword}</p>
+                <p id="register-confirm-password-error" className="text-sm text-destructive">{errors.confirmPassword}</p>
               )}
             </div>
 

@@ -75,7 +75,7 @@ export function MessageContent({ content, sources, isStreaming }: MessageContent
       <Button
         variant="ghost"
         size="icon"
-        className="absolute -right-10 top-0 opacity-0 group-hover:opacity-100 transition-opacity"
+        className="absolute -right-10 top-0 opacity-40 hover:opacity-100 focus-visible:opacity-100 transition-opacity"
         onClick={handleCopy}
         aria-label={copied ? "Copied to clipboard" : "Copy message to clipboard"}
       >

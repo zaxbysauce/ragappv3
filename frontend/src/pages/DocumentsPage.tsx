@@ -461,7 +461,7 @@ export default function DocumentsPage() {
                   </div>
                 </div>
                 {upload.status === "uploading" && (
-                  <Progress value={upload.progress} className="h-1.5" />
+                  <Progress value={upload.progress} className="h-1.5" aria-label="Processing progress" />
                 )}
               </div>
             ))}
@@ -674,13 +674,14 @@ export default function DocumentsPage() {
                           <td className="p-4">{formatFileSize(doc.size)}</td>
                           <td className="p-4 text-muted-foreground">{formatDate(doc.created_at)}</td>
                           <td className="p-4 text-right">
-                            <Button 
-                              variant="ghost" 
-                              size="icon" 
-                              className="min-w-[44px] min-h-[44px]" 
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="min-w-[44px] min-h-[44px]"
                               onClick={() => handleDeleteDocument(String(doc.id))}
+                              aria-label="Delete document"
                             >
-                              <Trash2 className="w-4 h-4 text-destructive" />
+                              <Trash2 className="w-4 h-4 text-destructive" aria-hidden="true" />
                             </Button>
                           </td>
                         </tr>
