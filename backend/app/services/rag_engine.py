@@ -204,8 +204,9 @@ class RAGEngine:
                     "Query embedding failure for variant '%s': %s", variant_type, result
                 )
                 variants_dropped.append(variant_type)
-            elif isinstance(result, Exception):
+            elif isinstance(result, BaseException):
                 if variant_type == 'original':
+                    logger.error("Query embedding failure for original query: %s", result)
                     raise RAGEngineError(f"Original query embedding failed: {result}")
                 variants_dropped.append(variant_type)
             else:
