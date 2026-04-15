@@ -211,7 +211,7 @@ On first launch, you'll be redirected to the **Setup Wizard** (`/setup`) to crea
 | `USERS_ENABLED` | true | Enable multi-user JWT authentication |
 | `JWT_SECRET_KEY` | change-me-... | Secret key for JWT signing (generate with `python -c "import secrets; print(secrets.token_urlsafe(48))"`) |
 | `JWT_ALGORITHM` | HS256 | JWT signing algorithm |
-| `ADMIN_SECRET_TOKEN` | "" | Legacy admin token for API key auth mode |
+| `ADMIN_SECRET_TOKEN` | "" | Admin API key. **Required** when `USERS_ENABLED=true` (JWT mode) and when `USERS_ENABLED=false` (single-admin mode — sole auth mechanism) |
 | `PARENT_RETRIEVAL_ENABLED` | `false` | Enable small-to-big context expansion (parent window retrieval) |
 | `PARENT_WINDOW_CHARS` | `6000` | Total parent window size in characters (±3000 around matched chunk) |
 | `NEW_DEDUP_POLICY` | `true` | Use group-aware dedup (caps per-doc chunks and distinct docs in results) |
@@ -399,6 +399,7 @@ curl http://localhost:9090/api/health?deep=true | jq .vector_store
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/health` | Service health status |
+| GET | `/api/healthz` | Lightweight readiness probe — returns 503 if critical services (db, vector store, embedding) are not initialised; suitable for Kubernetes liveness/readiness probes |
 
 ### Authentication
 
