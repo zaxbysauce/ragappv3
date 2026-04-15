@@ -31,6 +31,11 @@ class TestRejectInsecureDefaults:
         with pytest.raises(ValueError, match="ADMIN_SECRET_TOKEN must be set when USERS_ENABLED=False"):
             Settings(users_enabled=False, admin_secret_token="")
 
+    def test_users_disabled_with_whitespace_admin_token_raises(self):
+        """users_enabled=False, admin_secret_token="   " should raise — whitespace-only is not a valid token."""
+        with pytest.raises(ValueError, match="ADMIN_SECRET_TOKEN must be set when USERS_ENABLED=False"):
+            Settings(users_enabled=False, admin_secret_token="   ")
+
     def test_users_disabled_with_nonempty_admin_token_succeeds(self):
         """users_enabled=False, admin_secret_token="something" should not raise."""
         # Should not raise

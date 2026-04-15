@@ -387,7 +387,7 @@ async def get_session(
         raise HTTPException(status_code=403, detail="No read access to this vault")
 
     # Get messages
-    messages_query = "SELECT id, role, content, sources, created_at FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC"
+    messages_query = "SELECT id, role, content, sources, created_at FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC, id ASC"
     messages_result = await asyncio.to_thread(
         conn.execute, messages_query, (session_id,)
     )

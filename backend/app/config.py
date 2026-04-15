@@ -568,7 +568,7 @@ class Settings(BaseSettings):
             )
         # Single-admin mode: admin_secret_token is the ONLY authentication mechanism.
         # Running without it means the application has no authentication at all.
-        if not self.users_enabled and not self.admin_secret_token:
+        if not self.users_enabled and not self.admin_secret_token.strip():
             raise ValueError(
                 "ADMIN_SECRET_TOKEN must be set when USERS_ENABLED=False (single-admin mode). "
                 "In single-admin mode this token is the sole authentication mechanism. "
