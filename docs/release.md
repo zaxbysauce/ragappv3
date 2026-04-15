@@ -643,7 +643,7 @@ No configuration changes or breaking changes. All improvements are internal.
 - **Query embedding parallelisation (PERF-1):** `RAGEngine` now embeds query variants (original, step-back, HyDE) concurrently using `asyncio.gather`, reducing RAG latency proportional to the number of active variants.
 - **O(1) LRU cache in QueryTransformer (PERF-2):** Replaced `dict+list` LRU implementation with `collections.OrderedDict`. Access reordering (`move_to_end`) and eviction (`popitem`) are now O(1) instead of O(n).
 - **Shared VectorStore semaphore (PERF-4):** LanceDB search operations are now rate-limited by a class-level semaphore shared across all concurrent callers (`_MULTI_SCALE_CONCURRENCY = 4`). Previously the semaphore was per-call local, providing no cross-request limiting. Single-scale searches (the default path) are now also guarded.
-- **Adaptive document polling (PERF-11):** The Documents page polling interval starts at 2 s and backs off 1.5× per cycle (capped at 30 s) when no status changes are detected, reducing unnecessary backend load while remaining responsive during active document processing.
+- **Adaptive document polling (PERF-11):** The Documents page polling interval starts at 2 s and backs off 1.5× per cycle (capped at 30 s) during sustained processing, resetting to 2 s when processing completes. This reduces unnecessary backend load while remaining responsive at the start of each processing batch.
 
 #### Deferred
 

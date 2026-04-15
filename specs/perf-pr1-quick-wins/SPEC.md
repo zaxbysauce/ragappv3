@@ -78,8 +78,8 @@ or has completed, and is unresponsive when processing is fast.
 using a `useRef` (so the interval state persists across renders without causing
 re-renders). Behaviour:
 - Starts at 2 s when documents enter processing/pending state
-- Backs off 1.5× per poll cycle, capped at 30 s
-- Resets to 2 s when processing stops (so the next batch starts fast)
+- Backs off 1.5× per poll cycle unconditionally while processing, capped at 30 s
+- Resets to 2 s when processing stops (`hasProcessingDocs` becomes false), so the next batch starts fast
 - React `useEffect` cleanup (`clearTimeout`) prevents double-firing when
   `documents` state updates between polls
 
