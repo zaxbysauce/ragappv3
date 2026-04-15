@@ -100,7 +100,22 @@ class EmailIngestionService:
         self._running = True
         self._stop_event.clear()
         self._polling_task = asyncio.create_task(self._polling_loop())
+        self._polling_task.add_done_callback(self._on_polling_task_done)
         logger.info("Email ingestion service started")
+
+    def _on_polling_task_done(self, task: asyncio.Task) -> None:
+        """Callback invoked when the polling task finishes — logs unhandled exceptions."""
+        if task.cancelled():
+            logger.info("Email polling task was cancelled")
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error(
+                "Email polling task exited with an unhandled exception: %s",
+                exc,
+                exc_info=exc,
+            )
+            self._running = False
 
     def stop_polling(self) -> None:
         """
@@ -163,6 +178,14 @@ class EmailIngestionService:
             except (OSError, RuntimeError, ConnectionError) as e:
                 self._last_error = str(e)
                 logger.error(f"Error during email polling: {e}", exc_info=True)
+            except Exception as e:
+                self._last_error = str(e)
+                logger.error(
+                    "Unexpected error in email polling loop (stopping service): %s",
+                    e,
+                    exc_info=True,
+                )
+                break
 
             # Wait for next poll interval or shutdown
             try:

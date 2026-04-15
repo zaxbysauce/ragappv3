@@ -77,6 +77,7 @@ async function _doRefresh(): Promise<string | null> {
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
+  timeout: 30000,
   headers: {
     "Content-Type": "application/json",
   },
@@ -543,6 +544,7 @@ export async function uploadDocument(
     "/documents",
     formData,
     {
+      timeout: 0, // disable timeout for file uploads — large files can take minutes
       headers: { "Content-Type": "" },
       ...(vaultId != null && { params: { vault_id: vaultId } }),
       onUploadProgress: (progressEvent) => {
