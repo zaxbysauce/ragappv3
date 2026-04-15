@@ -78,6 +78,15 @@ class VectorStore:
         self._fts_exceptions: int = 0
         # Track the row count at last IVF_PQ build to detect post-delete churn (Issue #13)
         self._last_index_build_row_count: int = 0
+        # Shared semaphore limiting concurrent LanceDB search operations across all callers.
+        # Lazily initialised on first use to avoid event-loop binding issues.
+        self._search_semaphore: Optional[asyncio.Semaphore] = None
+
+    def _get_search_semaphore(self) -> asyncio.Semaphore:
+        """Return the shared search semaphore, creating it on first call."""
+        if self._search_semaphore is None:
+            self._search_semaphore = asyncio.Semaphore(_MULTI_SCALE_CONCURRENCY)
+        return self._search_semaphore
 
     async def connect(self) -> "VectorStore":
         """Connect to LanceDB.
@@ -659,11 +668,11 @@ class VectorStore:
             if len(scale_strs) > 1:
                 # Multi-scale search: query each scale with limited concurrency
                 # and perform cross-scale RRF
-                semaphore = asyncio.Semaphore(_MULTI_SCALE_CONCURRENCY)
+                _semaphore = self._get_search_semaphore()
 
                 async def _sem_search_single_scale(scale: str) -> List[Dict[str, Any]]:
                     """Semaphore-guarded wrapper for _search_single_scale."""
-                    async with semaphore:
+                    async with _semaphore:
                         return await self._search_single_scale(
                             embedding=embedding,
                             scale=scale,
@@ -734,65 +743,66 @@ class VectorStore:
         if self.table is None:
             return []
 
-        # Dense vector search
-        # NOTE: Using query_type="vector" to bypass LanceDB's buggy auto-detection
-        # which can cause UnboundLocalError when embedding_conf is None
-        embedding_np = np.array(embedding, dtype=np.float32)
-        query = await self.table.search(embedding_np, query_type="vector")
+        async with self._get_search_semaphore():
+            # Dense vector search
+            # NOTE: Using query_type="vector" to bypass LanceDB's buggy auto-detection
+            # which can cause UnboundLocalError when embedding_conf is None
+            embedding_np = np.array(embedding, dtype=np.float32)
+            query = await self.table.search(embedding_np, query_type="vector")
 
-        # Apply vault filter if specified
-        _filter_expr = filter_expr
-        if vault_id is not None:
-            safe_vault_id = _lance_escape(vault_id)
-            vault_filter = f"vault_id = '{safe_vault_id}'"
-            if _filter_expr:
-                _filter_expr = f"({_filter_expr}) AND ({vault_filter})"
-            else:
-                _filter_expr = vault_filter
-
-        if _filter_expr:
-            query = query.where(_filter_expr)
-
-        dense_results = await query.limit(fetch_k).to_list()
-
-        # If hybrid disabled, return dense results only
-        if not hybrid or not query_text:
-            logger.debug(
-                f"Dense-only search (hybrid disabled or no query text)"
-            )
-            return dense_results
-
-        # BM25 FTS hybrid search with fts_status tracking
-        fts_status = 'ok'
-        try:
-            fts_query = await self.table.search(query_text, query_type="fts")
-            if vault_id:
+            # Apply vault filter if specified
+            _filter_expr = filter_expr
+            if vault_id is not None:
                 safe_vault_id = _lance_escape(vault_id)
-                fts_query = fts_query.where(f"vault_id = '{safe_vault_id}'")
-            if filter_expr:
-                fts_query = fts_query.where(filter_expr)
-            fts_results = await fts_query.limit(fetch_k).to_list()
-            if fts_results:
-                logger.info(
-                    f"Hybrid search (BM25 FTS) succeeded: {len(fts_results)} FTS results (alpha={hybrid_alpha})"
-                )
-                fts_status = 'ok'
-            else:
-                fts_status = 'empty'
-        except Exception as e:
-            logger.warning(f"FTS search failed (falling back to dense-only): {type(e).__name__}: {e}")
-            fts_results = []
-            fts_status = 'failed'
-            with _fts_lock:
-                self._fts_exceptions += 1
+                vault_filter = f"vault_id = '{safe_vault_id}'"
+                if _filter_expr:
+                    _filter_expr = f"({_filter_expr}) AND ({vault_filter})"
+                else:
+                    _filter_expr = vault_filter
 
-        # RRF Fusion using shared utility
-        k_rrf = 60 if settings.rrf_legacy_mode else settings.hybrid_rrf_k
-        fused = rrf_fuse([dense_results, fts_results], k=k_rrf, limit=limit)
-        # Attach FTS status to each result
-        for record in fused:
-            record["_fts_status"] = fts_status
-        return fused
+            if _filter_expr:
+                query = query.where(_filter_expr)
+
+            dense_results = await query.limit(fetch_k).to_list()
+
+            # If hybrid disabled, return dense results only
+            if not hybrid or not query_text:
+                logger.debug(
+                    f"Dense-only search (hybrid disabled or no query text)"
+                )
+                return dense_results
+
+            # BM25 FTS hybrid search with fts_status tracking
+            fts_status = 'ok'
+            try:
+                fts_query = await self.table.search(query_text, query_type="fts")
+                if vault_id:
+                    safe_vault_id = _lance_escape(vault_id)
+                    fts_query = fts_query.where(f"vault_id = '{safe_vault_id}'")
+                if filter_expr:
+                    fts_query = fts_query.where(filter_expr)
+                fts_results = await fts_query.limit(fetch_k).to_list()
+                if fts_results:
+                    logger.info(
+                        f"Hybrid search (BM25 FTS) succeeded: {len(fts_results)} FTS results (alpha={hybrid_alpha})"
+                    )
+                    fts_status = 'ok'
+                else:
+                    fts_status = 'empty'
+            except Exception as e:
+                logger.warning(f"FTS search failed (falling back to dense-only): {type(e).__name__}: {e}")
+                fts_results = []
+                fts_status = 'failed'
+                with _fts_lock:
+                    self._fts_exceptions += 1
+
+            # RRF Fusion using shared utility
+            k_rrf = 60 if settings.rrf_legacy_mode else settings.hybrid_rrf_k
+            fused = rrf_fuse([dense_results, fts_results], k=k_rrf, limit=limit)
+            # Attach FTS status to each result
+            for record in fused:
+                record["_fts_status"] = fts_status
+            return fused
 
     async def delete_by_file(self, file_id: str) -> int:
         """

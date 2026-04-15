@@ -184,25 +184,33 @@ class RAGEngine:
         # query_embeddings will be List[Tuple[str, List[float]]] where tuple is (variant_type, embedding)
         query_embeddings: List[Tuple[str, List[float]]] = []
         variants_dropped: List[str] = []
-        # Embed each transformed query explicitly with per-task error handling
-        for variant_type, text in transformed_queries:
-            try:
-                if variant_type == 'hyde':
-                    embedding = await self.embedding_service.embed_passage(text)
-                else:
-                    embedding = await self.embedding_service.embed_single(text)
-                query_embeddings.append((variant_type, embedding))
-            except EmbeddingError as e:
+
+        async def _embed_one(vtype: str, text: str) -> List[float]:
+            if vtype == 'hyde':
+                return await self.embedding_service.embed_passage(text)
+            return await self.embedding_service.embed_single(text)
+
+        embed_tasks = [_embed_one(vt, t) for vt, t in transformed_queries]
+        raw_embeddings = await asyncio.gather(*embed_tasks, return_exceptions=True)
+
+        for (variant_type, _), result in zip(transformed_queries, raw_embeddings):
+            if isinstance(result, EmbeddingError):
                 if variant_type == 'original':
                     logger.error(
-                        "Query embedding failure for original query: %s", e
+                        "Query embedding failure for original query: %s", result
                     )
-                    raise RAGEngineError(f"Original query embedding failed: {e}")
-                else:
-                    logger.warning(
-                        "Query embedding failure for variant '%s': %s", variant_type, e
-                    )
-                    variants_dropped.append(variant_type)
+                    raise RAGEngineError(f"Original query embedding failed: {result}")
+                logger.warning(
+                    "Query embedding failure for variant '%s': %s", variant_type, result
+                )
+                variants_dropped.append(variant_type)
+            elif isinstance(result, BaseException):
+                if variant_type == 'original':
+                    logger.error("Query embedding failure for original query: %s", result)
+                    raise RAGEngineError(f"Original query embedding failed: {result}")
+                variants_dropped.append(variant_type)
+            else:
+                query_embeddings.append((variant_type, result))
 
         if not query_embeddings:
             error_msg = "Unable to encode any query variants"
