@@ -136,6 +136,8 @@ export default function LoginPage() {
                       disabled={isLoading}
                       autoFocus
                       aria-required="true"
+                      aria-describedby={error ? "login-error" : undefined}
+                      aria-invalid={!!error}
                       className="pl-10"
                     />
                   </div>
@@ -152,6 +154,8 @@ export default function LoginPage() {
                       onChange={handleCredentialsChange("password")}
                       disabled={isLoading}
                       aria-required="true"
+                      aria-describedby={error ? "login-error" : undefined}
+                      aria-invalid={!!error}
                       className="pl-10"
                     />
                   </div>
@@ -170,12 +174,14 @@ export default function LoginPage() {
                   disabled={isLoading}
                   autoFocus
                   aria-required="true"
+                  aria-describedby={error ? "login-error" : undefined}
+                  aria-invalid={!!error}
                 />
               </div>
             )}
 
             {error && (
-              <p role="alert" className="text-sm text-destructive text-center">{error}</p>
+              <p id="login-error" role="alert" className="text-sm text-destructive text-center">{error}</p>
             )}
 
             <Button

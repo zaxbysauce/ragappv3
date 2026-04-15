@@ -75,8 +75,9 @@ export function UploadIndicator() {
                 e.stopPropagation();
                 setIsExpanded(!isExpanded);
               }}
+              aria-label={isExpanded ? "Collapse upload details" : "Expand upload details"}
             >
-              <X className="w-3 h-3" />
+              <X className="w-3 h-3" aria-hidden="true" />
             </Button>
           </div>
         </div>
@@ -84,7 +85,7 @@ export function UploadIndicator() {
         {/* Progress bar - always visible if uploading */}
         {currentUpload && (
           <div className="px-3 pb-2">
-            <Progress value={currentUpload.progress} className="h-1" />
+            <Progress value={currentUpload.progress} className="h-1" aria-label="Upload progress" />
           </div>
         )}
 

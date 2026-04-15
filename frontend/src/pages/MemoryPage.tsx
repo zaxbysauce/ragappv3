@@ -193,11 +193,12 @@ export default function MemoryPage() {
                     className="h-8 w-8 shrink-0"
                     onClick={() => handleDeleteMemory(memory.id)}
                     disabled={isDeleting === memory.id}
+                    aria-label="Delete memory"
                   >
                     {isDeleting === memory.id ? (
-                      <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                      <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" aria-hidden="true" />
                     ) : (
-                      <Trash2 className="w-4 h-4 text-destructive" />
+                      <Trash2 className="w-4 h-4 text-destructive" aria-hidden="true" />
                     )}
                   </Button>
                 </div>

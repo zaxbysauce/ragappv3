@@ -121,11 +121,13 @@ export default function SetupPage() {
                   disabled={isLoading}
                   autoFocus
                   aria-required="true"
+                  aria-describedby={errors.username ? "setup-username-error" : undefined}
+                  aria-invalid={!!errors.username}
                   className="pl-10"
                 />
               </div>
               {errors.username && (
-                <p className="text-sm text-destructive">{errors.username}</p>
+                <p id="setup-username-error" className="text-sm text-destructive">{errors.username}</p>
               )}
             </div>
 
@@ -158,11 +160,13 @@ export default function SetupPage() {
                   onChange={handleChange("password")}
                   disabled={isLoading}
                   aria-required="true"
+                  aria-describedby={errors.password ? "setup-password-error" : undefined}
+                  aria-invalid={!!errors.password}
                   className="pl-10"
                 />
               </div>
               {errors.password && (
-                <p className="text-sm text-destructive">{errors.password}</p>
+                <p id="setup-password-error" className="text-sm text-destructive">{errors.password}</p>
               )}
             </div>
 
@@ -178,11 +182,13 @@ export default function SetupPage() {
                   onChange={handleChange("confirmPassword")}
                   disabled={isLoading}
                   aria-required="true"
+                  aria-describedby={errors.confirmPassword ? "setup-confirm-password-error" : undefined}
+                  aria-invalid={!!errors.confirmPassword}
                   className="pl-10"
                 />
               </div>
               {errors.confirmPassword && (
-                <p className="text-sm text-destructive">{errors.confirmPassword}</p>
+                <p id="setup-confirm-password-error" className="text-sm text-destructive">{errors.confirmPassword}</p>
               )}
             </div>
 
