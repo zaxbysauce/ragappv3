@@ -26,12 +26,10 @@ class TestRejectInsecureDefaults:
         assert settings.users_enabled is True
         assert settings.admin_secret_token == "secure-token-123"
 
-    def test_users_disabled_with_empty_admin_token_succeeds(self):
-        """users_enabled=False, admin_secret_token="" should not raise."""
-        # Should not raise even though token is empty
-        settings = Settings(users_enabled=False, admin_secret_token="")
-        assert settings.users_enabled is False
-        assert settings.admin_secret_token == ""
+    def test_users_disabled_with_empty_admin_token_raises(self):
+        """users_enabled=False, admin_secret_token="" should raise — sole auth mechanism is unset."""
+        with pytest.raises(ValueError, match="ADMIN_SECRET_TOKEN must be set when USERS_ENABLED=False"):
+            Settings(users_enabled=False, admin_secret_token="")
 
     def test_users_disabled_with_nonempty_admin_token_succeeds(self):
         """users_enabled=False, admin_secret_token="something" should not raise."""

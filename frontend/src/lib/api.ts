@@ -544,6 +544,7 @@ export async function uploadDocument(
     "/documents",
     formData,
     {
+      timeout: 0, // disable timeout for file uploads — large files can take minutes
       headers: { "Content-Type": "" },
       ...(vaultId != null && { params: { vault_id: vaultId } }),
       onUploadProgress: (progressEvent) => {
