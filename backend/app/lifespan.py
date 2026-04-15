@@ -232,8 +232,10 @@ async def lifespan(app: FastAPI):
             logger.warning("TEI model validation failed (continuing): %s", e)
     
     app.state.vector_store = VectorStore()
-    await _safe_await(
-        app.state.vector_store.connect(), "Vector store connect", timeout=15
+    # Critical: fail fast if the vector store cannot connect or initialize its table.
+    # Without these two, no search or ingestion is possible.
+    await asyncio.wait_for(
+        app.state.vector_store.connect(), timeout=15
     )
     await _safe_await(
         app.state.vector_store.migrate_add_vault_id(),
@@ -252,9 +254,8 @@ async def lifespan(app: FastAPI):
     )
 
     # Initialize vector store table before FTS validation
-    await _safe_await(
+    await asyncio.wait_for(
         app.state.vector_store.init_table(settings.embedding_dim),
-        "Vector store init_table",
         timeout=10,
     )
 

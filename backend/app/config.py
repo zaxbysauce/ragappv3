@@ -566,6 +566,14 @@ class Settings(BaseSettings):
                 "JWT_SECRET_KEY must be changed from the default when USERS_ENABLED=True. "
                 'Generate one with: python -c "import secrets; print(secrets.token_urlsafe(48))"'
             )
+        # Single-admin mode: admin_secret_token is the ONLY authentication mechanism.
+        # Running without it means the application has no authentication at all.
+        if not self.users_enabled and not self.admin_secret_token:
+            raise ValueError(
+                "ADMIN_SECRET_TOKEN must be set when USERS_ENABLED=False (single-admin mode). "
+                "In single-admin mode this token is the sole authentication mechanism. "
+                'Generate one with: python -c "import secrets; print(secrets.token_urlsafe(48))"'
+            )
         return self
 
     @model_validator(mode="after")

@@ -8,6 +8,7 @@ Expensive model checks are opt-in via ?deep=true query parameter.
 import logging
 
 from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import JSONResponse
 
 from app.api.deps import get_llm_health_checker, get_model_checker
 from app.services.llm_health import LLMHealthChecker
@@ -94,3 +95,34 @@ async def health_check(
         }
 
     return result
+
+
+@router.get("/healthz")
+async def healthz(request: Request):
+    """
+    Lightweight readiness probe.
+
+    Returns 200 when critical services (db, vector store, embedding) are initialized.
+    Returns 503 with a list of issues otherwise.
+    Suitable for Kubernetes liveness/readiness probes and load-balancer health checks.
+    Does not run expensive model availability checks.
+    """
+    state = request.app.state
+    issues = []
+
+    if not getattr(state, "db_pool", None):
+        issues.append("db_pool not initialized")
+    vector_store = getattr(state, "vector_store", None)
+    if not vector_store:
+        issues.append("vector_store not initialized")
+    elif not getattr(vector_store, "table", None):
+        issues.append("vector_store not connected")
+    if not getattr(state, "embedding_service", None):
+        issues.append("embedding_service not initialized")
+
+    if issues:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "degraded", "issues": issues},
+        )
+    return {"status": "ok"}
