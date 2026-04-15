@@ -609,8 +609,11 @@ async def add_message(
     message_count_row = await asyncio.to_thread(count_result.fetchone)
     is_first_message = message_count_row[0] == 0
 
-    # Auto-title if first message and session has no title
-    if is_first_message and session_row[1] is None:
+    # Auto-title if this is the first *user* message and the session has no title.
+    # Role guard is critical: concurrent saves (Promise.all) mean both user and assistant
+    # inserts can see COUNT(*)=0 simultaneously. Without the role check, the assistant
+    # message could trigger auto-naming with its own response content as the title basis.
+    if is_first_message and session_row[1] is None and request.role == "user":
         # Fire-and-forget LLM auto-naming (does not block the response)
         if rag_engine and rag_engine.llm_client is not None:
             task = asyncio.create_task(
