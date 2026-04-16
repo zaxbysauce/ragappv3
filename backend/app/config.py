@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     """Character-based chunk size for document processing. Default 1200 chars (~300 tokens) leaves room for instruction prefix."""
     chunk_overlap_chars: int | None = None
     """Character-based overlap between chunks. Default 120 chars (~30 tokens)."""
-    document_parsing_strategy: str = "fast"
+    document_parsing_strategy: str = "auto"
     """Document parsing strategy for unstructured.io: 'fast' (fastest), 'hi_res' (best quality), 'auto' (automatic selection)."""
     document_parse_timeout: float = 300.0
     """Timeout in seconds for document parsing. Prevents worker threads from being blocked indefinitely by complex documents."""
@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     """Number of top chunks to retrieve (unifies max_context_chunks and vector_top_k)."""
     vector_metric: str = "cosine"
     """Distance metric for vector similarity search."""
-    max_distance_threshold: float = 1.0
+    max_distance_threshold: float = 0.5
     """Maximum distance threshold for relevance filtering (replaces rag_relevance_threshold).
 
     For cosine distance: 0=identical, 1=orthogonal, 2=opposite.
@@ -173,8 +173,8 @@ class Settings(BaseSettings):
     """Chunking strategy: 'title' for fixed-size, 'embedding' for cosine-similarity breakpoints."""
 
     # ── HyDE (Hypothetical Document Embeddings) configuration ──
-    hyde_enabled: bool = True
-    """Enable HyDE: generate a hypothetical answer passage and embed it as additional query vector. Default True."""
+    hyde_enabled: bool = False
+    """Enable HyDE: generate a hypothetical answer passage and embed it as additional query vector. Default False."""
 
     # ── Sparse search configuration ──────────────────────────────────
     sparse_search_max_candidates: int = 1000
@@ -201,7 +201,7 @@ class Settings(BaseSettings):
     cap breadth at UNIQUE_DOCS_IN_TOP_K distinct documents. Replaces UID-strip dedup that
     collapsed the best document's multiple strong chunks to one. Default True (safe improvement)."""
 
-    per_doc_chunk_cap: int = 2
+    per_doc_chunk_cap: int = 5
     """Maximum chunks kept per document after group-aware dedup. Higher values give more
     context from each document at the cost of less diversity across sources."""
 

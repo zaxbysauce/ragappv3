@@ -455,10 +455,10 @@ class TestDistill:
             mock_llm_client.chat_completion.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_distill_ambiguous_triggers_synthesis(
+    async def test_distill_ambiguous_does_not_trigger_synthesis(
         self, mock_embedding_service, mock_llm_client
     ):
-        """Synthesis runs for AMBIGUOUS eval_result."""
+        """Synthesis should NOT run for AMBIGUOUS — real chunks may be present."""
         sources = [
             RAGSource(
                 text="Content about the topic with additional information here.",
@@ -487,8 +487,8 @@ class TestDistill:
             distiller = ContextDistiller(mock_embedding_service, mock_llm_client)
             result = await distiller.distill("test query", sources, "AMBIGUOUS")
 
-            # Synthesis SHOULD be called for AMBIGUOUS
-            assert mock_llm_client.chat_completion.called
+            # Synthesis should NOT be called for AMBIGUOUS
+            assert not mock_llm_client.chat_completion.called
 
     @pytest.mark.asyncio
     async def test_distill_disabled_returns_original(self, mock_embedding_service):

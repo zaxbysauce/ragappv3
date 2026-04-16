@@ -1,23 +1,31 @@
-# RAG Issues #8 & #9: Deterministic Query Expansion + Embedding Integrity
-Swarm: paid
-Phase: 7 [PENDING] | Updated: 2026-04-13T13:35:57.620Z
+# RAG Quality Fix List — 10 Targeted Remediations
+Swarm: mega
+Phase: 1 [COMPLETE] | Updated: 2026-04-16T02:08:48.461Z
 
 ---
-## Phase 7: Issue #8: Deterministic Query Expansion [PENDING]
-- [ ] 7.5: Verify hyde_enabled check at query_transformer.py line 115 is consistent with new STEPBACK_ENABLED pattern. Both should gate their respective transformations. Ensure _execute_retrieval returns variants_dropped list and query() passes it to _build_done_message which accepts it as parameter and includes it in retrieval_debug dict. [SMALL]
+## Phase 1: Config defaults alignment (Fixes 2, 7, 8, 9, 10) [COMPLETE]
+- [x] 1.1: Fix per_doc_chunk_cap default from 2 to 5 in backend/app/config.py line 204. FR-002. [SMALL]
+- [x] 1.2: Fix max_distance_threshold default from 1.0 to 0.5 in backend/app/config.py line 51. FR-008. [SMALL]
+- [x] 1.3: Disable query transformation by default: set query_transformation_enabled=False and hyde_enabled=False. Update tests. FR-009. [SMALL]
+- [x] 1.4: Change document_parsing_strategy default from 'fast' to 'auto'. FR-010. [SMALL]
+- [x] 1.5: Change multi_scale_chunk_sizes default. FR-011. [SMALL]
 
 ---
-## Phase 8: Issue #9: HyDE Doc-Prefix + Embedding Cache + Model Assertion [PENDING]
-- [ ] 8.6: Fix Critical Bug: query_transformer.py cache key uses 'step_back'/'hyde' as model name instead of actual LLM model. Change all _make_cache_key calls to pass settings.chat_model as first argument instead of static strings. This ensures cache entries differ when model changes, preventing stale transform results. [SMALL] (depends: 7.2)
-- [ ] 8.7: Fix Critical Bug: _execute_retrieval exception handler (lines 393-661) swallows ALL exceptions and returns results as-if-successful. The entire method body is wrapped in try/except Exception with return in both branches. RAGEngineError raised for original query failure (line 423) is caught and never propagates. Restructure so: (1) RAGEngineError and BaseException are re-raised, (2) only post-retrieval evaluation/retry logic is caught, not core search execution. [MEDIUM] (depends: 7.3)
-- [ ] 8.8: Fix Medium Priority: _execute_retrieval has mutable default variants_dropped: List[str] = None. When variants_dropped is passed and then reassigned inside the except block (line 432), it creates a separate object. Callers pass a list expecting it to be mutated in-place, but get a new object. Fix: remove default None, use explicit None check, and never reassign — only append to the passed list. [SMALL] (depends: 8.7)
-- [ ] 8.9: Refactor embed_passage and embed_single duplication (90% identical). Extract shared _embed_with_prefix(text: str, prefix: str) -> List[float] private method. Both embed_single and embed_passage delegate to it. This reduces duplication and ensures bug fixes apply to both. [SMALL] (depends: 8.1)
-- [ ] 8.10: Fix Medium Priority: Embedding cache key does not include prefix. Cache key = {model_fp}_{url_fp}_{text_hash}. If embedding_doc_prefix or embedding_query_prefix changes, cached embeddings remain valid but are now incorrect for the new prefix. Add prefix fingerprint to cache key: {model_fp}_{url_fp}_{prefix_fp}_{text_hash}. [SMALL] (depends: 8.1)
+## Phase 2: Code logic fixes (Fixes 1, 4, 5) [COMPLETE]
+- [x] 2.1: Remove sort_key function and expanded_sources.sort in document_retrieval.py. FR-001. [SMALL]
+- [x] 2.2: Fix exact-match promotion to rank 1. FR-005. [SMALL]
+- [x] 2.3: Wire hybrid_alpha into rrf_fuse at vector_store.py line 574. FR-006. [SMALL]
+- [x] 2.4: Wire hybrid_alpha into rrf_fuse at vector_store.py line 801. FR-006. [SMALL]
 
 ---
-## Phase 9: Test Coverage for Issues #8 and #9 [IN PROGRESS]
-- [ ] 9.2: Fix Critical Bug - Placeholder Test: test_cache_key_includes_model_when_set (test_embeddings_cache.py) only asserts methods exist, never verifies actual cache key composition. Write test that: (1) creates two EmbeddingService instances with different embedding_model settings, (2) calls embed_single with same text on both, (3) verifies they do NOT share cache entries (second call still hits API). Current test just checks hasattr. [MEDIUM] (depends: 8.6)
-- [ ] 9.4: Fix Critical Bug - Placeholder Test: test_hyde_failure_adds_to_variants_dropped (test_rag_engine.py line 326) only asserts hasattr(service, 'embed_passage'). It never verifies variants_dropped is populated. Write test that: (1) uses PartialFailingEmbeddingService that fails only embed_passage, (2) calls engine.query() with HyDE enabled, (3) asserts response succeeds AND retrieval_debug.variants_dropped contains 'hyde'. Use existing FailingEmbeddingService pattern. [MEDIUM] (depends: 7.4, 8.2)
-- [ ] 9.7: Add zero-coverage test for _is_exact_or_document_query function (query_transformer.py line 15). This function gates whether ANY transformation occurs. Tests needed: (1) quoted exact phrase returns True, (2) filename with pdf/csv/yaml extension returns True, (3) short non-question lookup (3 words, no question word) returns True, (4) normal question returns False, (5) very long query returns False. [MEDIUM] (depends: 7.2)
-- [ ] 9.8: Add Ollama-mode prefix test for embed_passage. Current TestEmbedPassagePrefix tests use OpenAI mode (/v1/embeddings) with 'input' key. Add test for Ollama mode (/api/embeddings) where payload uses 'prompt' key. Verify embed_passage applies embedding_doc_prefix in Ollama mode payload, and embed_single applies embedding_query_prefix. [SMALL] (depends: 9.4)
-- [ ] 9.9: Run full test suite: pytest backend/tests/ -v --tb=short. All existing tests pass plus all new tests for Issues #8 and #9. Verify no regressions. [MEDIUM] (depends: 9.2, 9.4, 9.7, 9.8)
+## Phase 3: Medium-risk structural changes (Fixes 3, 6) [COMPLETE]
+- [x] 3.1: Contextual chunking: store context in metadata. FR-003. [SMALL]
+- [x] 3.1.1: Amend contextual_chunking.py to dual-store: keep context prepended to chunk.text for enriched embeddings AND store in chunk.metadata['contextual_context']. Change lines 270-276: keep chunk.raw_text = chunk.text, add chunk.metadata['contextual_context'] = context, and restore chunk.text = f'{context}\n\n{chunk.text}'. Update test_contextual_chunking.py line 275: change assertEqual(chunk.text, 'Original chunk text') to assertEqual(chunk.text, 'Context for chunk\n\nOriginal chunk text'). Lines 205, 496, 526, 616 already check metadata which is correct for dual-store. [SMALL] (depends: 3.1)
+- [x] 3.2: Prompt builder: surface contextual_context in header. FR-004. [SMALL]
+- [x] 3.2.1: Amend prompt_builder.py line 185: change ctx_note[:120] to ctx_note[:200] for 200-char truncation per user decision. Update task 3.2 acceptance. [SMALL] (depends: 3.2)
+- [x] 3.3: Context distiller: gate synthesis to NO_MATCH only. FR-007. [SMALL]
+
+---
+## Phase 4: Integration verification [COMPLETE]
+- [x] 4.1: Run full test suite: pytest backend/tests/ -v --tb=short. Verify all existing tests pass. SC-011, SC-012. [SMALL]
+- [x] 4.2: Verify telemetry and logging: spot-check 3 key log paths. [SMALL]

@@ -41,10 +41,10 @@ class TestNewConfigFields:
         settings = Settings()
         assert settings.semantic_chunking_strategy == "title"
 
-    def test_hyde_enabled_default_true(self):
-        """Test hyde_enabled defaults to True."""
+    def test_hyde_enabled_default_false(self):
+        """Test hyde_enabled defaults to False."""
         settings = Settings()
-        assert settings.hyde_enabled is True
+        assert settings.hyde_enabled is False
 
     def test_sparse_search_max_candidates_default(self):
         """Test sparse_search_max_candidates defaults to 1000."""
@@ -90,10 +90,10 @@ class TestNewConfigFields:
 class TestFeatureFlagsDefaultToFalse:
     """Test that remaining feature flags default to False."""
 
-    def test_hyde_enabled_is_true(self):
-        """HyDE feature flag should default to True."""
+    def test_hyde_enabled_is_false(self):
+        """HyDE feature flag should default to False."""
         settings = Settings()
-        assert settings.hyde_enabled is True
+        assert settings.hyde_enabled is False
 
     def test_context_distillation_enabled_is_true(self):
         """Context distillation feature flag should default to True."""

@@ -20,12 +20,12 @@ from app.config import Settings
 class TestHyDeEnabledDefaults:
     """Test hyde_enabled default value and env override."""
 
-    def test_hyde_enabled_defaults_true(self, monkeypatch):
-        """Test that hyde_enabled defaults to True in config.py."""
+    def test_hyde_enabled_defaults_false(self, monkeypatch):
+        """Test that hyde_enabled defaults to False in config.py."""
         # Clear any existing HYDE_ENABLED from environment
         monkeypatch.delenv("HYDE_ENABLED", raising=False)
         settings = Settings()
-        assert settings.hyde_enabled is True
+        assert settings.hyde_enabled is False
 
     def test_hyde_enabled_env_override(self, monkeypatch):
         """Test that HYDE_ENABLED=false env var overrides default."""

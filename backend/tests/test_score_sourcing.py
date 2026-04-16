@@ -74,6 +74,8 @@ def mock_settings():
         mock.retrieval_top_k = 5
         mock.retrieval_window = 1
         mock.rag_relevance_threshold = 0.5
+        mock.per_doc_chunk_cap = 5
+        mock.unique_docs_in_top_k = 5
         yield mock
 
 

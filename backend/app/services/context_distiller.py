@@ -49,7 +49,7 @@ class ContextDistiller:
 
     1. Extractive deduplication: removes near-duplicate sentences across chunks.
     2. Optional LLM synthesis: synthesizes top-3 chunks when eval_result is
-       NO_MATCH or AMBIGUOUS (only when synthesis is enabled and llm_client provided).
+       NO_MATCH only (only when synthesis is enabled and llm_client provided).
     """
 
     def __init__(
@@ -89,7 +89,7 @@ class ContextDistiller:
         if (
             settings.context_distillation_synthesis_enabled
             and self._llm_client is not None
-            and eval_result in ("NO_MATCH", "AMBIGUOUS")
+            and eval_result == "NO_MATCH"
             and sources
         ):
             sources = await self._synthesize(query, sources)

@@ -577,7 +577,9 @@ class RAGEngine:
                                 promote_idx = idx
                                 break
                         if promote_idx is not None:
-                            # Remove from current position and insert at rank 5 (index 4)
+                            # Promote to rank 5 (index 4) — a nudge, not a crown.
+                            # Exact string match does not override semantic ranking;
+                            # rank 5 keeps it in the Primary Evidence window.
                             promoted_record = vector_results.pop(promote_idx)
                             vector_results.insert(4, promoted_record)
                             exact_match_promoted = True

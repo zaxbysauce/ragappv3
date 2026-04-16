@@ -571,7 +571,12 @@ class VectorStore:
 
         # RRF Fusion for this scale
         k_rrf = 60 if settings.rrf_legacy_mode else settings.hybrid_rrf_k
-        result_list = rrf_fuse([dense_results, fts_results], k=k_rrf)
+        clamped_alpha = max(0.0, min(1.0, hybrid_alpha))
+        result_list = rrf_fuse(
+            [dense_results, fts_results],
+            k=k_rrf,
+            weights=[clamped_alpha, 1.0 - clamped_alpha],
+        )
         # Attach FTS status to each result
         for record in result_list:
             record["_fts_status"] = fts_status
@@ -798,7 +803,13 @@ class VectorStore:
 
             # RRF Fusion using shared utility
             k_rrf = 60 if settings.rrf_legacy_mode else settings.hybrid_rrf_k
-            fused = rrf_fuse([dense_results, fts_results], k=k_rrf, limit=limit)
+            clamped_alpha = max(0.0, min(1.0, hybrid_alpha))
+            fused = rrf_fuse(
+                [dense_results, fts_results],
+                k=k_rrf,
+                limit=limit,
+                weights=[clamped_alpha, 1.0 - clamped_alpha],
+            )
             # Attach FTS status to each result
             for record in fused:
                 record["_fts_status"] = fts_status
