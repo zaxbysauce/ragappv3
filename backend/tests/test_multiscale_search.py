@@ -83,6 +83,7 @@ class TestMultiScaleSearchSemaphore(unittest.IsolatedAsyncioTestCase):
             vault_id=None,
             query_text="",
             hybrid=True,
+            hybrid_alpha=0.5,
         ):
             return [{"id": f"doc_{scale}", "text": f"From {scale}", "_rrf_score": 0.5}]
 
@@ -127,6 +128,7 @@ class TestMultiScaleSearchSemaphore(unittest.IsolatedAsyncioTestCase):
             vault_id=None,
             query_text="",
             hybrid=True,
+            hybrid_alpha=0.5,
         ):
             # All scales fail
             raise RuntimeError(f"Simulated failure for scale {scale}")
@@ -202,6 +204,7 @@ class TestMultiScaleSemaphoreConcurrency(unittest.IsolatedAsyncioTestCase):
             vault_id=None,
             query_text="",
             hybrid=True,
+            hybrid_alpha=0.5,
         ):
             nonlocal max_concurrent, current_concurrent
 
@@ -254,6 +257,7 @@ class TestMultiScaleSemaphoreConcurrency(unittest.IsolatedAsyncioTestCase):
             vault_id=None,
             query_text="",
             hybrid=True,
+            hybrid_alpha=0.5,
         ):
             # Each task takes 0.01s
             await asyncio.sleep(0.01)
@@ -307,6 +311,7 @@ class TestMultiScaleSemaphoreConcurrency(unittest.IsolatedAsyncioTestCase):
             vault_id=None,
             query_text="",
             hybrid=True,
+            hybrid_alpha=0.5,
         ):
             nonlocal max_concurrent, current_concurrent
 
@@ -431,6 +436,7 @@ class TestMultiScaleSearchEdgeCases(unittest.IsolatedAsyncioTestCase):
             vault_id=None,
             query_text="",
             hybrid=True,
+            hybrid_alpha=0.5,
         ):
             queried_scales.append(scale)
             return scale_results.get(scale, [])
@@ -479,6 +485,7 @@ class TestMultiScaleSearchEdgeCases(unittest.IsolatedAsyncioTestCase):
             vault_id=None,
             query_text="",
             hybrid=True,
+            hybrid_alpha=0.5,
         ):
             queried_scales.append(scale)
             return scale_results.get(scale, [])
@@ -530,6 +537,7 @@ class TestMultiScaleSearchEdgeCases(unittest.IsolatedAsyncioTestCase):
             vault_id=None,
             query_text="",
             hybrid=True,
+            hybrid_alpha=0.5,
         ):
             queried_scales.append(scale)
             return scale_results.get(scale, [])
@@ -606,6 +614,7 @@ class TestMultiScaleSearchEdgeCases(unittest.IsolatedAsyncioTestCase):
             vault_id=None,
             query_text="",
             hybrid=True,
+            hybrid_alpha=0.5,
         ):
             return scale_results.get(scale, [])
 

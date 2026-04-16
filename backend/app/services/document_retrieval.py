@@ -459,14 +459,25 @@ class DocumentRetrievalService:
                     expanded_sources.append(expanded_source)
                     seen_uids.add(_normalize_uid_for_dedup(chunk_uid))
 
-            # Sort by (file_id, chunk_index)
+            # Two-tier ordering: preserve cross-document relevance ranking
+            # while assembling chunks within each document in reading order.
+            # Step 1: Find the best (lowest) position of any source per file_id.
+            #         First occurrence = best rank for that document.
+            file_rank: Dict[str, int] = {}
+            for pos, s in enumerate(expanded_sources):
+                fid = s.file_id
+                if fid not in file_rank:
+                    file_rank[fid] = pos
+
+            # Step 2: Sort by (file_rank, file_id, chunk_index) — groups by document
+            # in relevance order, then reading order within each document.
             def sort_key(source: RAGSource) -> tuple:
                 idx = source.metadata.get("chunk_index", 0)
                 try:
                     idx = int(idx)
                 except (ValueError, TypeError):
                     idx = 0
-                return (source.file_id, idx)
+                return (file_rank.get(source.file_id, 999), source.file_id, idx)
 
             expanded_sources.sort(key=sort_key)
 

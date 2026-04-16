@@ -180,6 +180,9 @@ class PromptBuilderService:
         header_parts.append(f"score: {chunk.score:.2f}")
         if chunk.file_id:
             header_parts.append(f"id: {chunk.file_id}")
+        ctx_note = chunk.metadata.get("contextual_context", "")
+        if ctx_note:
+            header_parts.append(f"context: {ctx_note[:200]}")
 
         header = " | ".join(header_parts)
 
