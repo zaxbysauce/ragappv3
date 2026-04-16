@@ -1,6 +1,7 @@
 // frontend/src/components/chat/TranscriptPane.tsx
 
 import { useRef, useEffect, useState, useCallback } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -21,7 +22,6 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { MessageBubble } from "./MessageBubble";
 import { AssistantMessage } from "./AssistantMessage";
@@ -499,12 +499,30 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
   // Check if vault has indexed documents (using file_count from Vault interface)
   const hasIndexedDocs = activeVault ? activeVault.file_count > 0 : false;
 
+  // Virtualizer for efficient message rendering
+  const virtualizer = useVirtualizer({
+    count: messages.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 120,
+    overscan: 5,
+    measureElement: (el) => el?.getBoundingClientRect().height ?? 0,
+  });
+
   // Auto-scroll to bottom on new messages only if user is already at bottom
   useEffect(() => {
-    if (isAtBottom && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    if (isAtBottom && messages.length > 0 && scrollRef.current) {
+      requestAnimationFrame(() => {
+        virtualizer.scrollToIndex(messages.length - 1, { align: 'end' });
+      });
     }
-  }, [messages, isStreaming, isAtBottom]);
+  }, [messages, isStreaming, isAtBottom, virtualizer]);
+
+  // Re-measure virtual items during streaming to handle growing content
+  useEffect(() => {
+    if (isStreaming) {
+      virtualizer.measure();
+    }
+  }, [isStreaming, messages, virtualizer]);
 
   // Handle scroll events - track if user is near bottom (<100px)
   const handleScroll = () => {
@@ -521,11 +539,11 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
 
   // Scroll to bottom
   const scrollToBottom = () => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-      setIsAtBottom(true);
-      setShowScrollButton(false);
+    if (messages.length > 0) {
+      virtualizer.scrollToIndex(messages.length - 1, { align: 'end' });
     }
+    setIsAtBottom(true);
+    setShowScrollButton(false);
   };
 
   // Handle suggested prompt click - sets input and focuses composer
@@ -562,10 +580,10 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
       <div className={cn("flex h-full flex-col", className)}>
         {/* Message list area */}
         <div className="relative flex-1 min-h-0 overflow-hidden">
-          <ScrollArea
+          <div
             ref={scrollRef}
             onScroll={handleScroll}
-            className="h-full"
+            className="h-full overflow-y-auto"
             aria-label="Chat messages"
             role="log"
             aria-live="polite"
@@ -579,39 +597,52 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
                   onNavigateToDocuments={handleNavigateToDocuments}
                 />
               ) : (
-                <div className="flex flex-col">
-                  {messages.map((message, index) => {
-                    const isLastMessage = index === messages.length - 1;
+                <div
+                  style={{
+                    height: virtualizer.getTotalSize(),
+                    width: '100%',
+                    position: 'relative',
+                  }}
+                >
+                  {virtualizer.getVirtualItems().map((virtualItem) => {
+                    const message = messages[virtualItem.index];
+                    const isLastMessage = virtualItem.index === messages.length - 1;
                     const isAssistantStreaming = isStreaming && isLastMessage && message.role === "assistant";
 
-                    if (message.role === "assistant") {
-                      return (
-                        <AssistantMessage
-                          key={message.id}
-                          message={message}
-                          isStreaming={isAssistantStreaming}
-                          showDebug={showDebug}
-                          onCopy={() => { navigator.clipboard.writeText(message.content); }}
-                          onRetry={handleRetry}
-                          onDebugToggle={handleDebugToggle}
-                        />
-                      );
-                    }
-
                     return (
-                      <MessageBubble
+                      <div
                         key={message.id}
-                        message={message}
-                        isStreaming={isAssistantStreaming}
-                      />
+                        data-index={virtualItem.index}
+                        ref={virtualizer.measureElement}
+                        style={{
+                          position: 'absolute',
+                          top: virtualItem.start,
+                          left: 0,
+                          width: '100%',
+                        }}
+                      >
+                        {message.role === "assistant" ? (
+                          <AssistantMessage
+                            message={message}
+                            isStreaming={isAssistantStreaming}
+                            showDebug={showDebug}
+                            onCopy={() => { navigator.clipboard.writeText(message.content); }}
+                            onRetry={handleRetry}
+                            onDebugToggle={handleDebugToggle}
+                          />
+                        ) : (
+                          <MessageBubble
+                            message={message}
+                            isStreaming={isAssistantStreaming}
+                          />
+                        )}
+                      </div>
                     );
                   })}
-                  {/* Spacer for bottom padding */}
-                  <div className="h-4" aria-hidden="true" />
                 </div>
               )}
             </div>
-          </ScrollArea>
+          </div>
 
           {/* Scroll to bottom button */}
           <AnimatePresence>

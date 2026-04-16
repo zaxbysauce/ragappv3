@@ -747,9 +747,9 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
 
   // Filter sessions based on search query (title + first message content)
   const filteredSessions = useMemo(() => {
-    if (!sessionSearchQuery.trim()) return sessions;
+    if (!debouncedSearchQuery.trim()) return sessions;
 
-    const query = sessionSearchQuery.toLowerCase();
+    const query = debouncedSearchQuery.toLowerCase();
     return sessions.filter((session) => {
       // Search title
       const titleMatch = (session.title || "Untitled").toLowerCase().includes(query);
@@ -761,7 +761,7 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
       
       return titleMatch || contentMatch;
     });
-  }, [sessions, sessionSearchQuery, sessionDetails]);
+  }, [sessions, debouncedSearchQuery, sessionDetails]);
 
   // Group sessions by time
   const groupedSessions = useMemo(
