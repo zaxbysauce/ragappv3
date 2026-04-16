@@ -69,31 +69,35 @@
     {
       "id": 3,
       "name": "DocumentsPage and RightPane virtualization",
-      "status": "pending",
+      "status": "complete",
       "tasks": [
         {
           "id": "3.1",
           "phase": 3,
-          "status": "pending",
+          "status": "completed",
           "size": "large",
           "description": "Virtualize the document table in DocumentsPage.tsx using @tanstack/react-virtual (UI-PERF-2, FR-002). Replace the flat filteredDocuments.map() at line 654 (desktop table tbody) with a virtualized tbody. TABLE VIRTUALIZATION STRUCTURE — The virtualizer renders into the existing <tbody> element. Structure: <table><thead>...</thead><tbody style='height: {totalSize}px; position: relative'>...virtual rows...</tbody></table>. Each virtual item produces a <tr> row. KEY REQUIREMENTS: (1) Fixed-height rows — table rows are uniform height, use estimateSize with a reasonable default (~56px). (2) Preserve column drag-to-resize — the handleResizeMouseDown interaction on the filename column header continues working since it only affects <thead> which is outside the virtualized area. (3) Preserve checkbox selection — batch select and individual select must work with virtualized rows (selectedIds state is unaffected by virtualization). (4) Mobile card view at line 698 — also virtualize the mobile card list using a separate useVirtualizer instance targeting the grid container with variable-height cards. (5) Table header remains sticky above the virtualized body. FILE: frontend/src/pages/DocumentsPage.tsx",
           "depends": [
             "1.1"
           ],
           "acceptance": "Table with 500 rows renders ~25 DOM nodes. Column resize still works. Checkbox selection works. Mobile card view virtualized. All existing DocumentsPage tests pass.",
-          "files_touched": []
+          "files_touched": [
+            "frontend/src/pages/DocumentsPage.tsx"
+          ]
         },
         {
           "id": "3.2",
           "phase": 3,
-          "status": "pending",
+          "status": "completed",
           "size": "medium",
           "description": "Virtualize the sources list in RightPane.tsx when source count exceeds 20 items (UI-PERF-6, FR-003). Add conditional virtualization to the sources tab — when sources.length > 20, use @tanstack/react-virtual to render only visible SourceListItem components. When sources.length <= 20, keep the existing flat .map() rendering unchanged. The virtualized version should use measureElement for variable-height measurement since source items have varying snippet lengths. The virtualizer should attach to the sources list container div. FILE: frontend/src/components/chat/RightPane.tsx",
           "depends": [
             "1.1"
           ],
           "acceptance": "Sources list with 50 items renders only visible items. Sources list with 10 items renders normally (no virtualization). Source click navigation still works. All 1144 lines of RightPane tests pass.",
-          "files_touched": []
+          "files_touched": [
+            "frontend/src/components/chat/RightPane.tsx"
+          ]
         }
       ]
     },

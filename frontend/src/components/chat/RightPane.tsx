@@ -1,4 +1,5 @@
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { FileText, Table, Code, ExternalLink } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -352,6 +353,17 @@ export function RightPane() {
     [messages]
   );
 
+  const sourcesScrollRef = useRef<HTMLDivElement>(null);
+  const shouldVirtualizeSources = sources.length > 20;
+
+  const sourcesVirtualizer = useVirtualizer({
+    count: sources.length,
+    getScrollElement: () => shouldVirtualizeSources ? sourcesScrollRef.current : null,
+    estimateSize: () => 80,
+    overscan: 5,
+    measureElement: (el) => el?.getBoundingClientRect().height ?? 0,
+  });
+
   const handleSourceClick = useCallback((source: Source) => {
     setSelectedSource(source);
     setSelectedEvidenceSource(source);
@@ -409,12 +421,47 @@ export function RightPane() {
         </TabsList>
 
         <TabsContent value="sources" className="flex-1 min-h-0 mt-4">
-          <ScrollArea className="h-full">
-            {!hasSources ? (
-              <div className="text-sm text-muted-foreground italic p-4 text-center">
-                No sources available. Send a message to see retrieved sources.
+          {!hasSources ? (
+            <div className="text-sm text-muted-foreground italic p-4 text-center">
+              No sources available. Send a message to see retrieved sources.
+            </div>
+          ) : shouldVirtualizeSources ? (
+            <div
+              ref={sourcesScrollRef}
+              className="h-full overflow-y-auto"
+              aria-label="Sources list"
+              role="list"
+            >
+              <div style={{ height: sourcesVirtualizer.getTotalSize(), position: 'relative', paddingRight: '1rem' }}>
+                {sourcesVirtualizer.getVirtualItems().map((virtualItem) => {
+                  const source = sources[virtualItem.index];
+                  return (
+                    <div
+                      key={source.id}
+                      data-index={virtualItem.index}
+                      ref={sourcesVirtualizer.measureElement}
+                      style={{
+                        position: 'absolute',
+                        top: virtualItem.start,
+                        left: 0,
+                        width: '100%',
+                        paddingTop: '0.5rem',
+                      }}
+                    >
+                      <SourceListItem
+                        source={source}
+                        index={virtualItem.index}
+                        isSelected={selectedSource?.id === source.id || selectedEvidenceSource?.id === source.id}
+                        scoreType={source.score_type}
+                        onClick={() => handleSourceClick(source)}
+                      />
+                    </div>
+                  );
+                })}
               </div>
-            ) : (
+            </div>
+          ) : (
+            <ScrollArea className="h-full">
               <div className="space-y-2 pr-4">
                 {sources.map((source, index) => (
                   <SourceListItem
@@ -427,8 +474,8 @@ export function RightPane() {
                   />
                 ))}
               </div>
-            )}
-          </ScrollArea>
+            </ScrollArea>
+          )}
         </TabsContent>
 
         <TabsContent value="preview" className="flex-1 min-h-0 mt-4">
