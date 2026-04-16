@@ -47,8 +47,41 @@ vi.mock("framer-motion", () => ({
   AnimatePresence: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
+// Mock @tanstack/react-virtual
+// Track message count dynamically for virtualizer mock
+let _mockMessageCount = 0;
+const _createVirtualItems = () =>
+  Array.from({ length: _mockMessageCount }, (_, i) => ({
+    index: i,
+    start: i * 120,
+    size: 120,
+    key: `mock-msg-${i}`,
+  }));
+
+vi.mock("@tanstack/react-virtual", () => ({
+  useVirtualizer: vi.fn(() => ({
+    getVirtualItems: () => _createVirtualItems(),
+    getTotalSize: () => _mockMessageCount * 120,
+    measureElement: vi.fn((el) => ({
+      getBoundingClientRect: () => ({ height: 120 }),
+    })),
+    scrollToIndex: vi.fn(),
+    measure: vi.fn(),
+  })),
+}));
+
 import { useSendMessage, MAX_INPUT_LENGTH } from "@/hooks/useSendMessage";
 import { useChatHistory } from "@/hooks/useChatHistory";
+import { TooltipProvider } from "@/components/ui/tooltip";
+
+// Helper to render Composer with required providers
+const renderComposerWithProviders = (props: React.ComponentProps<typeof Composer>) => {
+  return render(
+    <TooltipProvider>
+      <Composer {...props} />
+    </TooltipProvider>
+  );
+};
 
 describe("TranscriptPane", () => {
   const mockSetInput = vi.fn();
@@ -118,6 +151,7 @@ describe("TranscriptPane", () => {
 
   describe("2. TranscriptPane renders message list when messages exist", () => {
     it("renders MessageBubble components for each message", () => {
+      _mockMessageCount = 2;
       (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
         messages: [
           { id: "1", role: "user", content: "Hello" },
@@ -139,6 +173,7 @@ describe("TranscriptPane", () => {
     });
 
     it("renders user message correctly", () => {
+      _mockMessageCount = 1;
       (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
         messages: [{ id: "1", role: "user", content: "Test message" }],
         input: "",
@@ -173,12 +208,12 @@ describe("TranscriptPane", () => {
 
   describe("4. Composer renders textarea with placeholder", () => {
     it("renders textarea with correct placeholder text", () => {
-      render(<Composer onSend={mockHandleSend} onStop={mockHandleStop} isStreaming={false} />);
+      renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
       expect(screen.getByPlaceholderText(/Message\.\.\. \(type \/ for commands/i)).toBeInTheDocument();
     });
 
     it("textarea has correct aria-label", () => {
-      render(<Composer onSend={mockHandleSend} onStop={mockHandleStop} isStreaming={false} />);
+      renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
       expect(screen.getByLabelText("Message input")).toBeInTheDocument();
     });
   });
@@ -191,7 +226,7 @@ describe("TranscriptPane", () => {
         file_count: 5,
       });
 
-      render(<Composer onSend={mockHandleSend} onStop={mockHandleStop} isStreaming={false} />);
+      renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
       expect(screen.getByText("Test Vault")).toBeInTheDocument();
     });
 
@@ -202,7 +237,7 @@ describe("TranscriptPane", () => {
         file_count: 5,
       });
 
-      render(<Composer onSend={mockHandleSend} onStop={mockHandleStop} isStreaming={false} />);
+      renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
       expect(screen.getByLabelText("Active vault: Test Vault")).toBeInTheDocument();
     });
   });
@@ -211,21 +246,21 @@ describe("TranscriptPane", () => {
     it("does not render vault badge when no active vault", () => {
       mockGetActiveVault.mockReturnValue(undefined);
 
-      render(<Composer onSend={mockHandleSend} onStop={mockHandleStop} isStreaming={false} />);
+      renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
       expect(screen.queryByLabelText(/Active vault:/i)).not.toBeInTheDocument();
     });
 
     it("does not show vault name in badge when getActiveVault returns undefined", () => {
       mockGetActiveVault.mockReturnValue(undefined);
 
-      render(<Composer onSend={mockHandleSend} onStop={mockHandleStop} isStreaming={false} />);
+      renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
       expect(screen.queryByText("Test Vault")).not.toBeInTheDocument();
     });
   });
 
   describe("7. Composer slash menu opens when \"/\" is typed", () => {
     it("shows slash command menu when user types /", async () => {
-      render(<Composer onSend={mockHandleSend} onStop={mockHandleStop} isStreaming={false} />);
+      renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
 
       const textarea = screen.getByPlaceholderText(/Message\.\.\./i);
       
@@ -240,7 +275,7 @@ describe("TranscriptPane", () => {
     });
 
     it("slash menu contains all 4 commands by default", async () => {
-      render(<Composer onSend={mockHandleSend} onStop={mockHandleStop} isStreaming={false} />);
+      renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
 
       const textarea = screen.getByPlaceholderText(/Message\.\.\./i);
       
@@ -261,7 +296,7 @@ describe("TranscriptPane", () => {
 
   describe("8. Composer slash menu filters commands", () => {
     it("shows no commands when filter matches nothing", async () => {
-      render(<Composer onSend={mockHandleSend} onStop={mockHandleStop} isStreaming={false} />);
+      renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
 
       const textarea = screen.getByPlaceholderText(/Message\.\.\./i);
       
@@ -275,7 +310,7 @@ describe("TranscriptPane", () => {
     });
 
     it("slash menu opens when / is typed", async () => {
-      render(<Composer onSend={mockHandleSend} onStop={mockHandleStop} isStreaming={false} />);
+      renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
 
       const textarea = screen.getByPlaceholderText(/Message\.\.\./i);
       
@@ -299,7 +334,7 @@ describe("TranscriptPane", () => {
         isStreaming: false,
       });
 
-      render(<Composer onSend={mockHandleSend} onStop={mockHandleStop} isStreaming={false} />);
+      renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
 
       const textarea = screen.getByPlaceholderText(/Message\.\.\./i);
       
@@ -324,7 +359,7 @@ describe("TranscriptPane", () => {
         isStreaming: false,
       });
 
-      render(<Composer onSend={mockHandleSend} onStop={mockHandleStop} isStreaming={false} />);
+      renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
 
       const textarea = screen.getByPlaceholderText(/Message\.\.\./i);
       fireEvent.keyDown(textarea, { key: "Enter", shiftKey: false });
@@ -335,7 +370,7 @@ describe("TranscriptPane", () => {
 
   describe("10. Composer Enter selects menu item when menu is open", () => {
     it("inserts command and closes menu when Enter is pressed with menu open", async () => {
-      render(<Composer onSend={mockHandleSend} onStop={mockHandleStop} isStreaming={false} />);
+      renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
 
       const textarea = screen.getByPlaceholderText(/Message\.\.\./i);
       
@@ -357,7 +392,7 @@ describe("TranscriptPane", () => {
     });
 
     it("Escape key closes the menu", async () => {
-      render(<Composer onSend={mockHandleSend} onStop={mockHandleStop} isStreaming={false} />);
+      renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
 
       const textarea = screen.getByPlaceholderText(/Message\.\.\./i);
       
@@ -376,7 +411,7 @@ describe("TranscriptPane", () => {
     });
 
     it("clicking a command in menu inserts it", async () => {
-      render(<Composer onSend={mockHandleSend} onStop={mockHandleStop} isStreaming={false} />);
+      renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
 
       const textarea = screen.getByPlaceholderText(/Message\.\.\./i);
       
@@ -409,7 +444,7 @@ describe("TranscriptPane", () => {
         isStreaming: false,
       });
 
-      render(<Composer onSend={mockHandleSend} onStop={mockHandleStop} isStreaming={false} />);
+      renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
 
       const textarea = screen.getByPlaceholderText(/Message\.\.\./i);
       fireEvent.keyDown(textarea, { key: "Enter", shiftKey: true });
@@ -425,7 +460,7 @@ describe("TranscriptPane", () => {
         isStreaming: false,
       });
 
-      render(<Composer onSend={mockHandleSend} onStop={mockHandleStop} isStreaming={false} />);
+      renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
 
       const textarea = screen.getByPlaceholderText(/Message\.\.\./i);
       
@@ -446,7 +481,7 @@ describe("TranscriptPane", () => {
         isStreaming: false,
       });
 
-      render(<Composer onSend={mockHandleSend} onStop={mockHandleStop} isStreaming={false} />);
+      renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
 
       const sendButton = screen.getByLabelText(/send message/i);
       expect(sendButton).toBeDisabled();
@@ -460,7 +495,7 @@ describe("TranscriptPane", () => {
         isStreaming: false,
       });
 
-      render(<Composer onSend={mockHandleSend} onStop={mockHandleStop} isStreaming={false} />);
+      renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
 
       const sendButton = screen.getByLabelText(/send message/i);
       expect(sendButton).toBeDisabled();
@@ -474,7 +509,7 @@ describe("TranscriptPane", () => {
         isStreaming: false,
       });
 
-      render(<Composer onSend={mockHandleSend} onStop={mockHandleStop} isStreaming={false} />);
+      renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
 
       const sendButton = screen.getByLabelText(/send message/i);
       expect(sendButton).not.toBeDisabled();
@@ -483,13 +518,13 @@ describe("TranscriptPane", () => {
 
   describe("13. Composer stop button visible during streaming", () => {
     it("shows stop button when isStreaming is true", () => {
-      render(<Composer onSend={mockHandleSend} onStop={mockHandleStop} isStreaming={true} />);
+      renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: true });
       expect(screen.getByText("Stop")).toBeInTheDocument();
       expect(screen.getByLabelText("Stop generating")).toBeInTheDocument();
     });
 
     it("calls onStop when stop button is clicked", async () => {
-      render(<Composer onSend={mockHandleSend} onStop={mockHandleStop} isStreaming={true} />);
+      renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: true });
 
       const stopButton = screen.getByLabelText("Stop generating");
       
@@ -501,14 +536,14 @@ describe("TranscriptPane", () => {
     });
 
     it("send button is hidden when streaming", () => {
-      render(<Composer onSend={mockHandleSend} onStop={mockHandleStop} isStreaming={true} />);
+      renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: true });
       expect(screen.queryByLabelText(/send message/i)).not.toBeInTheDocument();
     });
   });
 
   describe("14. Composer attachment button is disabled", () => {
     it("attachment button is present and disabled", () => {
-      render(<Composer onSend={mockHandleSend} onStop={mockHandleStop} isStreaming={false} />);
+      renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
 
       const attachmentButton = screen.getByLabelText(/attach file/i);
       expect(attachmentButton).toBeInTheDocument();
@@ -516,7 +551,7 @@ describe("TranscriptPane", () => {
     });
 
     it("attachment button has correct tooltip", () => {
-      render(<Composer onSend={mockHandleSend} onStop={mockHandleStop} isStreaming={false} />);
+      renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
 
       const attachmentButton = screen.getByLabelText(/attach file/i);
       expect(attachmentButton).toHaveAttribute("aria-label", "Attach file (coming soon)");
@@ -663,7 +698,7 @@ describe("TranscriptPane", () => {
 
   describe("Additional coverage", () => {
     it("textarea is disabled when streaming", () => {
-      render(<Composer onSend={mockHandleSend} onStop={mockHandleStop} isStreaming={true} />);
+      renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: true });
 
       const textarea = screen.getByLabelText("Message input");
       expect(textarea).toBeDisabled();
@@ -677,7 +712,7 @@ describe("TranscriptPane", () => {
         isStreaming: false,
       });
 
-      render(<Composer onSend={mockHandleSend} onStop={mockHandleStop} isStreaming={false} />);
+      renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
 
       expect(screen.getByRole("alert")).toHaveTextContent("Test error message");
     });
@@ -691,7 +726,7 @@ describe("TranscriptPane", () => {
         isStreaming: false,
       });
 
-      render(<Composer onSend={mockHandleSend} onStop={mockHandleStop} isStreaming={false} />);
+      renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
 
       expect(screen.getByText(/1700\/2000/)).toBeInTheDocument();
     });
@@ -705,14 +740,14 @@ describe("TranscriptPane", () => {
         isStreaming: false,
       });
 
-      render(<Composer onSend={mockHandleSend} onStop={mockHandleStop} isStreaming={false} />);
+      renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
 
       const charCount = screen.getByText(/2100\/2000/);
       expect(charCount).toHaveClass(/destructive/);
     });
 
     it("keyboard navigation works in slash menu", async () => {
-      render(<Composer onSend={mockHandleSend} onStop={mockHandleStop} isStreaming={false} />);
+      renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
 
       const textarea = screen.getByPlaceholderText(/Message\.\.\./i);
       
@@ -735,7 +770,7 @@ describe("TranscriptPane", () => {
     });
 
     it("slash hint button exists", async () => {
-      render(<Composer onSend={mockHandleSend} onStop={mockHandleStop} isStreaming={false} />);
+      renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
 
       const slashButton = screen.getByLabelText("Open slash commands");
       expect(slashButton).toBeInTheDocument();
@@ -754,7 +789,7 @@ describe("TranscriptPane", () => {
     });
 
     it("handles multiline input", async () => {
-      render(<Composer onSend={mockHandleSend} onStop={mockHandleStop} isStreaming={false} />);
+      renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
 
       const textarea = screen.getByPlaceholderText(/Message\.\.\./i);
       

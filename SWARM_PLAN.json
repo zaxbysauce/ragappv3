@@ -48,19 +48,21 @@
     {
       "id": 2,
       "name": "TranscriptPane virtualization (UI-PERF-1, FR-001)",
-      "status": "pending",
+      "status": "complete",
       "tasks": [
         {
           "id": "2.1",
           "phase": 2,
-          "status": "pending",
+          "status": "completed",
           "size": "large",
           "description": "Virtualize the chat message list in TranscriptPane.tsx using @tanstack/react-virtual (UI-PERF-1, FR-001, FR-007). Replace the flat messages.map() at lines 583-615 with useVirtualizer from @tanstack/react-virtual. KEY DESIGN DECISIONS: (1) SCROLL CONTAINER — Replace the Radix ScrollArea wrapper with a plain div styled with overflow-y: auto. The Radix ScrollArea has overflow:hidden on its root with a nested Viewport element that is the real scroll container — this creates a ref mismatch with useVirtualizer which needs the actual scrollable element. A plain div eliminates this friction while preserving scroll behavior. Add custom scrollbar styling via Tailwind/CSS if needed to match existing appearance. (2) VARIABLE-HEIGHT ROWS — Messages have unpredictable heights (code blocks, tables, images). Use measureElement for dynamic measurement. Each virtual row wraps either MessageBubble or AssistantMessage. (3) AUTO-SCROLL REDESIGN — Replace scrollTop/scrollHeight manipulation with virtualizer APIs: use virtualizer.scrollToIndex(messages.length - 1, { align: 'end' }) for auto-scroll to bottom, and use virtualizer.getTotalSize() for isAtBottom detection instead of scrollHeight - scrollTop - clientHeight. (4) STREAMING — During streaming, the last message grows with each token. Call virtualizer.measure() on content change to trigger re-measurement. Ensure scrollToIndex is called after measure to keep scroll at bottom. (5) EMPTY STATE — When messages.length === 0, show EmptyTranscript as before (no virtualizer needed). (6) OVERSCAN — Use 5 items above and below viewport. FILE: frontend/src/components/chat/TranscriptPane.tsx",
           "depends": [
             "1.1"
           ],
           "acceptance": "Chat with 200 messages renders ~20 DOM nodes. Auto-scroll to bottom works on new messages via virtualizer.scrollToIndex. Scroll behavior preserved. Streaming messages visible and auto-scroll maintained via virtualizer.measure(). Empty state preserved. All 773 lines of TranscriptPane tests pass.",
-          "files_touched": []
+          "files_touched": [
+            "frontend/src/components/chat/TranscriptPane.tsx"
+          ]
         }
       ]
     },
