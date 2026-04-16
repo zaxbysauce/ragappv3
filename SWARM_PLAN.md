@@ -1,31 +1,22 @@
-# RAG Quality Fix List — 10 Targeted Remediations
+# PR 4 — Frontend UI Performance (Issue #20)
 Swarm: mega
-Phase: 1 [COMPLETE] | Updated: 2026-04-16T02:08:48.461Z
+Phase: 1 [COMPLETE] | Updated: 2026-04-16T14:41:52.673Z
 
 ---
-## Phase 1: Config defaults alignment (Fixes 2, 7, 8, 9, 10) [COMPLETE]
-- [x] 1.1: Fix per_doc_chunk_cap default from 2 to 5 in backend/app/config.py line 204. FR-002. [SMALL]
-- [x] 1.2: Fix max_distance_threshold default from 1.0 to 0.5 in backend/app/config.py line 51. FR-008. [SMALL]
-- [x] 1.3: Disable query transformation by default: set query_transformation_enabled=False and hyde_enabled=False. Update tests. FR-009. [SMALL]
-- [x] 1.4: Change document_parsing_strategy default from 'fast' to 'auto'. FR-010. [SMALL]
-- [x] 1.5: Change multi_scale_chunk_sizes default. FR-011. [SMALL]
+## Phase 1: Foundation — dependency install and simple memoization fixes [COMPLETE]
+- [x] 1.1: Install @tanstack/react-virtual dependency in frontend/package.json. Run: cd frontend && npm install @tanstack/react-virtual. Verify package appears in dependencies and TypeScript types resolve. [FR-001 prerequisite] [SMALL]
+- [x] 1.2: Memoize markdown parsing in MessageContent.tsx (UI-PERF-10, FR-004). Extract the ReactMarkdown JSX into a MemoizedMarkdown sub-component co-located in the same file (MessageContent.tsx), exported for testability. Wrap it in React.memo with a custom comparator that checks content and isStreaming props. The parent MessageContent component keeps the copy button and sources list logic unchanged. FILE: frontend/src/components/chat/MessageContent.tsx [SMALL]
+- [x] 1.3: Fix SessionRail search debounce — change filteredSessions useMemo dependency from raw sessionSearchQuery to debouncedSearchQuery (UI-PERF-15, FR-005/FR-006). At line 749-764 of SessionRail.tsx, the filteredSessions useMemo currently depends on raw sessionSearchQuery. Change it to use debouncedSearchQuery instead. This is a single dependency array fix: change sessionSearchQuery to debouncedSearchQuery in the useMemo deps at line 764, and update the memo body to use debouncedSearchQuery at line 750 and 752. FILE: frontend/src/components/chat/SessionRail.tsx [SMALL]
 
 ---
-## Phase 2: Code logic fixes (Fixes 1, 4, 5) [COMPLETE]
-- [x] 2.1: Remove sort_key function and expanded_sources.sort in document_retrieval.py. FR-001. [SMALL]
-- [x] 2.2: Fix exact-match promotion to rank 1. FR-005. [SMALL]
-- [x] 2.3: Wire hybrid_alpha into rrf_fuse at vector_store.py line 574. FR-006. [SMALL]
-- [x] 2.4: Wire hybrid_alpha into rrf_fuse at vector_store.py line 801. FR-006. [SMALL]
+## Phase 2: TranscriptPane virtualization (UI-PERF-1, FR-001) [PENDING]
+- [ ] 2.1: Virtualize the chat message list in TranscriptPane.tsx using @tanstack/react-virtual (UI-PERF-1, FR-001, FR-007). Replace the flat messages.map() at lines 583-615 with useVirtualizer from @tanstack/react-virtual. KEY DESIGN DECISIONS: (1) SCROLL CONTAINER — Replace the Radix ScrollArea wrapper with a plain div styled with overflow-y: auto. The Radix ScrollArea has overflow:hidden on its root with a nested Viewport element that is the real scroll container — this creates a ref mismatch with useVirtualizer which needs the actual scrollable element. A plain div eliminates this friction while preserving scroll behavior. Add custom scrollbar styling via Tailwind/CSS if needed to match existing appearance. (2) VARIABLE-HEIGHT ROWS — Messages have unpredictable heights (code blocks, tables, images). Use measureElement for dynamic measurement. Each virtual row wraps either MessageBubble or AssistantMessage. (3) AUTO-SCROLL REDESIGN — Replace scrollTop/scrollHeight manipulation with virtualizer APIs: use virtualizer.scrollToIndex(messages.length - 1, { align: 'end' }) for auto-scroll to bottom, and use virtualizer.getTotalSize() for isAtBottom detection instead of scrollHeight - scrollTop - clientHeight. (4) STREAMING — During streaming, the last message grows with each token. Call virtualizer.measure() on content change to trigger re-measurement. Ensure scrollToIndex is called after measure to keep scroll at bottom. (5) EMPTY STATE — When messages.length === 0, show EmptyTranscript as before (no virtualizer needed). (6) OVERSCAN — Use 5 items above and below viewport. FILE: frontend/src/components/chat/TranscriptPane.tsx [LARGE] (depends: 1.1)
 
 ---
-## Phase 3: Medium-risk structural changes (Fixes 3, 6) [COMPLETE]
-- [x] 3.1: Contextual chunking: store context in metadata. FR-003. [SMALL]
-- [x] 3.1.1: Amend contextual_chunking.py to dual-store: keep context prepended to chunk.text for enriched embeddings AND store in chunk.metadata['contextual_context']. Change lines 270-276: keep chunk.raw_text = chunk.text, add chunk.metadata['contextual_context'] = context, and restore chunk.text = f'{context}\n\n{chunk.text}'. Update test_contextual_chunking.py line 275: change assertEqual(chunk.text, 'Original chunk text') to assertEqual(chunk.text, 'Context for chunk\n\nOriginal chunk text'). Lines 205, 496, 526, 616 already check metadata which is correct for dual-store. [SMALL] (depends: 3.1)
-- [x] 3.2: Prompt builder: surface contextual_context in header. FR-004. [SMALL]
-- [x] 3.2.1: Amend prompt_builder.py line 185: change ctx_note[:120] to ctx_note[:200] for 200-char truncation per user decision. Update task 3.2 acceptance. [SMALL] (depends: 3.2)
-- [x] 3.3: Context distiller: gate synthesis to NO_MATCH only. FR-007. [SMALL]
+## Phase 3: DocumentsPage and RightPane virtualization [PENDING]
+- [ ] 3.1: Virtualize the document table in DocumentsPage.tsx using @tanstack/react-virtual (UI-PERF-2, FR-002). Replace the flat filteredDocuments.map() at line 654 (desktop table tbody) with a virtualized tbody. TABLE VIRTUALIZATION STRUCTURE — The virtualizer renders into the existing <tbody> element. Structure: <table><thead>...</thead><tbody style='height: {totalSize}px; position: relative'>...virtual rows...</tbody></table>. Each virtual item produces a <tr> row. KEY REQUIREMENTS: (1) Fixed-height rows — table rows are uniform height, use estimateSize with a reasonable default (~56px). (2) Preserve column drag-to-resize — the handleResizeMouseDown interaction on the filename column header continues working since it only affects <thead> which is outside the virtualized area. (3) Preserve checkbox selection — batch select and individual select must work with virtualized rows (selectedIds state is unaffected by virtualization). (4) Mobile card view at line 698 — also virtualize the mobile card list using a separate useVirtualizer instance targeting the grid container with variable-height cards. (5) Table header remains sticky above the virtualized body. FILE: frontend/src/pages/DocumentsPage.tsx [LARGE] (depends: 1.1)
+- [ ] 3.2: Virtualize the sources list in RightPane.tsx when source count exceeds 20 items (UI-PERF-6, FR-003). Add conditional virtualization to the sources tab — when sources.length > 20, use @tanstack/react-virtual to render only visible SourceListItem components. When sources.length <= 20, keep the existing flat .map() rendering unchanged. The virtualized version should use measureElement for variable-height measurement since source items have varying snippet lengths. The virtualizer should attach to the sources list container div. FILE: frontend/src/components/chat/RightPane.tsx [MEDIUM] (depends: 1.1)
 
 ---
-## Phase 4: Integration verification [COMPLETE]
-- [x] 4.1: Run full test suite: pytest backend/tests/ -v --tb=short. Verify all existing tests pass. SC-011, SC-012. [SMALL]
-- [x] 4.2: Verify telemetry and logging: spot-check 3 key log paths. [SMALL]
+## Phase 4: Success criteria verification tests [PENDING]
+- [ ] 4.1: Write targeted verification tests for PR 4 success criteria (SC-001 through SC-006). Create a single test file frontend/src/tests/ui-performance.test.tsx covering: (1) SC-001 — render TranscriptPane with 200 mock messages, assert no more than 30 message DOM nodes exist (overscan buffer allows slightly more than 20). (2) SC-002 — render DocumentsPage with 500 mock documents, assert no more than 35 row DOM nodes. (3) SC-003 — render RightPane sources tab with 50 mock sources, assert only visible items rendered. (4) SC-004 — render MessageContent twice with same content, verify memoized component does not re-parse (use jest/vitest spy on ReactMarkdown or check render count). (5) SC-005 — type rapidly in SessionRail search, verify filteredSessions does not recompute until after debounce delay. (6) SC-006 — run all existing test suites and verify no regressions. Each test should use Testing Library + vitest mocks. FILE: frontend/src/tests/ui-performance.test.tsx [MEDIUM] (depends: 2.1, 3.1, 3.2)

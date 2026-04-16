@@ -7,6 +7,9 @@ import { Button } from "@/components/ui/button";
 import type { Source } from "@/lib/api";
 import { getRelevanceLabel } from "@/lib/relevance";
 
+const REMARK_PLUGINS = [remarkGfm];
+const REHYPE_PLUGINS = [rehypeSanitize];
+
 interface MessageContentProps {
   content: string;
   sources?: Source[];
@@ -22,6 +25,25 @@ const escapeHtml = (unsafe: string): string => {
     .replace(/'/g, "&#039;");
 };
 
+interface MemoizedMarkdownProps {
+  content: string;
+  isStreaming?: boolean;
+}
+
+const MemoizedMarkdown = React.memo<MemoizedMarkdownProps>(
+  function MemoizedMarkdown({ content, isStreaming }) {
+    return (
+      <div className="prose prose-sm dark:prose-invert max-w-none">
+        <ReactMarkdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS}>{content}</ReactMarkdown>
+        {isStreaming && (
+          <span className="inline-block w-2 h-4 ml-1 bg-foreground animate-pulse" role="status" aria-live="polite" aria-label="Message streaming" />
+        )}
+      </div>
+    );
+});
+
+export { MemoizedMarkdown };
+
 export function MessageContent({ content, sources, isStreaming }: MessageContentProps) {
   const [copied, setCopied] = React.useState(false);
 
@@ -36,12 +58,7 @@ export function MessageContent({ content, sources, isStreaming }: MessageContent
 
   return (
     <div className="relative group">
-      <div className="prose prose-sm dark:prose-invert max-w-none">
-        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>{content}</ReactMarkdown>
-        {isStreaming && (
-          <span className="inline-block w-2 h-4 ml-1 bg-foreground animate-pulse" role="status" aria-live="polite" aria-label="Message streaming" />
-        )}
-      </div>
+      <MemoizedMarkdown content={content} isStreaming={isStreaming} />
 
       {sources && sources.length > 0 && (
         <div className="mt-4 pt-4 border-t border-border">
