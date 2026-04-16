@@ -201,8 +201,8 @@ class TestContextualizeChunks(unittest.TestCase):
             )
         )
 
-        # Check that context was prepended
-        self.assertIn("Generated context", result[0].text)
+        # Check that context was stored in metadata
+        self.assertIn("Generated context", result[0].metadata["contextual_context"])
         self.assertIn("First chunk content", result[0].text)
         self.assertTrue(result[0].metadata.get("contextualized"))
 
@@ -273,6 +273,7 @@ class TestContextualizeSingleChunk(unittest.TestCase):
         )
 
         self.assertEqual(chunk.text, "Context for chunk\n\nOriginal chunk text")
+        self.assertEqual(chunk.metadata["contextual_context"], "Context for chunk")
         self.assertTrue(chunk.metadata["contextualized"])
 
     def test_metadata_contextualized_always_set(self):
@@ -492,7 +493,7 @@ class TestRetryBehavior(unittest.TestCase):
         )
 
         self.assertEqual(call_count[0], 1)
-        self.assertIn("Context generated", chunk.text)
+        self.assertIn("Context generated", chunk.metadata.get("contextual_context", ""))
 
     def test_first_attempt_fails_second_succeeds(self):
         """Test that failed first attempt retries once and succeeds."""
@@ -522,7 +523,7 @@ class TestRetryBehavior(unittest.TestCase):
         )
 
         self.assertEqual(call_count[0], 2)
-        self.assertIn("Context on second try", chunk.text)
+        self.assertIn("Context on second try", chunk.metadata.get("contextual_context", ""))
 
     def test_all_three_attempts_fail(self):
         """Test that all 3 attempts failing raises LLMError."""
@@ -612,7 +613,7 @@ class TestRetryBehavior(unittest.TestCase):
         )
 
         self.assertEqual(call_count[0], 3)
-        self.assertIn("Context on third try", chunk.text)
+        self.assertIn("Context on third try", chunk.metadata.get("contextual_context", ""))
 
     def test_llm_error_caught_by_outer_handler(self):
         """Test that LLMError after retries is caught by outer exception handler."""

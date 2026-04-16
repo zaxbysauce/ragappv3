@@ -28,6 +28,11 @@ class ProcessedChunk:
         chunk_uid: Unique identifier for windowing (format: file_id_chunk_index)
         original_indices: List of original chunk indices if merged (for tracking)
         raw_text: Original chunk text before any contextual enrichment (preserved for evidence display)
+        parent_window_start: Character offset into the source document where the parent window begins.
+            Populated by compute_parent_windows(); None for chunks not yet backfilled.
+        parent_window_end: Character offset into the source document where the parent window ends.
+        chunk_position: Sequential position of this chunk within its parent document (same as chunk_index
+            after merge post-processing).
     """
 
     text: str
@@ -36,6 +41,10 @@ class ProcessedChunk:
     chunk_uid: Optional[str] = None
     original_indices: List[int] = field(default_factory=list)
     raw_text: Optional[str] = None
+    # Parent-document retrieval fields (Issue #12)
+    parent_window_start: Optional[int] = None
+    parent_window_end: Optional[int] = None
+    chunk_position: Optional[int] = None
 
 
 class SemanticChunker:
@@ -597,3 +606,85 @@ class EmbeddingSemanticChunker:
             "chunk_elements requires async context. Use chunk_text instead or run in async context."
         )
         return []
+
+
+def compute_parent_windows(
+    chunks: List[ProcessedChunk],
+    source_text: str,
+    window_chars: int = 6000,
+) -> List[ProcessedChunk]:
+    """Compute parent window offsets for each chunk within the source document (Issue #12).
+
+    For each chunk, locates the chunk text inside *source_text* and records a
+    ``parent_window_start`` / ``parent_window_end`` that spans up to *window_chars*
+    characters centred on the chunk.  The matched small chunk is later rendered with
+    ``[[MATCH: …]]`` markers inside this window when ``parent_retrieval_enabled=True``.
+
+    Strategy:
+    - Search uses ``raw_text`` (pre-enrichment) when available, falling back to
+      ``text``.  Enriched text may include a contextual prefix that is not present
+      in the source, so raw_text is a safer search target.
+    - Searches forward from the previous chunk's found position to avoid O(n²) worst
+      case on large documents (chunks are ordered).
+    - If a chunk cannot be located (e.g. enriched text differs too much), the offsets
+      remain ``None``; parent retrieval degrades gracefully to the small-chunk text.
+
+    Args:
+        chunks: Processed chunks from the semantic chunker.
+        source_text: Full source document text (plain text, pre-enrichment).
+        window_chars: Target width of the parent window in characters.
+
+    Returns:
+        The same list of chunks, mutated in-place with parent_window_start/end and
+        chunk_position set.  Returns the list for chaining convenience.
+    """
+    if not chunks or not source_text:
+        return chunks
+
+    half = window_chars // 2
+    doc_len = len(source_text)
+    search_cursor = 0  # Advance forward to keep O(n) overall
+
+    for position, chunk in enumerate(chunks):
+        chunk.chunk_position = position
+
+        # Prefer raw_text for locating within source (contextual prefix not in source)
+        search_text = (chunk.raw_text or chunk.text or "").strip()
+        if not search_text:
+            continue
+
+        # Try to find the chunk text from the current cursor forward
+        idx = source_text.find(search_text, search_cursor)
+        if idx == -1 and search_cursor > 0:
+            # Retry from the beginning in case of out-of-order or overlap
+            idx = source_text.find(search_text, 0)
+
+        if idx == -1:
+            # Could not locate chunk in source — leave offsets as None
+            logger.debug(
+                "compute_parent_windows: chunk[%d] not found in source (len=%d); "
+                "offsets left as None",
+                position,
+                doc_len,
+            )
+            continue
+
+        chunk_end = idx + len(search_text)
+        chunk_mid = (idx + chunk_end) // 2
+
+        window_start = max(0, chunk_mid - half)
+        window_end = min(doc_len, chunk_mid + half)
+
+        # Widen if the chunk itself extends beyond the half-window
+        if idx < window_start:
+            window_start = max(0, idx - 100)
+        if chunk_end > window_end:
+            window_end = min(doc_len, chunk_end + 100)
+
+        chunk.parent_window_start = window_start
+        chunk.parent_window_end = window_end
+
+        # Advance cursor past this match so the next chunk searches forward from here
+        search_cursor = chunk_end
+
+    return chunks

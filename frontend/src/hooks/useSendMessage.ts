@@ -112,19 +112,21 @@ export function useSendMessage(
           sendingRef.current = false;
           // Save messages to API
           try {
-            // Save user message
-            await addChatMessage(sessionId, { role: "user", content: userContent });
-
-            // Save assistant message
             const allMessages = useChatStore.getState().messages;
             const assistantMsg = allMessages.find((m) => m.id === assistantMessageId);
+            const saves: Promise<unknown>[] = [
+              addChatMessage(sessionId, { role: "user", content: userContent }),
+            ];
             if (assistantMsg) {
-              await addChatMessage(sessionId, {
-                role: "assistant",
-                content: assistantMsg.content,
-                sources: assistantMsg.sources ?? undefined,
-              });
+              saves.push(
+                addChatMessage(sessionId, {
+                  role: "assistant",
+                  content: assistantMsg.content,
+                  sources: assistantMsg.sources ?? undefined,
+                })
+              );
             }
+            await Promise.all(saves);
 
             // Refresh session list
             await refreshHistory();

@@ -4,6 +4,7 @@ LanceDB vector store service for semantic search.
 
 import asyncio
 import json
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, cast
@@ -20,6 +21,9 @@ logger = logging.getLogger(__name__)
 
 # Multi-scale search concurrency limit
 _MULTI_SCALE_CONCURRENCY = 4
+
+# Thread lock for FTS exceptions counter
+_fts_lock = threading.Lock()
 
 # Minimum rows before creating vector index (deferred creation)
 VECTOR_INDEX_MIN_ROWS = 256
@@ -71,6 +75,18 @@ class VectorStore:
         self.db: Optional[lancedb.AsyncConnection] = None
         self.table: Optional[lancedb.table.AsyncTable] = None
         self._embedding_dim: Optional[int] = None
+        self._fts_exceptions: int = 0
+        # Track the row count at last IVF_PQ build to detect post-delete churn (Issue #13)
+        self._last_index_build_row_count: int = 0
+        # Shared semaphore limiting concurrent LanceDB search operations across all callers.
+        # Lazily initialised on first use to avoid event-loop binding issues.
+        self._search_semaphore: Optional[asyncio.Semaphore] = None
+
+    def _get_search_semaphore(self) -> asyncio.Semaphore:
+        """Return the shared search semaphore, creating it on first call."""
+        if self._search_semaphore is None:
+            self._search_semaphore = asyncio.Semaphore(_MULTI_SCALE_CONCURRENCY)
+        return self._search_semaphore
 
     async def connect(self) -> "VectorStore":
         """Connect to LanceDB.
@@ -125,6 +141,11 @@ class VectorStore:
                     pa.string(),
                 ),  # JSON string for sparse vectors — retained for schema compat (unused post-Harrier migration)
                 ("metadata", pa.string()),  # JSON string for flexibility
+                # Parent-document retrieval columns (Issue #12) — nullable, backfilled by migration
+                pa.field("parent_doc_id", pa.string(), nullable=True),
+                pa.field("parent_window_start", pa.int32(), nullable=True),
+                pa.field("parent_window_end", pa.int32(), nullable=True),
+                pa.field("chunk_position", pa.int32(), nullable=True),
                 ("embedding", pa.list_(pa.float32(), embedding_dim)),
             ]
         )
@@ -135,6 +156,23 @@ class VectorStore:
             if "chunks" in table_names:
                 try:
                     self.table = await self.db.open_table("chunks")
+                    # Seed churn baseline so post-delete rebuild fires on existing indexes.
+                    # Without this, _last_index_build_row_count stays 0 after restart
+                    # and the churn-based rebuild path never triggers.
+                    try:
+                        existing_indices = await self.table.list_indices()
+                        has_ivfpq = any(
+                            "IVF_PQ" in str(getattr(idx, "index_type", ""))
+                            for idx in existing_indices
+                        )
+                        if has_ivfpq:
+                            self._last_index_build_row_count = await self.table.count_rows()
+                            logger.debug(
+                                "Seeded _last_index_build_row_count=%d from existing IVF_PQ index",
+                                self._last_index_build_row_count,
+                            )
+                    except Exception as _seed_exc:
+                        logger.debug("Could not seed index row count baseline: %s", _seed_exc)
                 except (OSError, RuntimeError, ValueError):
                     # Stale table reference — drop and recreate
                     try:
@@ -184,6 +222,13 @@ class VectorStore:
             logger.debug("FTS index already exists, skipping creation")
 
         return self
+
+    def get_fts_exceptions(self) -> int:
+        """Return the number of FTS exceptions since last reset and reset counter."""
+        with _fts_lock:
+            count = self._fts_exceptions
+            self._fts_exceptions = 0
+            return count
 
     async def _get_expected_embedding_dim(self) -> Optional[int]:
         """Get the expected embedding dimension from the table schema."""
@@ -250,6 +295,7 @@ class VectorStore:
                 ),
                 replace=True,
             )
+            self._last_index_build_row_count = row_count  # Track for post-delete churn check
             logger.info(
                 "Vector index creation completed in %.2fs", time.monotonic() - t0
             )
@@ -260,6 +306,84 @@ class VectorStore:
             )
         except (OSError, RuntimeError, ValueError) as e:
             logger.warning("Vector index creation failed: %s", e)
+
+    async def _maybe_rebuild_or_drop_vector_index(self, deleted_count: int) -> None:
+        """Post-delete ANN index lifecycle management (Issue #13).
+
+        After bulk deletes the IVF_PQ index may be stale because it was trained
+        on rows that no longer exist, or we may have crossed the 256-row threshold
+        downward and should fall back to brute-force search.
+
+        Rules:
+        - If current row count drops below VECTOR_INDEX_MIN_ROWS and an IVF_PQ
+          index exists, drop the index so LanceDB falls back to brute-force.
+        - If churn (deleted_count / last_build_row_count) >= INDEX_REBUILD_DELTA,
+          rebuild the index on the remaining rows.
+        """
+        if self.table is None or deleted_count == 0:
+            return
+
+        try:
+            current_rows = await self.table.count_rows()
+        except (OSError, RuntimeError, ValueError) as e:
+            logger.debug("Could not count rows for post-delete index check: %s", e)
+            return
+
+        # Check if index exists
+        has_ivfpq = False
+        try:
+            indices = await self.table.list_indices()
+            has_ivfpq = any(idx.name == "embedding_idx" for idx in indices)
+        except (OSError, RuntimeError, ValueError):
+            pass
+
+        if not has_ivfpq:
+            return  # No index to manage
+
+        # Case 1: Dropped below brute-force threshold — drop the IVF_PQ index
+        if current_rows < VECTOR_INDEX_MIN_ROWS:
+            try:
+                await self.table.drop_index("embedding_idx")
+                self._last_index_build_row_count = 0
+                logger.info(
+                    "Dropped IVF_PQ index: row count (%d) fell below %d threshold; "
+                    "falling back to brute-force search.",
+                    current_rows,
+                    VECTOR_INDEX_MIN_ROWS,
+                )
+            except (OSError, RuntimeError, ValueError) as e:
+                logger.warning("Failed to drop IVF_PQ index after threshold crossed: %s", e)
+            return
+
+        # Case 2: Churn threshold exceeded — rebuild the index
+        if self._last_index_build_row_count > 0:
+            churn = deleted_count / self._last_index_build_row_count
+            if churn >= settings.index_rebuild_delta:
+                t0 = time.monotonic()
+                try:
+                    num_sub_vectors = settings.embedding_dim // 8
+                    await self.table.create_index(
+                        column="embedding",
+                        config=IvfPq(
+                            distance_type=cast(
+                                "Literal['l2', 'cosine', 'dot']", settings.vector_metric
+                            ),
+                            num_partitions=256,
+                            num_sub_vectors=num_sub_vectors,
+                        ),
+                        replace=True,
+                    )
+                    self._last_index_build_row_count = current_rows
+                    logger.info(
+                        "IVF_PQ index rebuilt after %.0f%% row churn (%d deleted, %d remaining) "
+                        "in %.2fs",
+                        churn * 100,
+                        deleted_count,
+                        current_rows,
+                        time.monotonic() - t0,
+                    )
+                except (OSError, RuntimeError, ValueError) as e:
+                    logger.warning("IVF_PQ index rebuild after delete churn failed: %s", e)
 
     async def add_chunks(self, records: List[Dict[str, Any]]) -> None:
         """
@@ -325,6 +449,11 @@ class VectorStore:
                     "sparse_embedding"
                 ),  # Retained for schema compat — unused post-Harrier migration
                 "metadata": record.get("metadata", "{}"),
+                # Parent-document retrieval fields (Issue #12) — None for legacy chunks
+                "parent_doc_id": record.get("parent_doc_id"),
+                "parent_window_start": record.get("parent_window_start"),
+                "parent_window_end": record.get("parent_window_end"),
+                "chunk_position": record.get("chunk_position"),
                 "embedding": embedding,
             }
 
@@ -340,6 +469,12 @@ class VectorStore:
             processed_records.append(processed_record)
 
         await self.table.add(processed_records)
+
+        # Compact the table after every ingest batch (Issue #13: ANN index lifecycle)
+        try:
+            await self.table.optimize()
+        except Exception as e:
+            logger.warning("table.optimize() after add_chunks failed (non-fatal): %s", e)
 
         # Check if we should create the vector index after adding chunks
         await self._maybe_create_vector_index()
@@ -405,7 +540,8 @@ class VectorStore:
         if not hybrid or not query_text:
             return dense_results
 
-        # BM25 FTS hybrid search
+        # BM25 FTS hybrid search with fts_status tracking
+        fts_status = 'ok'
         try:
             fts_query = await self.table.search(query_text, query_type="fts")
             fts_filter_parts = [scale_filter]
@@ -417,46 +553,33 @@ class VectorStore:
             fts_combined_filter = " AND ".join(f"({f})" for f in fts_filter_parts)
             fts_query = fts_query.where(fts_combined_filter)
             fts_results = await fts_query.limit(fetch_k).to_list()
+            if fts_results:
+                logger.info(
+                    f"Hybrid search (BM25 FTS) succeeded for scale {scale}: {len(fts_results)} FTS results (alpha={hybrid_alpha})"
+                )
+                fts_status = 'ok'
+            else:
+                fts_status = 'empty'
         except Exception as e:
             logger.warning(
-                f"FTS search failed for scale {scale} (falling back to dense-only): {e}"
+                f"FTS search failed for scale {scale} (falling back to dense-only): {type(e).__name__}: {e}"
             )
             fts_results = []
+            fts_status = 'failed'
+            with _fts_lock:
+                self._fts_exceptions += 1
 
-        # RRF Fusion for this scale with hybrid_alpha weighting
-        k_rrf = 60
-        rrf_scores: dict = {}
-        id_to_record: dict = {}
-
-        # Apply hybrid_alpha weighting to dense and FTS contributions
-        dense_weight = hybrid_alpha
-        fts_weight = 1.0 - hybrid_alpha
-
-        for rank, record in enumerate(dense_results):
-            uid = record.get("id", f"dense_{rank}")
-            rrf_scores[uid] = rrf_scores.get(uid, 0.0) + dense_weight / (k_rrf + rank + 1)
-            id_to_record[uid] = record
-
-        for rank, record in enumerate(fts_results):
-            uid = record.get("id", f"fts_{rank}")
-            rrf_scores[uid] = rrf_scores.get(uid, 0.0) + fts_weight / (k_rrf + rank + 1)
-            if uid not in id_to_record:
-                id_to_record[uid] = record
-
-        # Return results with RRF scores (unsorted, to be sorted in cross-scale RRF)
-        result_list = []
-        for uid in rrf_scores:
-            record = dict(id_to_record[uid])
-            record["_rrf_score"] = rrf_scores[uid]
-            result_list.append(record)
-
-        if hybrid and query_text and (dense_weight > 0.0 and fts_weight > 0.0):
-            logger.debug(
-                f"Multi-scale RRF fusion for scale={scale}: "
-                f"hybrid_alpha={hybrid_alpha:.2f} (dense_weight={dense_weight:.2f}, fts_weight={fts_weight:.2f}), "
-                f"dense_results={len(dense_results)}, fts_results={len(fts_results)}, fused={len(result_list)}"
-            )
-
+        # RRF Fusion for this scale
+        k_rrf = 60 if settings.rrf_legacy_mode else settings.hybrid_rrf_k
+        clamped_alpha = max(0.0, min(1.0, hybrid_alpha))
+        result_list = rrf_fuse(
+            [dense_results, fts_results],
+            k=k_rrf,
+            weights=[clamped_alpha, 1.0 - clamped_alpha],
+        )
+        # Attach FTS status to each result
+        for record in result_list:
+            record["_fts_status"] = fts_status
         return result_list
 
     async def search(
@@ -550,11 +673,11 @@ class VectorStore:
             if len(scale_strs) > 1:
                 # Multi-scale search: query each scale with limited concurrency
                 # and perform cross-scale RRF
-                semaphore = asyncio.Semaphore(_MULTI_SCALE_CONCURRENCY)
+                _semaphore = self._get_search_semaphore()
 
                 async def _sem_search_single_scale(scale: str) -> List[Dict[str, Any]]:
                     """Semaphore-guarded wrapper for _search_single_scale."""
-                    async with semaphore:
+                    async with _semaphore:
                         return await self._search_single_scale(
                             embedding=embedding,
                             scale=scale,
@@ -585,7 +708,9 @@ class VectorStore:
                         )
 
                 # Cross-scale RRF fusion
-                k_rrf = 60
+                # NOTE: Cross-scale fusion sums per-scale _rrf_score accumulations directly.
+                # It does NOT re-rank by position, so multi_scale_rrf_k is not applicable here.
+                # The per-scale scores were computed using hybrid_rrf_k above.
                 cross_scale_scores: dict = {}
                 id_to_record: dict = {}
 
@@ -623,48 +748,72 @@ class VectorStore:
         if self.table is None:
             return []
 
-        # Dense vector search
-        # NOTE: Using query_type="vector" to bypass LanceDB's buggy auto-detection
-        # which can cause UnboundLocalError when embedding_conf is None
-        embedding_np = np.array(embedding, dtype=np.float32)
-        query = await self.table.search(embedding_np, query_type="vector")
+        async with self._get_search_semaphore():
+            # Dense vector search
+            # NOTE: Using query_type="vector" to bypass LanceDB's buggy auto-detection
+            # which can cause UnboundLocalError when embedding_conf is None
+            embedding_np = np.array(embedding, dtype=np.float32)
+            query = await self.table.search(embedding_np, query_type="vector")
 
-        # Apply vault filter if specified
-        _filter_expr = filter_expr
-        if vault_id is not None:
-            safe_vault_id = _lance_escape(vault_id)
-            vault_filter = f"vault_id = '{safe_vault_id}'"
-            if _filter_expr:
-                _filter_expr = f"({_filter_expr}) AND ({vault_filter})"
-            else:
-                _filter_expr = vault_filter
-
-        if _filter_expr:
-            query = query.where(_filter_expr)
-
-        dense_results = await query.limit(fetch_k).to_list()
-
-        # If hybrid disabled, return dense results only
-        if not hybrid or not query_text:
-            return dense_results
-
-        # BM25 FTS hybrid search
-        try:
-            fts_query = await self.table.search(query_text, query_type="fts")
-            if vault_id:
+            # Apply vault filter if specified
+            _filter_expr = filter_expr
+            if vault_id is not None:
                 safe_vault_id = _lance_escape(vault_id)
-                fts_query = fts_query.where(f"vault_id = '{safe_vault_id}'")
-            if filter_expr:
-                fts_query = fts_query.where(filter_expr)
-            fts_results = await fts_query.limit(fetch_k).to_list()
-        except (OSError, RuntimeError, ValueError) as e:
-            logger.warning(f"FTS search failed (falling back to dense-only): {e}")
-            fts_results = []
+                vault_filter = f"vault_id = '{safe_vault_id}'"
+                if _filter_expr:
+                    _filter_expr = f"({_filter_expr}) AND ({vault_filter})"
+                else:
+                    _filter_expr = vault_filter
 
-        # RRF Fusion with hybrid_alpha weighting
-        # hybrid_alpha: 1.0 = pure dense, 0.0 = pure BM25, 0.5 = equal weight
-        weights = [hybrid_alpha, 1.0 - hybrid_alpha]
-        return rrf_fuse([dense_results, fts_results], k=60, limit=limit, weights=weights)
+            if _filter_expr:
+                query = query.where(_filter_expr)
+
+            dense_results = await query.limit(fetch_k).to_list()
+
+            # If hybrid disabled, return dense results only
+            if not hybrid or not query_text:
+                logger.debug(
+                    f"Dense-only search (hybrid disabled or no query text)"
+                )
+                return dense_results
+
+            # BM25 FTS hybrid search with fts_status tracking
+            fts_status = 'ok'
+            try:
+                fts_query = await self.table.search(query_text, query_type="fts")
+                if vault_id:
+                    safe_vault_id = _lance_escape(vault_id)
+                    fts_query = fts_query.where(f"vault_id = '{safe_vault_id}'")
+                if filter_expr:
+                    fts_query = fts_query.where(filter_expr)
+                fts_results = await fts_query.limit(fetch_k).to_list()
+                if fts_results:
+                    logger.info(
+                        f"Hybrid search (BM25 FTS) succeeded: {len(fts_results)} FTS results (alpha={hybrid_alpha})"
+                    )
+                    fts_status = 'ok'
+                else:
+                    fts_status = 'empty'
+            except Exception as e:
+                logger.warning(f"FTS search failed (falling back to dense-only): {type(e).__name__}: {e}")
+                fts_results = []
+                fts_status = 'failed'
+                with _fts_lock:
+                    self._fts_exceptions += 1
+
+            # RRF Fusion using shared utility
+            k_rrf = 60 if settings.rrf_legacy_mode else settings.hybrid_rrf_k
+            clamped_alpha = max(0.0, min(1.0, hybrid_alpha))
+            fused = rrf_fuse(
+                [dense_results, fts_results],
+                k=k_rrf,
+                limit=limit,
+                weights=[clamped_alpha, 1.0 - clamped_alpha],
+            )
+            # Attach FTS status to each result
+            for record in fused:
+                record["_fts_status"] = fts_status
+            return fused
 
     async def delete_by_file(self, file_id: str) -> int:
         """
@@ -717,15 +866,18 @@ class VectorStore:
             return 0
 
         # Query count before delete to return accurate deletion count
-        safe_file_id = str(file_id).replace('"', '\\"')
+        safe_file_id = _lance_escape(file_id)
         try:
-            count_before = await self.table.count_rows(f'file_id = "{safe_file_id}"')
+            count_before = await self.table.count_rows(f"file_id = '{safe_file_id}'")
         except (OSError, RuntimeError, ValueError):
             # If count_rows fails, safely default to 0
             count_before = 0
 
         # LanceDB delete using filter expression
-        await self.table.delete(f'file_id = "{safe_file_id}"')
+        await self.table.delete(f"file_id = '{safe_file_id}'")
+
+        # Manage ANN index lifecycle after delete (Issue #13)
+        await self._maybe_rebuild_or_drop_vector_index(count_before)
 
         return count_before
 
@@ -772,7 +924,74 @@ class VectorStore:
             count_before = 0
 
         await self.table.delete(f"vault_id = '{safe_vault_id}'")
+
+        # Manage ANN index lifecycle after delete (Issue #13)
+        await self._maybe_rebuild_or_drop_vector_index(count_before)
+
         return count_before
+
+    async def delete_old_generation_by_file(
+        self, file_id: str, new_hash_short: str
+    ) -> int:
+        """Delete stale-generation chunks for a file after a safe re-upload (Issue #13).
+
+        During safe re-upload the new chunks are inserted with IDs of the form
+        ``{file_id}_{new_hash_short}_…``.  This method deletes every chunk for
+        *file_id* whose ``id`` does NOT start with ``{file_id}_{new_hash_short}_``,
+        i.e. chunks from the previous generation.
+
+        Called only when ``REUPLOAD_SAFE_ORDER=True`` and after the new-generation
+        chunks are already visible in the index.
+
+        Args:
+            file_id: The file ID whose old-generation chunks should be removed.
+            new_hash_short: First 8 characters of the new file hash used as
+                generation prefix for the newly inserted chunks.
+
+        Returns:
+            Number of stale-generation chunks deleted.
+        """
+        if self.db is None:
+            await self.connect()
+
+        if self.table is None:
+            try:
+                if self.db is not None:
+                    table_names = await self.db.table_names()
+                    if "chunks" not in table_names:
+                        return 0
+                    self.table = await self.db.open_table("chunks")
+            except (OSError, RuntimeError, ValueError):
+                return 0
+
+        if self.table is None:
+            return 0
+
+        safe_file_id = _lance_escape(file_id)
+        safe_hash = _lance_escape(new_hash_short)
+        # Keep only chunks whose id starts with "{file_id}_{hash_short}_"
+        new_prefix = f"{safe_file_id}_{safe_hash}_"
+        try:
+            count_before = await self.table.count_rows(
+                f"file_id = '{safe_file_id}'"
+            )
+            # Count how many we're keeping (new generation)
+            count_new = await self.table.count_rows(
+                f"file_id = '{safe_file_id}' AND id LIKE '{new_prefix}%'"
+            )
+            old_count = count_before - count_new
+            if old_count <= 0:
+                return 0
+            # Delete the old ones: file_id matches but id does NOT have new prefix
+            await self.table.delete(
+                f"file_id = '{safe_file_id}' AND NOT (id LIKE '{new_prefix}%')"
+            )
+            # Manage ANN index lifecycle after delete (Issue #13)
+            await self._maybe_rebuild_or_drop_vector_index(old_count)
+            return old_count
+        except (OSError, RuntimeError, ValueError) as e:
+            logger.warning("delete_old_generation_by_file failed: %s", e)
+            return 0
 
     async def _safe_table_to_pandas(self, table, operation_name: str):
         """Load a LanceDB table into pandas with OOM protection.
@@ -1167,6 +1386,143 @@ class VectorStore:
             return migrated_count
         except (OSError, RuntimeError, ValueError) as e:
             logger.warning(f"LanceDB sparse_embedding migration failed: {e}")
+            return 0
+
+    async def migrate_add_parent_window(self, dry_run: bool = False) -> int:
+        """Migration: Add parent_doc_id, parent_window_start, parent_window_end, and
+        chunk_position columns to existing chunks that lack them (Issue #12).
+
+        Idempotent — safe to run multiple times. Existing rows receive:
+        - parent_doc_id = file_id (denormalized for query-time access)
+        - parent_window_start = None (backfilled to 0 for first chunk of each file)
+        - parent_window_end = None
+        - chunk_position = chunk_index (sequential index already stored)
+
+        Args:
+            dry_run: If True, report rows that would be updated but make no changes.
+
+        Returns:
+            Number of rows that were (or would be, in dry-run) updated.
+        """
+        if self.db is None:
+            await self.connect()
+
+        if self.db is None:
+            logger.info("LanceDB parent_window migration: no connection available")
+            return 0
+
+        try:
+            table_names = await self.db.table_names()
+        except (OSError, RuntimeError, ValueError) as e:
+            logger.warning(f"LanceDB parent_window migration failed: {e}")
+            return 0
+
+        if "chunks" not in table_names:
+            logger.info("LanceDB parent_window migration: no table exists — nothing to migrate")
+            return 0
+
+        try:
+            table = await self.db.open_table("chunks")
+        except (OSError, RuntimeError, ValueError) as e:
+            logger.warning(f"LanceDB parent_window migration failed to open table: {e}")
+            return 0
+
+        schema = await table.schema()
+        field_names = [schema.field(i).name for i in range(len(schema))]
+        new_cols = {"parent_doc_id", "parent_window_start", "parent_window_end", "chunk_position"}
+        missing_cols = new_cols - set(field_names)
+
+        if not missing_cols:
+            # All columns present — check if any rows still have null parent_doc_id
+            try:
+                df = await self._safe_table_to_pandas(table, "parent_window migration (check)")
+                null_count = int(df["parent_doc_id"].isna().sum())
+                if null_count == 0:
+                    logger.info("LanceDB parent_window migration: all rows already backfilled")
+                    return 0
+                if dry_run:
+                    logger.info(
+                        "[DRY RUN] parent_window migration: %d rows would be backfilled "
+                        "(parent_doc_id is null)", null_count
+                    )
+                    return null_count
+                # Backfill rows where parent_doc_id is null
+                mask = df["parent_doc_id"].isna()
+                df.loc[mask, "parent_doc_id"] = df.loc[mask, "file_id"]
+                df.loc[mask, "chunk_position"] = df.loc[mask, "chunk_index"]
+                # parent_window_start/end remain null — populated on next re-ingest
+                await self.db.drop_table("chunks")
+                self.table = await self.db.create_table("chunks", data=df)
+                logger.info(
+                    "LanceDB parent_window migration: backfilled parent_doc_id on %d rows",
+                    null_count,
+                )
+                return null_count
+            except (OSError, RuntimeError, ValueError) as e:
+                logger.warning(f"LanceDB parent_window migration check failed: {e}")
+                return 0
+
+        # Some columns are missing — add them all
+        try:
+            df = await self._safe_table_to_pandas(table, "parent_window migration (add columns)")
+            if len(df) == 0:
+                logger.info(
+                    "LanceDB parent_window migration: empty table — new schema will be "
+                    "applied on first ingest"
+                )
+                return 0
+
+            migrated_count = len(df)
+            if dry_run:
+                logger.info(
+                    "[DRY RUN] parent_window migration: %d rows would receive new columns: %s",
+                    migrated_count,
+                    ", ".join(sorted(missing_cols)),
+                )
+                return migrated_count
+
+            # Add missing columns with sensible defaults
+            if "parent_doc_id" in missing_cols:
+                df["parent_doc_id"] = df["file_id"]
+            if "chunk_position" in missing_cols:
+                df["chunk_position"] = df["chunk_index"]
+            # parent_window_start / end remain null — populated on next re-ingest
+            for col in ("parent_window_start", "parent_window_end"):
+                if col in missing_cols:
+                    df[col] = None
+
+            await self.db.drop_table("chunks")
+            try:
+                self.table = await self.db.create_table("chunks", data=df)
+                # Restore indices
+                await self.table.create_index(column="text", config=FTS(), replace=True)
+                num_sub_vectors = (self._embedding_dim or settings.embedding_dim) // 8
+                if migrated_count >= VECTOR_INDEX_MIN_ROWS:
+                    await self.table.create_index(
+                        column="embedding",
+                        config=IvfPq(
+                            distance_type=cast(
+                                "Literal['l2', 'cosine', 'dot']", settings.vector_metric
+                            ),
+                            num_partitions=256,
+                            num_sub_vectors=num_sub_vectors,
+                        ),
+                        replace=True,
+                    )
+                    self._last_index_build_row_count = migrated_count
+            except (OSError, RuntimeError, ValueError) as create_err:
+                logger.critical(
+                    "parent_window migration: table dropped but recreate failed: %s. "
+                    "Data may need manual recovery from backup.",
+                    create_err,
+                )
+                raise
+            logger.info(
+                "LanceDB parent_window migration: added columns to %d rows", migrated_count
+            )
+            return migrated_count
+        except (OSError, RuntimeError, ValueError) as e:
+            logger.warning(f"LanceDB parent_window migration failed: {e}")
             return 0
 
     async def get_chunks_by_uid(self, chunk_uids: List[str]) -> List[Dict[str, Any]]:

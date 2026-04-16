@@ -3,7 +3,7 @@
 import asyncio
 import logging
 from datetime import datetime
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional, Set, Tuple
 
 from app.config import settings
 from app.services.document_retrieval import DocumentRetrievalService, RAGSource
@@ -157,7 +157,7 @@ class RAGEngine:
             logger.error("Memory intent detection/add failed (%s): %s", type(exc).__name__, exc)
 
         # Query transformation for broader retrieval (if enabled)
-        transformed_queries: List[str] = [user_input]
+        transformed_queries: List[Tuple[str, str]] = [('original', user_input)]
         if settings.query_transformation_enabled and self.llm_client is not None:
             try:
                 if self._query_transformer is None:
@@ -165,34 +165,52 @@ class RAGEngine:
                 transformed_queries = await self._query_transformer.transform(
                     user_input
                 )
+                # transformed_queries is now List[Tuple[str, str]] like [('original', '...'), ('step_back', '...'), ('hyde', '...')]
                 if len(transformed_queries) > 1:
                     logger.info(
                         "Query transformation: original='%s', step_back='%s'",
-                        transformed_queries[0],
-                        transformed_queries[1],
+                        transformed_queries[0][1],
+                        transformed_queries[1][1],
                     )
             except Exception as e:
                 logger.warning(
                     "Query transformation failed (%s): %s, using original query only", type(e).__name__, e
                 )
-                transformed_queries = [user_input]
+                transformed_queries = [('original', user_input)]
 
         logger.debug("[query] transformed_queries=%s", transformed_queries)
 
         # Embed all transformed queries concurrently
-        query_embeddings: List[List[float]] = []
-        embed_results = await asyncio.gather(
-            *[self.embedding_service.embed_single(q) for q in transformed_queries],
-            return_exceptions=True,
-        )
-        for i, result in enumerate(embed_results):
-            if isinstance(result, BaseException):
+        # query_embeddings will be List[Tuple[str, List[float]]] where tuple is (variant_type, embedding)
+        query_embeddings: List[Tuple[str, List[float]]] = []
+        variants_dropped: List[str] = []
+
+        async def _embed_one(vtype: str, text: str) -> List[float]:
+            if vtype == 'hyde':
+                return await self.embedding_service.embed_passage(text)
+            return await self.embedding_service.embed_single(text)
+
+        embed_tasks = [_embed_one(vt, t) for vt, t in transformed_queries]
+        raw_embeddings = await asyncio.gather(*embed_tasks, return_exceptions=True)
+
+        for (variant_type, _), result in zip(transformed_queries, raw_embeddings):
+            if isinstance(result, EmbeddingError):
+                if variant_type == 'original':
+                    logger.error(
+                        "Query embedding failure for original query: %s", result
+                    )
+                    raise RAGEngineError(f"Original query embedding failed: {result}")
                 logger.warning(
-                    "Query embedding failure [%d/%d]: query='%.50s', error=%s",
-                    i + 1, len(transformed_queries), transformed_queries[i], result,
+                    "Query embedding failure for variant '%s': %s", variant_type, result
                 )
+                variants_dropped.append(variant_type)
+            elif isinstance(result, BaseException):
+                if variant_type == 'original':
+                    logger.error("Query embedding failure for original query: %s", result)
+                    raise RAGEngineError(f"Original query embedding failed: {result}")
+                variants_dropped.append(variant_type)
             else:
-                query_embeddings.append(result)
+                query_embeddings.append((variant_type, result))
 
         if not query_embeddings:
             error_msg = "Unable to encode any query variants"
@@ -207,7 +225,7 @@ class RAGEngine:
         logger.info(
             "[query] query_embeddings: count=%d, dim=%s",
             len(query_embeddings),
-            len(query_embeddings[0]) if query_embeddings else "N/A",
+            len(query_embeddings[0][1]) if query_embeddings else "N/A",
         )
 
         effective_alpha = self.hybrid_alpha
@@ -225,16 +243,29 @@ class RAGEngine:
         )
 
         eval_result = "CONFIDENT"
+        rerank_success: Optional[bool] = None
+        # Initialize variables that will be set by _execute_retrieval (or fallback values)
+        score_type = "distance"
+        hybrid_status = "disabled"
+        fts_exceptions = 0
+        rerank_status = "disabled"
+        exact_match_promoted = False
+        token_pack_stats: Dict[str, int] = {
+            "token_pack_included": 0,
+            "token_pack_skipped": 0,
+            "token_pack_truncated": 0,
+        }
         if self.maintenance_mode:
             fallback_reason = "RAG index is under maintenance"
             vector_results = []
         else:
             try:
-                vector_results, relevance_hint, eval_result = await self._execute_retrieval(
+                vector_results, relevance_hint, eval_result, rerank_success, score_type, hybrid_status, fts_exceptions, rerank_status, variants_dropped, exact_match_promoted, token_pack_stats = await self._execute_retrieval(
                     query_embeddings,
                     user_input,
                     vault_id,
                     effective_alpha=effective_alpha,
+                    variants_dropped=variants_dropped,
                 )
                 logger.info(
                     "[query] _execute_retrieval returned: result_count=%d, first_3_distances=%s",
@@ -246,9 +277,37 @@ class RAGEngine:
             except Exception as exc:
                 fallback_reason = str(exc)
                 vector_results = []
+                rerank_success = None  # Default for fallback case
+                rerank_status = "disabled"  # Default for fallback
+                score_type = "distance"  # Default for fallback
+                hybrid_status = "disabled"  # Default for fallback
+                fts_exceptions = 0  # Default for fallback
+                variants_dropped = []  # Safety net: reset on exception
+                exact_match_promoted = False  # Default for fallback
+                token_pack_stats = {
+                    "token_pack_included": 0,
+                    "token_pack_skipped": 0,
+                    "token_pack_truncated": 0,
+                }
+
+        # Fetch indexed file IDs for atomic visibility filter (Issue #13)
+        # Only chunks from fully-indexed files are returned — pending/processing files are hidden.
+        indexed_file_ids: Optional[Set[str]] = None
+        try:
+            indexed_file_ids = await asyncio.to_thread(
+                self._get_indexed_file_ids, vault_id
+            )
+        except Exception as _exc:
+            logger.warning(
+                "Failed to fetch indexed_file_ids (visibility filter disabled): %s", _exc
+            )
 
         # Filter relevant chunks using document retrieval service
-        relevant_chunks = await self.document_retrieval.filter_relevant(vector_results)
+        relevant_chunks = await self.document_retrieval.filter_relevant(
+            vector_results,
+            reranked=rerank_success if rerank_success is not None else False,
+            indexed_file_ids=indexed_file_ids,
+        )
         logger.info(
             "[query] After filter_relevant: relevant_chunk_count=%d",
             len(relevant_chunks),
@@ -270,6 +329,12 @@ class RAGEngine:
                 )
             except Exception as exc:
                 logger.warning("Context distillation failed, continuing: %s", exc)
+
+        # Parent window expansion: deliver parent context to LLM (Issue #12)
+        # Reads pre-computed parent_window_text from chunk metadata and assigns it to
+        # source.parent_window_text; prompt_builder renders it with [[MATCH:]] markers.
+        if settings.parent_retrieval_enabled and relevant_chunks:
+            relevant_chunks = self._expand_parent_windows(relevant_chunks)
 
         # Check if distance filtering removed all results (no_match)
         if not relevant_chunks and self.document_retrieval.no_match:
@@ -327,7 +392,7 @@ class RAGEngine:
                 yield chunk
 
         # Yield done message with sources
-        done_msg = self._build_done_message(relevant_chunks, memories)
+        done_msg = self._build_done_message(relevant_chunks, memories, score_type, hybrid_status, fts_exceptions, rerank_status, variants_dropped, exact_match_promoted, token_pack_stats)
         logger.info(
             "[query] Yielding 'done': sources_count=%d, memories_used=%d",
             len(done_msg.get("sources", [])),
@@ -337,20 +402,25 @@ class RAGEngine:
 
     async def _execute_retrieval(
         self,
-        query_embeddings: List[List[float]],
+        query_embeddings: List[Tuple[str, List[float]]],
         user_input: str,
         vault_id: Optional[int],
         effective_alpha: float = 0.6,
-    ) -> tuple[List[Dict[str, Any]], Optional[str], str]:
+        variants_dropped: List[str] = None,
+    ) -> tuple[List[Dict[str, Any]], Optional[str], str, Optional[bool], str, str, int, str, List[str], bool, Dict[str, int]]:
         """Execute vector search and retrieval evaluation.
 
         Args:
-            query_embeddings: List of query embeddings to search
+            query_embeddings: List of (variant_type, embedding) tuples to search
             user_input: Original user query
             vault_id: Optional vault ID to filter by
+            effective_alpha: Hybrid search alpha weight
+            variants_dropped: List of variant types that failed embedding (e.g., step_back, hyde)
 
         Returns:
-            Tuple of (vector_results, relevance_hint, eval_result)
+            Tuple of (vector_results, relevance_hint, eval_result, rerank_success, score_type,
+            hybrid_status, fts_exceptions, rerank_status, variants_dropped, exact_match_promoted,
+            token_pack_stats)
         """
         logger.info(
             "[_execute_retrieval] ENTER: vault_id=%s, top_k=%s, query_embeddings=%d",
@@ -358,9 +428,17 @@ class RAGEngine:
             self.retrieval_top_k,
             len(query_embeddings),
         )
+        # Ensure variants_dropped is always a list (never None)
+        if variants_dropped is None:
+            variants_dropped = []
         eval_result = "CONFIDENT"
+        rerank_success: Optional[bool] = None
+        fts_exceptions = 0  # Initialize before try in case get_fts_exceptions() raises
+        final_relevance_hint: Optional[str] = None  # Initialize before try block
+
+        # Phase 1: Search phase - original query failures propagate immediately
+        vector_results = []
         try:
-            # Stage 1: Initial retrieval
             fetch_k = (
                 self.initial_retrieval_top_k
                 if self.reranking_enabled
@@ -373,29 +451,38 @@ class RAGEngine:
             _vault = str(vault_id) if vault_id is not None else None
             search_tasks = [
                 self.vector_store.search(
-                    embedding,
+                    embedding_tuple[1],  # Extract embedding from (variant_type, embedding) tuple
                     _top_k,
                     vault_id=_vault,
                     query_text=user_input,
                     hybrid=self.hybrid_search_enabled,
                     hybrid_alpha=effective_alpha,
                 )
-                for i, embedding in enumerate(query_embeddings)
+                for embedding_tuple in query_embeddings
             ]
             gather_results = await asyncio.gather(*search_tasks, return_exceptions=True)
             all_results = []
             for i, result in enumerate(gather_results):
+                variant_type = query_embeddings[i][0] if i < len(query_embeddings) else f"variant_{i}"
                 if isinstance(result, BaseException):
+                    # ORIGINAL QUERY FAILURE: propagate error immediately
+                    if variant_type == 'original':
+                        raise RAGEngineError(f"Original query vector search failed: {result}") from result
+
+                    # Paraphrase/step_back/hyde failure: log and track
                     logger.warning(
-                        "[_execute_retrieval] vector search variant=%d failed: %s",
-                        i, result,
+                        "[_execute_retrieval] vector search variant=%d (%s) failed: %s",
+                        i, variant_type, result,
                     )
+                    if variant_type not in variants_dropped:
+                        variants_dropped.append(variant_type)
                     all_results.append([])  # Degrade gracefully — use empty result for failed variant
                 else:
                     all_results.append(result)
                     logger.debug(
-                        "[_execute_retrieval] vector_store.search() variant=%d returned %d results",
+                        "[_execute_retrieval] vector_store.search() variant=%d (%s) returned %d results",
                         i,
+                        variant_type,
                         len(result),
                     )
 
@@ -427,12 +514,42 @@ class RAGEngine:
                         uid: (ts - min_ts) / span for uid, ts in dates.items()
                     }
 
-            # Fuse results from all query variants using RRF
+            # Capture top-1 from original query for exact-match promotion (before fusion modifies ordering)
+            original_top1_id = None
+            exact_match_promoted = False
+            if all_results and all_results[0]:
+                original_top1_id = all_results[0][0].get("id") if all_results[0] else None
+
+            # Fuse results from all query variants using RRF with configurable k and per-arm weights
             if len(all_results) > 1:
+                # Build per-arm weights based on variant types
+                # query_embeddings is a list of (variant_type, embedding) tuples
+                if not settings.rrf_legacy_mode:
+                    weight_map = {
+                        'original': settings.rrf_weight_original,
+                        'step_back': settings.rrf_weight_stepback,
+                        'hyde': settings.rrf_weight_hyde,
+                    }
+                    variant_weights = []
+                    filtered_results = []
+                    for i, result_list in enumerate(all_results):
+                        variant_type = query_embeddings[i][0] if i < len(query_embeddings) else 'original'
+                        w = weight_map.get(variant_type, settings.rrf_weight_original)
+                        if w > 0.0:
+                            variant_weights.append(w)
+                            filtered_results.append(result_list)
+                    fusion_k = settings.multi_query_rrf_k
+                else:
+                    # Legacy mode: k=60, uniform weights, no filtering
+                    variant_weights = None
+                    filtered_results = all_results
+                    fusion_k = 60
+
                 vector_results = rrf_fuse(
-                    all_results,
-                    k=60,
+                    filtered_results,
+                    k=fusion_k,
                     limit=fetch_k,
+                    weights=variant_weights,
                     recency_scores=recency_scores,
                     recency_weight=settings.retrieval_recency_weight,
                 )
@@ -441,8 +558,38 @@ class RAGEngine:
                     len(all_results),
                     len(vector_results),
                 )
+
+                # Exact-match promotion: ensure original query's top-1 dense result
+                # is not completely demoted out of top-5 by variant fusion math
+                exact_match_promoted = False
+                if (
+                    settings.exact_match_promote
+                    and not settings.rrf_legacy_mode
+                    and original_top1_id is not None
+                    and len(vector_results) >= 5
+                ):
+                    top5_ids = {r.get("id") for r in vector_results[:5]}
+                    if original_top1_id not in top5_ids:
+                        # Find the original top-1 in fused results
+                        promote_idx = None
+                        for idx, r in enumerate(vector_results):
+                            if r.get("id") == original_top1_id:
+                                promote_idx = idx
+                                break
+                        if promote_idx is not None:
+                            # Promote to rank 5 (index 4) — a nudge, not a crown.
+                            # Exact string match does not override semantic ranking;
+                            # rank 5 keeps it in the Primary Evidence window.
+                            promoted_record = vector_results.pop(promote_idx)
+                            vector_results.insert(4, promoted_record)
+                            exact_match_promoted = True
+                            logger.info(
+                                "Exact-match promotion: moved original top-1 from position %d to rank 5",
+                                promote_idx,
+                            )
             else:
                 vector_results = all_results[0] if all_results else []
+                exact_match_promoted = False
 
             # Log vector search results
             logger.info(
@@ -455,97 +602,192 @@ class RAGEngine:
                 else "N/A",
             )
 
-            # Stage 2: Reranking (if enabled)
+            # Phase 1b: Reranking (if enabled) - also part of search phase
             if self.reranking_enabled and self.reranking_service and vector_results:
                 try:
-                    vector_results = await self.reranking_service.rerank(
+                    reranked_chunks, rerank_success = await self.reranking_service.rerank(
                         query=user_input,
                         chunks=vector_results,
                         top_n=self.reranker_top_n,
                     )
+                    if reranked_chunks:
+                        vector_results = reranked_chunks
                     logger.info(
                         "[_execute_retrieval] After reranking: result_count=%d",
                         len(vector_results),
                     )
                 except Exception as e:
                     logger.warning("Reranking failed, using original results: %s", e)
+                    # rerank_success remains None (unattempted due to exception)
 
-            # Pack context by token budget (feature-flag gated by context_max_tokens > 0)
-            if vector_results and settings.context_max_tokens > 0:
-                temp_sources = [
-                    RAGSource(
-                        text=r.get("text", ""),
-                        file_id=str(r.get("file_id", "")),
-                        score=r.get("_distance", 0.0),
-                        metadata=r.get("metadata", {}),
-                    )
-                    for r in vector_results
-                ]
-                packed_sources = self._pack_context_by_token_budget(
-                    temp_sources, settings.context_max_tokens
-                )
-                # Rebuild vector_results in packed_sources ORDER (preserves reranker ranking).
-                # Use (file_id, text) composite key — more unique than text alone.
-                _key_to_result: Dict[tuple, Any] = {}
-                for r in vector_results:
-                    k = (str(r.get("file_id", "")), r.get("text", ""))
-                    if k not in _key_to_result:  # first-seen wins (reranker order)
-                        _key_to_result[k] = r
-                vector_results = [
-                    _key_to_result[(s.file_id, s.text)]
-                    for s in packed_sources
-                    if (s.file_id, s.text) in _key_to_result
-                ]
-                logger.info(
-                    "Token packing: %d results → %d results (budget=%d tokens)",
-                    len(temp_sources),
-                    len(packed_sources),
-                    settings.context_max_tokens,
-                )
+            # Determine final rerank_success value
+            # rerank_success is set inside the reranking block (from unpacking)
+            # or remains None if reranking wasn't attempted
+            if not self.reranking_enabled:
+                # Reranking is globally disabled
+                rerank_success = None
+            elif rerank_success is None:
+                # We attempted reranking but exception occurred, so no success value from service
+                rerank_success = None
             else:
-                if vector_results and settings.context_max_tokens <= 0:
-                    logger.info(
-                        "Token packing: disabled (context_max_tokens=%d)",
-                        settings.context_max_tokens,
-                    )
-
-            # Final limit to retrieval_top_k
-            vector_results = vector_results[: self.retrieval_top_k]
-
-            # Retrieval evaluation (CRAG-style self-evaluation)
-            relevance_hint: Optional[str] = None
-            if settings.retrieval_evaluation_enabled and self.llm_client is not None:
-                try:
-                    if self._retrieval_evaluator is None:
-                        self._retrieval_evaluator = RetrievalEvaluator(self.llm_client)
-                    eval_result = await self._retrieval_evaluator.evaluate(
-                        user_input, vector_results
-                    )
-                    if eval_result == "NO_MATCH":
-                        if logger.isEnabledFor(logging.DEBUG):
-                            logger.debug(
-                                "Retrieval evaluation: NO_MATCH for query '%s'",
-                                user_input,
-                            )
-                        relevance_hint = "Note: The retrieved documents may not be directly relevant to your query."
-                    elif eval_result == "AMBIGUOUS":
-                        if logger.isEnabledFor(logging.DEBUG):
-                            logger.debug(
-                                "Retrieval evaluation: AMBIGUOUS for query '%s'",
-                                user_input,
-                            )
-                except Exception as e:
-                    logger.warning("Retrieval evaluation failed: %s", e)
-
-            return vector_results, relevance_hint, eval_result
-        except Exception as exc:
-            logger.exception(
-                "[_execute_retrieval] UNHANDLED EXCEPTION in retrieval pipeline: %s, query=%.100s, vault_id=%s",
-                type(exc).__name__,
-                user_input,
-                vault_id,
+                # rerank_success is the boolean from the service (True=succeeded, False=fallback)
+                # Keep the value as-is
+                pass
+            logger.debug(
+                "[_execute_retrieval] Rerank success: %s",
+                rerank_success,
             )
+
+            # Compute score_type from actual rerank_success (not config flag)
+            if rerank_success:
+                score_type = "rerank"
+            else:
+                score_type = "distance"
+
+            # Compute hybrid_status from _fts_status in results
+            if not self.hybrid_search_enabled:
+                hybrid_status = "disabled"
+            else:
+                # Check if any result has _fts_status='ok'
+                has_fts_ok = any(
+                    r.get("_fts_status") == "ok" for r in vector_results
+                )
+                hybrid_status = "both" if has_fts_ok else "dense_only"
+
+            # Get FTS exceptions (call ONCE per query — resets counter)
+            fts_exceptions = self.vector_store.get_fts_exceptions()
+
+            # Compute rerank_status string from rerank_success boolean
+            if rerank_success is True:
+                rerank_status = "ok"
+            elif rerank_success is False:
+                rerank_status = "fallback"
+            else:
+                rerank_status = "disabled"
+
+        except RAGEngineError:
+            # Re-raise original query search failures immediately
             raise
+        except Exception as search_error:
+            # Handle paraphrase/search task failures - log and return empty results
+            logger.warning(
+                "[_execute_retrieval] Search phase exception: %s, using partial results",
+                search_error,
+            )
+            vector_results = []
+            rerank_success = None
+            score_type = "distance"
+            hybrid_status = "disabled"
+            fts_exceptions = 0
+            rerank_status = "disabled"
+            exact_match_promoted = False
+
+        # Phase 2: Evaluation/post-processing phase (only reached if search succeeds with results)
+        token_pack_stats: Dict[str, int] = {
+            "token_pack_included": 0,
+            "token_pack_skipped": 0,
+            "token_pack_truncated": 0,
+        }
+        if vector_results:
+            try:
+                # Token packing (only if we have results)
+                if settings.context_max_tokens > 0:
+                    temp_sources = [
+                        RAGSource(
+                            text=r.get("text", ""),
+                            file_id=str(r.get("file_id", "")),
+                            score=r.get("_distance", 0.0),
+                            metadata=r.get("metadata", {}),
+                        )
+                        for r in vector_results
+                    ]
+                    packed_sources, token_pack_stats = self._pack_context_by_token_budget(
+                        temp_sources, settings.context_max_tokens
+                    )
+                    # Rebuild vector_results in packed_sources ORDER (preserves reranker ranking).
+                    # Use (file_id, text) composite key — more unique than text alone.
+                    _key_to_result: Dict[tuple, Any] = {}
+                    for r in vector_results:
+                        k = (str(r.get("file_id", "")), r.get("text", ""))
+                        if k not in _key_to_result:  # first-seen wins (reranker order)
+                            _key_to_result[k] = r
+                    vector_results = [
+                        _key_to_result[(s.file_id, s.text)]
+                        for s in packed_sources
+                        if (s.file_id, s.text) in _key_to_result
+                    ]
+                    logger.info(
+                        "Token packing: %d results → %d results (budget=%d tokens, "
+                        "included=%d, skipped=%d, truncated=%d)",
+                        len(temp_sources),
+                        len(packed_sources),
+                        settings.context_max_tokens,
+                        token_pack_stats["token_pack_included"],
+                        token_pack_stats["token_pack_skipped"],
+                        token_pack_stats["token_pack_truncated"],
+                    )
+
+                # Final limit to retrieval_top_k
+                vector_results = vector_results[: self.retrieval_top_k]
+
+                # Retrieval evaluation (CRAG-style self-evaluation)
+                relevance_hint_eval: Optional[str] = None
+                if settings.retrieval_evaluation_enabled and self.llm_client is not None:
+                    try:
+                        if self._retrieval_evaluator is None:
+                            self._retrieval_evaluator = RetrievalEvaluator(self.llm_client)
+                        eval_result = await self._retrieval_evaluator.evaluate(
+                            user_input, vector_results
+                        )
+                        if eval_result == "NO_MATCH":
+                            if logger.isEnabledFor(logging.DEBUG):
+                                logger.debug(
+                                    "Retrieval evaluation: NO_MATCH for query '%s'",
+                                    user_input,
+                                )
+                            relevance_hint_eval = "Note: The retrieved documents may not be directly relevant to your query."
+                        elif eval_result == "AMBIGUOUS":
+                            if logger.isEnabledFor(logging.DEBUG):
+                                logger.debug(
+                                    "Retrieval evaluation: AMBIGUOUS for query '%s'",
+                                    user_input,
+                                )
+                    except Exception as e:
+                        logger.warning("Retrieval evaluation failed: %s", e)
+                # Final relevance_hint from evaluation, or None
+                final_relevance_hint = relevance_hint_eval
+
+            except Exception as eval_error:
+                logger.warning("Post-retrieval evaluation failed: %s", eval_error)
+                # Continue with original results if evaluation fails
+                # NOTE: Do NOT reset exact_match_promoted here — if promotion already
+                # succeeded (modifying vector_results ordering), the flag must remain True.
+
+        # Compute score_type from actual rerank_success (not config flag)
+        if rerank_success:
+            score_type = "rerank"
+        else:
+            score_type = "distance"
+
+        # Compute hybrid_status from _fts_status in results
+        if not self.hybrid_search_enabled:
+            hybrid_status = "disabled"
+        else:
+            # Check if any result has _fts_status='ok'
+            has_fts_ok = any(
+                r.get("_fts_status") == "ok" for r in vector_results
+            )
+            hybrid_status = "both" if has_fts_ok else "dense_only"
+
+        # Compute rerank_status string from rerank_success boolean
+        if rerank_success is True:
+            rerank_status = "ok"
+        elif rerank_success is False:
+            rerank_status = "fallback"
+        else:
+            rerank_status = "disabled"
+
+        return vector_results, final_relevance_hint, eval_result, rerank_success, score_type, hybrid_status, fts_exceptions, rerank_status, variants_dropped, exact_match_promoted, token_pack_stats
 
     async def _stream_llm_response(
         self,
@@ -591,23 +833,48 @@ class RAGEngine:
         self,
         relevant_chunks: List[RAGSource],
         memories: List[Any],
+        score_type: str,
+        hybrid_status: str,
+        fts_exceptions: int,
+        rerank_status: str,
+        variants_dropped: List[str] = None,
+        exact_match_promoted: bool = False,
+        token_pack_stats: Optional[Dict[str, int]] = None,
     ) -> Dict[str, Any]:
         """Build the final done message with sources.
 
         Args:
             relevant_chunks: Filtered relevant chunks
             memories: Retrieved memories
+            score_type: Score type used ("rerank" or "distance")
+            hybrid_status: Hybrid search status ("disabled", "dense_only", or "both")
+            fts_exceptions: Number of FTS exceptions encountered
+            rerank_status: Reranking status ("ok", "fallback", or "disabled")
+            variants_dropped: Query variant types that failed embedding/search
+            exact_match_promoted: Whether exact-match promotion was triggered
+            token_pack_stats: Token packing counters (included, skipped, truncated)
 
         Returns:
             Done message dictionary
         """
+        _pack_stats = token_pack_stats or {
+            "token_pack_included": 0,
+            "token_pack_skipped": 0,
+            "token_pack_truncated": 0,
+        }
         retrieval_debug: Dict[str, Any] = {
             "max_distance_threshold": self.max_distance_threshold,
             "vector_metric": self.vector_metric,
             "retrieval_top_k": self.retrieval_top_k,
+            "hybrid_status": hybrid_status,
+            "fts_exceptions": fts_exceptions,
+            "rerank_status": rerank_status,
+            "variants_dropped": variants_dropped or [],
+            "exact_match_promoted": exact_match_promoted if settings.exact_match_promote else None,
+            "token_pack_included": _pack_stats["token_pack_included"],
+            "token_pack_skipped": _pack_stats["token_pack_skipped"],
+            "token_pack_truncated": _pack_stats["token_pack_truncated"],
         }
-
-        score_type = "rerank" if self.reranking_enabled else "distance"
 
         # Split into primary and supporting (same split as prompt builder)
         primary_count = calculate_primary_count(len(relevant_chunks))
@@ -668,27 +935,98 @@ class RAGEngine:
 
     def _pack_context_by_token_budget(
         self, chunks: List[RAGSource], max_tokens: int = 6000
-    ) -> List[RAGSource]:
+    ) -> Tuple[List[RAGSource], Dict[str, int]]:
         """
         Pack context chunks by token budget, respecting max token limit.
 
+        Strategy is controlled by settings.token_pack_strategy:
+
+        - ``reserved_best_fit`` (default): Always includes the top
+          ``min(3, len(chunks))`` chunks regardless of budget (never skipped).
+          For remaining chunks, uses best-fit: a chunk that doesn't fit is
+          *skipped* but evaluation continues for smaller subsequent chunks
+          (no early ``break``).  Oversize reserved chunks are tracked in
+          ``token_pack_truncated`` — they inflate the running total but are
+          never dropped.
+
+        - ``greedy`` (legacy): First-fit scan; stops entirely on first overflow
+          (original behavior, kept for rollback).
+
         Args:
-            chunks: List of RAGSource chunks to pack
-            max_tokens: Maximum tokens allowed (default 6000)
+            chunks: List of RAGSource chunks to pack (in rank order).
+            max_tokens: Approximate token budget (default 6000).
 
         Returns:
-            List of RAGSource chunks that fit within the token budget
+            Tuple of (packed_chunks, debug_stats) where debug_stats contains:
+              - token_pack_included: count of chunks included
+              - token_pack_skipped:  count of rank-4+ chunks that didn't fit
+              - token_pack_truncated: count of reserved top-3 chunks whose
+                                      token estimate exceeded the remaining budget
+                                      (included anyway; no actual text modification)
         """
-        packed, token_count = [], 0
-        for chunk in chunks:
-            # ~3.5 chars/token for English; errs on the side of overestimation
-            # to prevent context overflow (safer than the previous len//4 undercount)
+        _empty_stats: Dict[str, int] = {
+            "token_pack_included": 0,
+            "token_pack_skipped": 0,
+            "token_pack_truncated": 0,
+        }
+        if not chunks:
+            return [], _empty_stats
+
+        strategy = settings.token_pack_strategy
+
+        if strategy == "greedy":
+            packed, token_count = [], 0
+            for chunk in chunks:
+                # ~3.5 chars/token for English; overestimates to prevent overflow
+                chunk_tokens = max(1, int(len(chunk.text) / 3.5))
+                if token_count + chunk_tokens > max_tokens and packed:
+                    break
+                packed.append(chunk)
+                token_count += chunk_tokens
+            stats: Dict[str, int] = {
+                "token_pack_included": len(packed),
+                "token_pack_skipped": max(0, len(chunks) - len(packed)),
+                "token_pack_truncated": 0,
+            }
+            return packed, stats
+
+        # reserved_best_fit (default)
+        n_reserved = min(3, len(chunks))
+        reserved_chunks = chunks[:n_reserved]
+        remaining_chunks = chunks[n_reserved:]
+
+        packed = []
+        token_count = 0
+        truncated = 0
+
+        # Phase 1: reserved top-N — always include, even if over budget.
+        # Track when a reserved chunk pushes past the remaining budget.
+        for chunk in reserved_chunks:
             chunk_tokens = max(1, int(len(chunk.text) / 3.5))
             if token_count + chunk_tokens > max_tokens and packed:
-                break
+                # Over budget for this reserved slot — include anyway, mark truncated.
+                # (The LLM context window provides the final safety net.)
+                truncated += 1
             packed.append(chunk)
             token_count += chunk_tokens
-        return packed
+
+        # Phase 2: best-fit for rank 4+ — skip overflows but keep evaluating.
+        skipped = 0
+        for chunk in remaining_chunks:
+            chunk_tokens = max(1, int(len(chunk.text) / 3.5))
+            if token_count + chunk_tokens <= max_tokens:
+                packed.append(chunk)
+                token_count += chunk_tokens
+            else:
+                skipped += 1
+                # Intentionally no ``break``: continue checking smaller chunks.
+
+        stats = {
+            "token_pack_included": len(packed),
+            "token_pack_skipped": skipped,
+            "token_pack_truncated": truncated,
+        }
+        return packed, stats
 
     async def _check_supersession(self, sources: List[RAGSource]) -> Optional[str]:
         """Query SQLite to check if any retrieved files have been superseded by newer versions.
@@ -735,6 +1073,66 @@ class RAGEngine:
         except Exception as exc:
             logger.warning("Supersession check failed (suppressed): %s", exc)
         return None
+
+    def _get_indexed_file_ids(self, vault_id: Optional[int]) -> Optional[Set[str]]:
+        """Return the set of file IDs with status='indexed' from SQLite (Issue #13).
+
+        Used to filter out chunks belonging to files still being ingested (pending /
+        processing) so that partial-ingest state is never visible to the LLM.
+
+        Args:
+            vault_id: If provided, restrict to files in this vault.
+
+        Returns:
+            Set of str file IDs, or None if the lookup fails (caller falls back to
+            no filtering rather than blocking the query).
+        """
+        try:
+            pool = _get_pool()
+            conn = pool.get_connection()
+            try:
+                if vault_id is not None:
+                    cursor = conn.execute(
+                        "SELECT id FROM files WHERE status='indexed' AND vault_id=?",
+                        (vault_id,),
+                    )
+                else:
+                    cursor = conn.execute("SELECT id FROM files WHERE status='indexed'")
+                rows = cursor.fetchall()
+                return {str(row["id"]) for row in rows}
+            finally:
+                pool.release_connection(conn)
+        except Exception as exc:
+            logger.debug("_get_indexed_file_ids failed: %s", exc)
+            return None
+
+    def _expand_parent_windows(self, sources: List[RAGSource]) -> List[RAGSource]:
+        """Populate parent_window_text on each source when available (Issue #12).
+
+        Reads the pre-computed ``parent_window_text`` from chunk metadata (stored
+        at ingest time) and assigns it to ``source.parent_window_text``.  The
+        prompt_builder renders this wider context with ``[[MATCH: …]]`` markers
+        around the original small-chunk text so the LLM sees both the precise match
+        and its surrounding context.
+
+        Only active when ``PARENT_RETRIEVAL_ENABLED=True``.  If a chunk has no
+        stored parent window (legacy chunks, spreadsheets, schema files), the field
+        remains None and the chunk's own text is used as-is.
+        """
+        expanded = 0
+        for source in sources:
+            pw_text = source.metadata.get("parent_window_text")
+            if pw_text:
+                source.parent_window_text = pw_text
+                expanded += 1
+
+        if expanded:
+            logger.debug(
+                "_expand_parent_windows: expanded %d/%d chunks with parent window context",
+                expanded,
+                len(sources),
+            )
+        return sources
 
     async def _expand_window(self, sources: List[RAGSource]) -> List[RAGSource]:
         """Expand search results by fetching adjacent chunks (backward compatibility).

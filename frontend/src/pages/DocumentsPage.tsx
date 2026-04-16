@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useDropzone, type FileRejection } from "react-dropzone";
 import { toast } from "sonner";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -50,6 +51,9 @@ export default function DocumentsPage() {
   }>({ open: false, title: "", description: "", onConfirm: () => {} });
   const [filenameColWidth, setFilenameColWidth] = useState<number>(250);
   const dragState = useRef<{ startX: number; startWidth: number }>({ startX: 0, startWidth: 0 });
+  const pollIntervalMsRef = useRef(2_000);
+  const tableScrollRef = useRef<HTMLDivElement>(null);
+  const mobileScrollRef = useRef<HTMLDivElement>(null);
 
   // Cleanup on unmount: restore cursor if component is destroyed during a drag
   useEffect(() => {
@@ -114,20 +118,27 @@ export default function DocumentsPage() {
     loadData();
   }, [fetchDocuments, fetchStats]);
 
-  // Status polling for documents in processing state
+  // Status polling for documents in processing state — adaptive backoff.
+  // Starts fast (2 s) and backs off up to 30 s when no status change is detected,
+  // resetting to fast whenever processing restarts.
   useEffect(() => {
     const hasProcessingDocs = documents?.some(
       (doc) => doc.metadata?.status === "processing" || doc.metadata?.status === "pending"
     );
 
-    if (!hasProcessingDocs) return;
+    if (!hasProcessingDocs) {
+      pollIntervalMsRef.current = 2_000;
+      return;
+    }
 
-    const interval = setInterval(() => {
+    const delay = pollIntervalMsRef.current;
+    const timer = setTimeout(() => {
+      pollIntervalMsRef.current = Math.min(pollIntervalMsRef.current * 1.5, 30_000);
       fetchDocuments();
       fetchStats();
-    }, 5000);
+    }, delay);
 
-    return () => clearInterval(interval);
+    return () => clearTimeout(timer);
   }, [documents, fetchDocuments, fetchStats]);
 
   // Refresh documents when uploads complete
@@ -287,6 +298,21 @@ export default function DocumentsPage() {
     ) ?? [],
     [documents, debouncedSearchQuery]
   );
+
+  const tableVirtualizer = useVirtualizer({
+    count: filteredDocuments.length,
+    getScrollElement: () => tableScrollRef.current,
+    estimateSize: () => 56,
+    overscan: 5,
+  });
+
+  const mobileVirtualizer = useVirtualizer({
+    count: filteredDocuments.length,
+    getScrollElement: () => mobileScrollRef.current,
+    estimateSize: () => 200,
+    overscan: 3,
+    measureElement: (el) => el?.getBoundingClientRect().height ?? 0,
+  });
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
@@ -453,7 +479,7 @@ export default function DocumentsPage() {
                   </div>
                 </div>
                 {upload.status === "uploading" && (
-                  <Progress value={upload.progress} className="h-1.5" />
+                  <Progress value={upload.progress} className="h-1.5" aria-label="Processing progress" />
                 )}
               </div>
             ))}
@@ -609,13 +635,13 @@ export default function DocumentsPage() {
           {/* Desktop Table View (hidden on mobile) */}
           <Card className="hidden sm:block">
             <CardContent className="p-0">
-              <div className="overflow-x-auto">
+              <div ref={tableScrollRef} className="overflow-auto" style={{ maxHeight: '70vh' }}>
                 <table className="w-full" style={{ tableLayout: 'fixed' }}>
                   <caption className="sr-only">Documents List</caption>
-                  <thead>
-                    <tr className="border-b bg-muted/50">
-                      <th scope="col" className="text-left p-4 font-medium">
-                        <Checkbox 
+                  <thead style={{ position: 'sticky', top: 0, zIndex: 10 }}>
+                    <tr className="border-b bg-muted" style={{ display: 'flex' }}>
+                      <th scope="col" className="text-left p-4 font-medium flex-none w-12">
+                        <Checkbox
                           checked={selectedIds.size > 0 && selectedIds.size === filteredDocuments.length}
                           onCheckedChange={handleSelectAll}
                           aria-label="Select all documents"
@@ -623,8 +649,8 @@ export default function DocumentsPage() {
                       </th>
                       <th
                         scope="col"
-                        className="text-left p-4 font-medium relative"
-                        style={{ width: filenameColWidth }}
+                        className="text-left p-4 font-medium relative flex-none"
+                        style={{ width: filenameColWidth, flexShrink: 0 }}
                       >
                         Filename
                         <div
@@ -635,44 +661,58 @@ export default function DocumentsPage() {
                           aria-label="Resize filename column"
                         />
                       </th>
-                      <th scope="col" className="text-left p-4 font-medium">Status</th>
-                      <th scope="col" className="text-left p-4 font-medium">Chunks</th>
-                      <th scope="col" className="text-left p-4 font-medium">Size</th>
-                      <th scope="col" className="text-left p-4 font-medium">Uploaded</th>
-                      <th scope="col" className="text-right p-4 font-medium">Actions</th>
+                      <th scope="col" className="text-left p-4 font-medium flex-none w-[120px]">Status</th>
+                      <th scope="col" className="text-left p-4 font-medium flex-none w-20">Chunks</th>
+                      <th scope="col" className="text-left p-4 font-medium flex-none w-[100px]">Size</th>
+                      <th scope="col" className="text-left p-4 font-medium flex-none w-[140px]">Uploaded</th>
+                      <th scope="col" className="text-right p-4 font-medium flex-none w-[60px]">Actions</th>
                     </tr>
                   </thead>
-                  <tbody>
-                    {filteredDocuments.map((doc) => {
+                  <tbody style={{ height: `${tableVirtualizer.getTotalSize()}px`, position: 'relative' }}>
+                    {tableVirtualizer.getVirtualItems().map((virtualItem) => {
+                      const doc = filteredDocuments[virtualItem.index];
                       const docId = String(doc.id);
                       const isSelected = Boolean(selectedIds.has(docId));
                       return (
-                        <tr key={doc.id} className={`border-b hover:bg-muted/50 ${isSelected ? 'bg-muted/30' : ''}`}>
-                          <td className="p-4">
-                            <Checkbox 
+                        <tr
+                          key={doc.id}
+                          data-index={virtualItem.index}
+                          ref={tableVirtualizer.measureElement}
+                          style={{
+                            position: 'absolute',
+                            top: virtualItem.start,
+                            left: 0,
+                            width: '100%',
+                            display: 'flex',
+                          }}
+                          className={`border-b hover:bg-muted/50 ${isSelected ? 'bg-muted/30' : ''}`}
+                        >
+                          <td className="p-4 flex-none w-12">
+                            <Checkbox
                               checked={isSelected}
                               onCheckedChange={(checked) => handleSelectOne(String(doc.id), !!checked)}
                               aria-label={`Select ${doc.filename}`}
                             />
                           </td>
-                          <td className="p-4">
+                          <td className="p-4 flex-none" style={{ width: filenameColWidth, flexShrink: 0 }}>
                             <div className="flex items-center gap-2">
                               <FileText className="w-4 h-4 text-muted-foreground" />
                               <span className="font-medium truncate max-w-full" title={doc.filename}>{doc.filename}</span>
                             </div>
                           </td>
-                          <td className="p-4"><StatusBadge status={doc.metadata?.status as string} /></td>
-                          <td className="p-4">{String(doc.metadata?.chunk_count ?? 0)}</td>
-                          <td className="p-4">{formatFileSize(doc.size)}</td>
-                          <td className="p-4 text-muted-foreground">{formatDate(doc.created_at)}</td>
-                          <td className="p-4 text-right">
-                            <Button 
-                              variant="ghost" 
-                              size="icon" 
-                              className="min-w-[44px] min-h-[44px]" 
+                          <td className="p-4 flex-none w-[120px]"><StatusBadge status={doc.metadata?.status as string} /></td>
+                          <td className="p-4 flex-none w-20">{String(doc.metadata?.chunk_count ?? 0)}</td>
+                          <td className="p-4 flex-none w-[100px]">{formatFileSize(doc.size)}</td>
+                          <td className="p-4 flex-none w-[140px] text-muted-foreground">{formatDate(doc.created_at)}</td>
+                          <td className="p-4 flex-none w-[60px] text-right">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="min-w-[44px] min-h-[44px]"
                               onClick={() => handleDeleteDocument(String(doc.id))}
+                              aria-label="Delete document"
                             >
-                              <Trash2 className="w-4 h-4 text-destructive" />
+                              <Trash2 className="w-4 h-4 text-destructive" aria-hidden="true" />
                             </Button>
                           </td>
                         </tr>
@@ -685,16 +725,33 @@ export default function DocumentsPage() {
           </Card>
 
            {/* Mobile Cards View (hidden on desktop) */}
-           <div className="grid grid-cols-1 gap-3 sm:hidden">
-             {filteredDocuments.map((doc) => (
-               <DocumentCard
-                 key={doc.id}
-                 document={doc}
-                 onDelete={(id) => handleDeleteDocument(String(id))}
-                 isSelected={selectedIds.has(doc.id)}
-                 onSelectionChange={handleSelectOne}
-               />
-             ))}
+           <div ref={mobileScrollRef} className="sm:hidden" style={{ maxHeight: '70vh', overflowY: 'auto' }}>
+             <div style={{ height: mobileVirtualizer.getTotalSize(), position: 'relative' }}>
+               {mobileVirtualizer.getVirtualItems().map((virtualItem) => {
+                 const doc = filteredDocuments[virtualItem.index];
+                 return (
+                   <div
+                     key={doc.id}
+                     data-index={virtualItem.index}
+                     ref={mobileVirtualizer.measureElement}
+                     style={{
+                       position: 'absolute',
+                       top: virtualItem.start,
+                       left: 0,
+                       width: '100%',
+                       paddingTop: '0.75rem',
+                     }}
+                   >
+                     <DocumentCard
+                       document={doc}
+                       onDelete={(id) => handleDeleteDocument(String(id))}
+                       isSelected={selectedIds.has(doc.id)}
+                       onSelectionChange={handleSelectOne}
+                     />
+                   </div>
+                 );
+               })}
+             </div>
            </div>
         </>
       )}

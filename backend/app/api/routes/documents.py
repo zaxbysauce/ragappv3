@@ -478,7 +478,7 @@ async def get_document_stats(
 async def upload_document_root(
     request: Request,
     file: Optional[UploadFile] = None,
-    vault_id: int = Query(1, description="Target vault ID"),
+    vault_id: int = Query(..., description="Target vault ID (required — no default)"),
     settings_dep: Settings = Depends(get_settings),
     vector_store: VectorStore = Depends(get_vector_store),
     embedding_service: EmbeddingService = Depends(get_embedding_service),
@@ -498,7 +498,7 @@ async def upload_document_root(
 async def upload_document(
     request: Request,
     file: Optional[UploadFile] = None,
-    vault_id: int = Query(1, description="Target vault ID"),
+    vault_id: int = Query(..., description="Target vault ID (required — no default)"),
     settings_dep: Settings = Depends(get_settings),
     vector_store: VectorStore = Depends(get_vector_store),
     embedding_service: EmbeddingService = Depends(get_embedding_service),

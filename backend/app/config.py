@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     """Character-based chunk size for document processing. Default 1200 chars (~300 tokens) leaves room for instruction prefix."""
     chunk_overlap_chars: int | None = None
     """Character-based overlap between chunks. Default 120 chars (~30 tokens)."""
-    document_parsing_strategy: str = "fast"
+    document_parsing_strategy: str = "auto"
     """Document parsing strategy for unstructured.io: 'fast' (fastest), 'hi_res' (best quality), 'auto' (automatic selection)."""
     document_parse_timeout: float = 300.0
     """Timeout in seconds for document parsing. Prevents worker threads from being blocked indefinitely by complex documents."""
@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     """Number of top chunks to retrieve (unifies max_context_chunks and vector_top_k)."""
     vector_metric: str = "cosine"
     """Distance metric for vector similarity search."""
-    max_distance_threshold: float = 1.0
+    max_distance_threshold: float = 0.5
     """Maximum distance threshold for relevance filtering (replaces rag_relevance_threshold).
 
     For cosine distance: 0=identical, 1=orthogonal, 2=opposite.
@@ -69,6 +69,10 @@ class Settings(BaseSettings):
     embedding_batch_min_sub_size: int = 1
     """Minimum sub-batch size for adaptive batching fallback."""
 
+    # ── Embedding model validation configuration ───────────────────────────────────
+    strict_embedding_model_check: bool = True
+    """Enable strict validation that the live TEI model matches EMBEDDING_MODEL at startup."""
+
     # ── Reranker configuration ────────────────────────────────────────────────
     reranker_url: str = ""
     """TEI-compatible reranker endpoint URL. Empty = use sentence-transformers locally."""
@@ -86,6 +90,24 @@ class Settings(BaseSettings):
     """Combine BM25 keyword search with dense vector search using RRF fusion."""
     hybrid_alpha: float = 0.6
     """Weight for dense vs BM25 scores in RRF. 0.0 = pure BM25, 1.0 = pure dense."""
+
+    # ── RRF fusion tuning ───────────────────────────────────────────────────
+    hybrid_rrf_k: int = 60
+    """RRF k parameter for per-arm dense/FTS fusion within a single scale. Lower = sharper top-list preference."""
+    multi_query_rrf_k: int = 60
+    """RRF k parameter for cross-variant fusion (original + stepback + HyDE). Lower = sharper top-list preference. Operators may lower to 20 for recall-heavy workloads."""
+    multi_scale_rrf_k: int = 60
+    """RRF k parameter for multi-scale fusion across chunk sizes."""
+    rrf_weight_original: float = 1.0
+    """Weight for original query arm in cross-variant RRF fusion. Applied directly (not normalized). Defaults sum to 2.0."""
+    rrf_weight_stepback: float = 0.5
+    """Weight for step-back variant arm in cross-variant RRF fusion. Applied directly (not normalized). Set to 0.0 to exclude."""
+    rrf_weight_hyde: float = 0.5
+    """Weight for HyDE variant arm in cross-variant RRF fusion. Applied directly (not normalized). Set to 0.0 to exclude."""
+    exact_match_promote: bool = True
+    """Promote the top-1 dense result from the original query into the top-5 of fused results if missing. Belt-and-suspenders safeguard against fusion math demoting exact matches."""
+    rrf_legacy_mode: bool = False
+    """When True, forces k=60 uniform weights and disables exact-match promotion. Fast rollback to pre-change behavior."""
 
     # ── Contextual chunking configuration ─────────────────────────────────────
     contextual_chunking_enabled: bool = True
@@ -105,6 +127,18 @@ class Settings(BaseSettings):
     query_transformation_enabled: bool = True
     """Enable query transformation using step-back prompting for broader retrieval."""
 
+    stepback_enabled: bool = True
+    """Enable step-back prompting: generate a broader, more general version of the query to improve recall."""
+
+    query_transform_temperature: float = 0.0
+    """Temperature for LLM calls during query transformation (step-back). Set to 0.0 for deterministic results."""
+
+    hyde_temperature: float = 0.0
+    """Temperature for LLM calls during HyDE hypothetical document generation. Set to 0.0 for deterministic results."""
+
+    query_transform_cache_ttl_sec: int = 86400
+    """Time-to-live in seconds for cached query transformation results. Default 24 hours."""
+
     # ── Retrieval evaluation configuration ────────────────────────────────────
     retrieval_evaluation_enabled: bool = True
     """Enable CRAG-style retrieval evaluation (CONFIDENT/AMBIGUOUS/NO_MATCH classification)."""
@@ -117,19 +151,30 @@ class Settings(BaseSettings):
     """Cosine similarity threshold for sentence deduplication in context distillation (0.0-1.0)."""
 
     context_distillation_synthesis_enabled: bool = True
-    """Enable LLM-based context synthesis when retrieval evaluation returns NO_MATCH or AMBIGUOUS."""
+    """Enable LLM-based context synthesis when retrieval evaluation returns NO_MATCH only."""
 
     # ── Token budget configuration ────────────────────────────────────────
     context_max_tokens: int = 6000
     """Maximum approximate tokens for packed context before prompt building."""
+
+    primary_evidence_count: int = 0
+    """Override for primary evidence chunk count in prompt builder. 0 = use formula (min(max(n-2, 3), min(n, 5)))."""
+
+    anchor_best_chunk: bool = True
+    """Anchor the top-ranked chunk at both the start and end of the context region.
+    Standard mitigation for lost-in-the-middle. Skipped if the top chunk exceeds 50% of context_max_tokens."""
+
+    token_pack_strategy: str = "reserved_best_fit"
+    """Token packing strategy: 'reserved_best_fit' reserves top-3 (never skipped) and uses best-fit for
+    remaining chunks (no early break). 'greedy' is the legacy first-fit with early break."""
 
     # ── Chunking strategy ──────────────────────────────────────────────
     semantic_chunking_strategy: str = "title"
     """Chunking strategy: 'title' for fixed-size, 'embedding' for cosine-similarity breakpoints."""
 
     # ── HyDE (Hypothetical Document Embeddings) configuration ──
-    hyde_enabled: bool = True
-    """Enable HyDE: generate a hypothetical answer passage and embed it as additional query vector."""
+    hyde_enabled: bool = False
+    """Enable HyDE: generate a hypothetical answer passage and embed it as additional query vector. Default False."""
 
     # ── Sparse search configuration ──────────────────────────────────
     sparse_search_max_candidates: int = 1000
@@ -144,6 +189,41 @@ class Settings(BaseSettings):
 
     recency_decay_lambda: float = 0.001
     """Exponential decay rate (lambda) for recency scoring. Higher values decay faster."""
+
+    # ── Parent-document retrieval configuration (Issue #12) ──────────────────
+    parent_retrieval_enabled: bool = False
+    """Enable parent-window expansion at prompt time: retrieve on small chunks, deliver the
+    surrounding parent window to the LLM for broader context. Default False until migration
+    (add_parent_window) has been run and verified in staging.  Flip to True after migration."""
+
+    new_dedup_policy: bool = True
+    """Enable group-aware dedup: preserve up to PER_DOC_CHUNK_CAP chunks per document and
+    cap breadth at UNIQUE_DOCS_IN_TOP_K distinct documents. Replaces UID-strip dedup that
+    collapsed the best document's multiple strong chunks to one. Default True (safe improvement)."""
+
+    per_doc_chunk_cap: int = 5
+    """Maximum chunks kept per document after group-aware dedup. Higher values give more
+    context from each document at the cost of less diversity across sources."""
+
+    unique_docs_in_top_k: int = 5
+    """Maximum distinct documents allowed in the final dedup output when new_dedup_policy is
+    enabled. Balances breadth vs. depth in source diversity."""
+
+    parent_window_chars: int = 6000
+    """Size of the parent window (in characters) delivered to the prompt when
+    parent_retrieval_enabled=True. The matched small chunk is bracketed with [[MATCH:…]]
+    markers inside this window for the LLM to orient itself."""
+
+    # ── Ingestion integrity configuration (Issue #13) ────────────────────────
+    index_rebuild_delta: float = 0.2
+    """Fraction of row churn (deletes / previous row count) that triggers an IVF_PQ index
+    rebuild. Default 0.2 = 20% row loss triggers rebuild. Keeps ANN search accurate after
+    bulk deletes without rebuilding on every small delete."""
+
+    reupload_safe_order: bool = True
+    """Use insert-then-delete ordering for re-uploads with a changed file hash. When True,
+    new chunks are inserted and the file pointer is flipped BEFORE old chunks are deleted,
+    ensuring the corpus is never in a zero-chunk state for a live document."""
 
     # ── Tri-vector embedding configuration (deprecated) ───────────────────────
     tri_vector_search_enabled: bool = False
@@ -384,6 +464,12 @@ class Settings(BaseSettings):
             v, {"fast", "hi_res", "auto"}, "document_parsing_strategy"
         )
 
+    @field_validator("token_pack_strategy", mode="after")
+    @classmethod
+    def validate_token_pack_strategy(cls, v: str) -> str:
+        """Validate token_pack_strategy is one of: reserved_best_fit, greedy."""
+        return cls._validate_enum(v, {"reserved_best_fit", "greedy"}, "token_pack_strategy")
+
     @field_validator("multi_scale_chunk_sizes", mode="after")
     @classmethod
     def validate_multi_scale_chunk_sizes(cls, v: str) -> str:
@@ -407,11 +493,56 @@ class Settings(BaseSettings):
         """Validate multi_scale_overlap_ratio is in range 0.0-1.0."""
         return cls._validate_float_range(v, 0.0, 1.0, "multi_scale_overlap_ratio")
 
+    @field_validator("index_rebuild_delta", mode="after")
+    @classmethod
+    def validate_index_rebuild_delta(cls, v: float) -> float:
+        """Validate index_rebuild_delta is in range 0.0-1.0."""
+        return cls._validate_float_range(v, 0.0, 1.0, "index_rebuild_delta")
+
+    @field_validator("per_doc_chunk_cap", mode="after")
+    @classmethod
+    def validate_per_doc_chunk_cap(cls, v: int) -> int:
+        """Validate per_doc_chunk_cap is >= 1."""
+        return cls._validate_int_range(v, 1, None, "per_doc_chunk_cap")
+
+    @field_validator("unique_docs_in_top_k", mode="after")
+    @classmethod
+    def validate_unique_docs_in_top_k(cls, v: int) -> int:
+        """Validate unique_docs_in_top_k is >= 1."""
+        return cls._validate_int_range(v, 1, None, "unique_docs_in_top_k")
+
     @field_validator("hybrid_alpha", mode="after")
     @classmethod
     def validate_hybrid_alpha(cls, v: float) -> float:
         """Validate hybrid_alpha is in range 0.0-1.0."""
         return cls._validate_float_range(v, 0.0, 1.0, "hybrid_alpha")
+
+    @field_validator("rrf_weight_original", "rrf_weight_stepback", "rrf_weight_hyde", mode="after")
+    @classmethod
+    def validate_rrf_weights(cls, v: float) -> float:
+        """Validate RRF weights are non-negative."""
+        if v < 0.0:
+            raise ValueError("RRF weights must be >= 0.0")
+        return v
+
+    @field_validator("hybrid_rrf_k", "multi_query_rrf_k", "multi_scale_rrf_k", mode="after")
+    @classmethod
+    def validate_rrf_k(cls, v: int) -> int:
+        """Validate RRF k parameters are >= 1 (prevents ZeroDivisionError in 1/(k+rank))."""
+        if v < 1:
+            raise ValueError("RRF k must be >= 1")
+        return v
+
+    @model_validator(mode="after")
+    def validate_rrf_weight_sanity(self) -> "Settings":
+        """Validate at least one RRF arm weight is > 0.0 to prevent silent retrieval outage."""
+        if (
+            self.rrf_weight_original == 0.0
+            and self.rrf_weight_stepback == 0.0
+            and self.rrf_weight_hyde == 0.0
+        ):
+            raise ValueError("At least one RRF arm weight must be > 0.0")
+        return self
 
     @model_validator(mode="after")
     def validate_batch_config_consistency(self) -> "Settings":
@@ -433,6 +564,14 @@ class Settings(BaseSettings):
         if self.users_enabled and self.jwt_secret_key == "change-me-to-a-random-64-char-string":
             raise ValueError(
                 "JWT_SECRET_KEY must be changed from the default when USERS_ENABLED=True. "
+                'Generate one with: python -c "import secrets; print(secrets.token_urlsafe(48))"'
+            )
+        # Single-admin mode: admin_secret_token is the ONLY authentication mechanism.
+        # Running without it means the application has no authentication at all.
+        if not self.users_enabled and not self.admin_secret_token.strip():
+            raise ValueError(
+                "ADMIN_SECRET_TOKEN must be set when USERS_ENABLED=False (single-admin mode). "
+                "In single-admin mode this token is the sole authentication mechanism. "
                 'Generate one with: python -c "import secrets; print(secrets.token_urlsafe(48))"'
             )
         return self
@@ -496,33 +635,6 @@ class Settings(BaseSettings):
     @property
     def sqlite_path(self) -> Path:
         return self.data_dir / "app.db"
-
-    @property
-    def effective_embedding_doc_prefix(self) -> str:
-        """Effective document prefix for embedding. Harrier and BGE-M3 don't use prefixes."""
-        if self.embedding_doc_prefix:
-            return self.embedding_doc_prefix
-        # Harrier base model: symmetric retrieval — no prefix needed
-        if "harrier" in self.embedding_model.lower():
-            return ""
-        # Auto-apply Qwen3 instruction prefix only for Qwen models
-        if "qwen" in self.embedding_model.lower():
-            return "Instruct: Represent this technical documentation passage for retrieval.\nDocument: "
-        return ""
-
-    @property
-    def effective_embedding_query_prefix(self) -> str:
-        """Effective query prefix for embedding. Harrier and BGE-M3 don't use prefixes."""
-        if self.embedding_query_prefix:
-            return self.embedding_query_prefix
-        # Harrier base model: symmetric retrieval — no prefix needed
-        if "harrier" in self.embedding_model.lower():
-            return ""
-        if "qwen" in self.embedding_model.lower():
-            return (
-                "Instruct: Retrieve relevant technical documentation passages.\nQuery: "
-            )
-        return ""
 
 
 # Global settings instance

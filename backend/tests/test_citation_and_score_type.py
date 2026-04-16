@@ -32,8 +32,8 @@ class TestCitationInstruction:
         """Verify CITATION_INSTRUCTION contains the source citation format."""
         from app.services.prompt_builder import CITATION_INSTRUCTION
 
-        assert "[Source: filename]" in CITATION_INSTRUCTION, (
-            "CITATION_INSTRUCTION should contain '[Source: filename]' format instruction"
+        assert "[S1]" in CITATION_INSTRUCTION or "[S#]" in CITATION_INSTRUCTION, (
+            "CITATION_INSTRUCTION should contain source label format (e.g. [S1], [S2], [S3])"
         )
 
     def test_citation_instruction_contains_not_available(self):
@@ -114,7 +114,7 @@ class TestBuildDoneMessageScoreType:
         engine = RAGEngine()
         engine.reranking_enabled = False
 
-        result = engine._build_done_message([], [])
+        result = engine._build_done_message([], [], "distance", "disabled", 0, "disabled")
 
         assert "score_type" in result, (
             "_build_done_message result should include 'score_type' field"
@@ -125,20 +125,18 @@ class TestBuildDoneMessageScoreType:
         )
 
     def test_done_message_has_score_type_rerank(self):
-        """Verify score_type is 'rerank' when reranking is enabled."""
+        """Verify score_type is 'rerank' when passed as parameter."""
         from app.services.rag_engine import RAGEngine
 
-        # Create engine with reranking enabled
         engine = RAGEngine()
-        engine.reranking_enabled = True
 
-        result = engine._build_done_message([], [])
+        result = engine._build_done_message([], [], "rerank", "disabled", 0, "disabled")
 
         assert "score_type" in result, (
             "_build_done_message result should include 'score_type' field"
         )
         assert result["score_type"] == "rerank", (
-            f"score_type should be 'rerank' when reranking_enabled=True, "
+            f"score_type should be 'rerank' when passed 'rerank', "
             f"got {result['score_type']!r}"
         )
 
@@ -149,7 +147,7 @@ class TestBuildDoneMessageScoreType:
         engine = RAGEngine()
         engine.reranking_enabled = False
 
-        result = engine._build_done_message([], [])
+        result = engine._build_done_message([], [], "distance", "disabled", 0, "disabled")
 
         assert isinstance(result["score_type"], str), (
             f"score_type should be a string, got {type(result['score_type'])}"
@@ -161,7 +159,7 @@ class TestBuildDoneMessageScoreType:
 
         engine = RAGEngine()
 
-        result = engine._build_done_message([], [])
+        result = engine._build_done_message([], [], "distance", "disabled", 0, "disabled")
 
         expected_fields = {
             "type",
@@ -217,18 +215,17 @@ class TestScoreTypeEdgeCases:
     """Edge case tests for score_type field."""
 
     def test_score_type_reflects_runtime_changes(self):
-        """Verify score_type reflects runtime changes to reranking_enabled."""
+        """Verify score_type reflects the parameter passed to _build_done_message."""
         from app.services.rag_engine import RAGEngine
 
         engine = RAGEngine()
 
-        # Test toggling reranking_enabled
-        engine.reranking_enabled = False
-        result = engine._build_done_message([], [])
+        # Test with distance score_type
+        result = engine._build_done_message([], [], "distance", "disabled", 0, "disabled")
         assert result["score_type"] == "distance"
 
-        engine.reranking_enabled = True
-        result = engine._build_done_message([], [])
+        # Test with rerank score_type
+        result = engine._build_done_message([], [], "rerank", "disabled", 0, "disabled")
         assert result["score_type"] == "rerank"
 
     def test_done_message_with_actual_sources(self):
@@ -249,7 +246,7 @@ class TestScoreTypeEdgeCases:
             )
         ]
 
-        result = engine._build_done_message(mock_sources, [])
+        result = engine._build_done_message(mock_sources, [], "distance", "disabled", 0, "disabled")
 
         assert result["score_type"] == "distance"
         assert len(result["sources"]) == 1

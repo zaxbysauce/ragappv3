@@ -211,7 +211,14 @@ On first launch, you'll be redirected to the **Setup Wizard** (`/setup`) to crea
 | `USERS_ENABLED` | true | Enable multi-user JWT authentication |
 | `JWT_SECRET_KEY` | change-me-... | Secret key for JWT signing (generate with `python -c "import secrets; print(secrets.token_urlsafe(48))"`) |
 | `JWT_ALGORITHM` | HS256 | JWT signing algorithm |
-| `ADMIN_SECRET_TOKEN` | "" | Legacy admin token for API key auth mode |
+| `ADMIN_SECRET_TOKEN` | "" | Admin API key. **Required** when `USERS_ENABLED=true` (JWT mode) and when `USERS_ENABLED=false` (single-admin mode — sole auth mechanism) |
+| `PARENT_RETRIEVAL_ENABLED` | `false` | Enable small-to-big context expansion (parent window retrieval) |
+| `PARENT_WINDOW_CHARS` | `6000` | Total parent window size in characters (±3000 around matched chunk) |
+| `NEW_DEDUP_POLICY` | `true` | Use group-aware dedup (caps per-doc chunks and distinct docs in results) |
+| `PER_DOC_CHUNK_CAP` | `5` | Max chunks per document in retrieval results |
+| `UNIQUE_DOCS_IN_TOP_K` | `5` | Max distinct documents in retrieval result set |
+| `INDEX_REBUILD_DELTA` | `0.2` | Delete churn fraction (0–1) that triggers ANN index rebuild |
+| `REUPLOAD_SAFE_ORDER` | `true` | Insert new chunks before deleting old on re-upload (eliminates zero-chunk window) |
 
 ### Data Directory Structure
 
@@ -339,6 +346,52 @@ docker compose logs knowledgevault
 3. Adjust `MAX_DISTANCE_THRESHOLD` to filter results (lower = more strict)
 4. Ensure Ollama has GPU access if available
 
+## Upgrading
+
+### Embedding Dimension Change (Harrier Migration)
+
+If you are upgrading from a version that used BGE-M3 (768-dim) embeddings to Harrier
+(`microsoft/harrier-oss-v1-0.6b`, 1024-dim), **existing documents are not automatically
+re-indexed**. The LanceDB vector store cannot be converted in-place because embeddings are
+dimension-incompatible.
+
+**Symptom:** Chat returns no document results or the `/api/health?deep=true` response
+includes `"stale_embeddings": true` in the `vector_store` section.
+
+**Required steps:**
+
+```bash
+# 1. Backup your data before proceeding
+cp -r /your/data/dir/lancedb /your/data/dir/lancedb.bak
+cp /your/data/dir/app.db /your/data/dir/app.db.bak
+
+# 2. Run the migration script to clear stale embeddings
+#    (dry-run first to see what will change)
+python scripts/migrate_embeddings.py --dry-run
+
+# 3. Run the actual migration — this wipes LanceDB and resets file statuses to pending
+python scripts/migrate_embeddings.py
+
+# 4. Restart the application — the background processor will re-index all files
+docker compose restart knowledgevault
+```
+
+The background processor automatically re-embeds all files with `status='pending'`.
+Depending on the number of documents and your hardware, this may take several minutes.
+
+**Health check after migration:**
+
+```bash
+# Verify embedding dimension is correct
+curl http://localhost:9090/api/health?deep=true | jq .vector_store
+# Expected: {"ok": true, "rows": <N>, "stale_embeddings": null or absent}
+```
+
+> **Note:** `scripts/migrate_embeddings.py` is safe to run multiple times. On a clean
+> deployment (no existing LanceDB data), it is a no-op.
+
+---
+
 ## API Endpoints
 
 ### Health & Status
@@ -346,6 +399,7 @@ docker compose logs knowledgevault
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/health` | Service health status |
+| GET | `/api/healthz` | Lightweight readiness probe — returns 503 if critical services (db, vector store, embedding) are not initialised; suitable for Kubernetes liveness/readiness probes |
 
 ### Authentication
 

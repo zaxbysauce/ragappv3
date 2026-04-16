@@ -23,9 +23,23 @@ CITATION_INSTRUCTION = (
 def calculate_primary_count(total_chunks: int) -> int:
     """Calculate the number of primary evidence chunks from total chunk count.
 
-    Uses at least 3 chunks (or all if fewer) and at most half the total.
+    If PRIMARY_EVIDENCE_COUNT > 0 in settings, that value is used directly
+    (capped by total_chunks).
+
+    Otherwise uses the formula: min(max(n - 2, 3), min(n, 5))
+    which gives:
+      n=0 → 0, n=1 → 1, n=2 → 2, n=3 → 3, n=4 → 3, n=5 → 3,
+      n=6 → 4, n=7+ → 5
+
+    This ensures that with the default reranker_top_n=7, five chunks receive
+    primary treatment (instead of three under the old n//2 formula).
     """
-    return min(max(total_chunks // 2, 3), total_chunks)
+    if total_chunks == 0:
+        return 0
+    override = settings.primary_evidence_count
+    if override > 0:
+        return min(override, total_chunks)
+    return min(max(total_chunks - 2, 3), min(total_chunks, 5))
 
 
 class PromptBuilderService:
@@ -114,6 +128,18 @@ class PromptBuilderService:
         if not primary_sections and not supporting_sections:
             user_content_parts.append("No relevant documents found for this query.")
 
+        # Anchor best chunk: repeat top-ranked chunk at the end of the context region.
+        # Mitigates LLM "lost-in-the-middle" effect. Skipped when the top chunk already
+        # dominates the budget (> 50% of context_max_tokens tokens).
+        if settings.anchor_best_chunk and primary_chunks:
+            top_chunk = primary_chunks[0]
+            top_chunk_tokens = max(1, int(len(top_chunk.text) / 3.5))
+            if top_chunk_tokens <= settings.context_max_tokens * 0.5:
+                anchor_section = self.format_chunk(top_chunk, 1)
+                user_content_parts.append(
+                    f"[BEST MATCH — repeated for emphasis]\n{anchor_section}"
+                )
+
         user_content = "\n\n".join(user_content_parts) + "\n\n"
 
         memory_text = "\n".join(memory_context)
@@ -126,6 +152,11 @@ class PromptBuilderService:
 
     def format_chunk(self, chunk: RAGSource, source_index: int) -> str:
         """Format a chunk for inclusion in the prompt context with a stable source label.
+
+        When ``parent_retrieval_enabled=True`` and the chunk has a pre-computed
+        ``parent_window_text``, the broader parent window is rendered with the
+        matched small chunk wrapped in ``[[MATCH: …]]`` markers so the LLM can see
+        both precise evidence and its surrounding context (Issue #12).
 
         Args:
             chunk: RAGSource to format
@@ -149,8 +180,32 @@ class PromptBuilderService:
         header_parts.append(f"score: {chunk.score:.2f}")
         if chunk.file_id:
             header_parts.append(f"id: {chunk.file_id}")
+        ctx_note = chunk.metadata.get("contextual_context", "")
+        if ctx_note:
+            header_parts.append(f"context: {ctx_note[:200]}")
 
         header = " | ".join(header_parts)
+
+        # Parent-window expansion (Issue #12): deliver wider context to LLM.
+        # The matched small chunk is bracketed with [[MATCH: …]] markers inside
+        # the parent window text so the LLM can orient the exact evidence.
+        if settings.parent_retrieval_enabled and chunk.parent_window_text:
+            # Use raw_text (pre-enrichment) for the MATCH region when available
+            match_text = (
+                chunk.metadata.get("raw_text") or chunk.text or ""
+            ).strip()
+            parent_text = chunk.parent_window_text
+
+            if match_text and match_text in parent_text:
+                marked = parent_text.replace(
+                    match_text, f"[[MATCH: {match_text}]]", 1
+                )
+            else:
+                # Fallback: append the small chunk as a MATCH annotation at the end
+                marked = f"{parent_text}\n\n[[MATCH: {match_text}]]"
+
+            return f"{header}\n{marked}"
+
         return f"{header}\n{chunk.text}"
 
     def build_system_prompt(self) -> str:

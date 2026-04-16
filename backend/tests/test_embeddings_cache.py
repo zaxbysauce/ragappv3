@@ -514,3 +514,196 @@ class TestLRUCacheEdgeCases:
         assert cache.size == 100
         assert cache.get('key0') is None  # First one evicted
         assert cache.get('newkey') == [999.0]
+
+
+@pytest.mark.asyncio
+class TestEmbedPassageExists:
+    """Tests for embed_passage method existence and basic behavior."""
+
+    async def test_embed_passage_method_exists(self):
+        """embed_passage method should exist on EmbeddingService."""
+        assert hasattr(EmbeddingService, 'embed_passage'), "embed_passage method should exist"
+
+    async def test_embed_passage_is_async(self):
+        """embed_passage should be an async method."""
+        import inspect
+        assert inspect.iscoroutinefunction(EmbeddingService.embed_passage), "embed_passage should be async"
+
+
+@pytest.mark.asyncio
+class TestEmbedPassagePrefix:
+    """Tests for embed_passage and embed_single prefix application."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        """Set up test fixtures."""
+        self.mock_settings_patcher = patch('app.services.embeddings.settings')
+        self.mock_settings = self.mock_settings_patcher.start()
+        
+        # Configure mock settings
+        self.mock_settings.ollama_embedding_url = "http://localhost:11434/api/embeddings"
+        self.mock_settings.embedding_model = "nomic-embed-text"
+        self.mock_settings.embedding_doc_prefix = ""
+        self.mock_settings.embedding_query_prefix = ""
+        self.mock_settings.embedding_batch_size = 512
+        self.mock_settings.embedding_batch_max_retries = 3
+        self.mock_settings.embedding_batch_min_sub_size = 1
+        self.mock_settings.chunk_size_chars = 1200
+        self.mock_settings.chunk_overlap_chars = 120
+        self.mock_settings.tri_vector_search_enabled = False
+        self.mock_settings.flag_embedding_url = None
+        
+        yield
+        
+        self.mock_settings_patcher.stop()
+
+    async def test_embed_passage_uses_doc_prefix(self):
+        """Test that embed_passage applies embedding_doc_prefix to the payload."""
+        # Use OpenAI mode URL so payload uses "input" key
+        self.mock_settings.ollama_embedding_url = "http://localhost:1234/v1/embeddings"
+        self.mock_settings.embedding_doc_prefix = "passage: "
+        service = EmbeddingService()
+        
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        # OpenAI mode expects {"data": [{"embedding": [...]}]}
+        mock_response.json.return_value = {"data": [{"embedding": [0.1, 0.2, 0.3]}]}
+        
+        with patch.object(service._client, 'post', new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_response
+            
+            await service.embed_passage("foo")
+            
+            # Verify the payload's "input" field contains the doc prefix
+            call_args = mock_post.call_args
+            payload = call_args[1]['json']  # Second positional arg is **kwargs with 'json'
+            assert "passage: foo" in payload['input'], f"Expected 'passage: foo' in input, got: {payload['input']}"
+
+    async def test_embed_single_uses_query_prefix(self):
+        """Test that embed_single applies embedding_query_prefix to the payload."""
+        # Use OpenAI mode URL so payload uses "input" key
+        self.mock_settings.ollama_embedding_url = "http://localhost:1234/v1/embeddings"
+        self.mock_settings.embedding_query_prefix = "query: "
+        service = EmbeddingService()
+        
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        # OpenAI mode expects {"data": [{"embedding": [...]}]}
+        mock_response.json.return_value = {"data": [{"embedding": [0.1, 0.2, 0.3]}]}
+        
+        with patch.object(service._client, 'post', new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_response
+            
+            await service.embed_single("bar")
+            
+            # Verify the payload's "input" field contains the query prefix
+            call_args = mock_post.call_args
+            payload = call_args[1]['json']  # Second positional arg is **kwargs with 'json'
+            assert "query: bar" in payload['input'], f"Expected 'query: bar' in input, got: {payload['input']}"
+
+    async def test_embed_passage_uses_doc_prefix_ollama(self):
+        """Test that embed_passage applies embedding_doc_prefix with Ollama mode 'prompt' key."""
+        # Use Ollama mode URL so payload uses "prompt" key
+        self.mock_settings.ollama_embedding_url = "http://localhost:11434/api/embeddings"
+        self.mock_settings.embedding_doc_prefix = "passage: "
+        service = EmbeddingService()
+        
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        # Ollama mode expects {"embedding": [...]}
+        mock_response.json.return_value = {"embedding": [0.1, 0.2, 0.3]}
+        
+        with patch.object(service._client, 'post', new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_response
+            
+            await service.embed_passage("foo")
+            
+            # Verify the payload's "prompt" field contains the doc prefix
+            call_args = mock_post.call_args
+            payload = call_args[1]['json']  # Second positional arg is **kwargs with 'json'
+            assert "passage: foo" in payload['prompt'], f"Expected 'passage: foo' in prompt, got: {payload['prompt']}"
+
+    async def test_embed_single_uses_query_prefix_ollama(self):
+        """Test that embed_single applies embedding_query_prefix with Ollama mode 'prompt' key."""
+        # Use Ollama mode URL so payload uses "prompt" key
+        self.mock_settings.ollama_embedding_url = "http://localhost:11434/api/embeddings"
+        self.mock_settings.embedding_query_prefix = "query: "
+        service = EmbeddingService()
+        
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        # Ollama mode expects {"embedding": [...]}
+        mock_response.json.return_value = {"embedding": [0.1, 0.2, 0.3]}
+        
+        with patch.object(service._client, 'post', new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_response
+            
+            await service.embed_single("bar")
+            
+            # Verify the payload's "prompt" field contains the query prefix
+            call_args = mock_post.call_args
+            payload = call_args[1]['json']  # Second positional arg is **kwargs with 'json'
+            assert "query: bar" in payload['prompt'], f"Expected 'query: bar' in prompt, got: {payload['prompt']}"
+
+
+@pytest.mark.asyncio
+class TestCacheKeyFormat:
+    """Tests for cache key format including model fingerprint."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        """Set up test fixtures."""
+        self.mock_settings_patcher = patch('app.services.embeddings.settings')
+        self.mock_settings = self.mock_settings_patcher.start()
+        
+        # Configure mock settings
+        self.mock_settings.ollama_embedding_url = "http://localhost:11434/api/embeddings"
+        self.mock_settings.embedding_model = "nomic-embed-text"
+        self.mock_settings.embedding_doc_prefix = ""
+        self.mock_settings.embedding_query_prefix = ""
+        self.mock_settings.embedding_batch_size = 512
+        self.mock_settings.embedding_batch_max_retries = 3
+        self.mock_settings.embedding_batch_min_sub_size = 1
+        self.mock_settings.chunk_size_chars = 1200
+        self.mock_settings.chunk_overlap_chars = 120
+        self.mock_settings.tri_vector_search_enabled = False
+        self.mock_settings.flag_embedding_url = None
+        
+        yield
+        
+        self.mock_settings_patcher.stop()
+
+    async def test_cache_key_includes_model_when_set(self):
+        """Test that cache key includes model fingerprint - same text with different model should be cache miss."""
+        # Configure model1 in settings
+        self.mock_settings.embedding_model = "model1"
+        service1 = EmbeddingService()
+        
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "embedding": [0.1, 0.2, 0.3]
+        }
+        
+        with patch.object(service1._client, 'post', new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_response
+            
+            # First call with model1 - should hit the API
+            result1 = await service1.embed_single("test text")
+            assert result1 == [0.1, 0.2, 0.3]
+            assert mock_post.call_count == 1
+            
+            # Second call with same text - should use cache (same model)
+            result2 = await service1.embed_single("test text")
+            assert result2 == [0.1, 0.2, 0.3]
+            # API should not be called again
+            assert mock_post.call_count == 1
+            
+            # Now patch the model to a different value
+            service1.embedding_model = "different_model"
+            
+            # Third call with same text but different model - should be cache MISS
+            result3 = await service1.embed_single("test text")
+            assert result3 == [0.1, 0.2, 0.3]
+            # API should be called again because model changed
+            assert mock_post.call_count == 2

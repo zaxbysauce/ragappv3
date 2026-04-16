@@ -634,6 +634,94 @@ groups:
 
 ## Release Notes
 
+### Version 0.2.1 (PR1 performance quick wins — Issue #20)
+
+#### Performance Improvements
+
+No configuration changes or breaking changes. All improvements are internal.
+
+- **Query embedding parallelisation (PERF-1):** `RAGEngine` now embeds query variants (original, step-back, HyDE) concurrently using `asyncio.gather`, reducing RAG latency proportional to the number of active variants.
+- **O(1) LRU cache in QueryTransformer (PERF-2):** Replaced `dict+list` LRU implementation with `collections.OrderedDict`. Access reordering (`move_to_end`) and eviction (`popitem`) are now O(1) instead of O(n).
+- **Shared VectorStore semaphore (PERF-4):** LanceDB search operations are now rate-limited by a class-level semaphore shared across all concurrent callers (`_MULTI_SCALE_CONCURRENCY = 4`). Previously the semaphore was per-call local, providing no cross-request limiting. Single-scale searches (the default path) are now also guarded.
+- **Adaptive document polling (PERF-11):** The Documents page polling interval starts at 2 s and backs off 1.5× per cycle (capped at 30 s) during sustained processing, resetting to 2 s when processing completes. This reduces unnecessary backend load while remaining responsive at the start of each processing batch.
+
+#### Deferred
+
+- **PERF-10 (parallel message saves):** Deferred — `chat_messages.created_at` uses second-level SQLite precision; concurrent inserts within the same second produce identical timestamps and break `ORDER BY created_at ASC` retrieval order. Requires a schema migration before this is safe.
+
+---
+
+### Version 0.2.0 (Phase 7 — Issues #2, #12, #13, #14)
+
+#### Breaking Changes
+
+**vault_id is now required on document upload (Issue #14)**
+The `/api/documents` and `/api/documents/upload` POST endpoints no longer default
+`vault_id` to `1`. Requests without `vault_id` receive HTTP 422. Update any upload
+clients to pass `?vault_id=<id>` explicitly.
+
+#### Re-embedding Required for Existing Deployments (Issue #2)
+
+Deployments upgrading from BGE-M3 (768-dim) to Harrier (1024-dim) must re-embed all
+documents. Existing LanceDB vectors are incompatible with the new embedding dimension
+and will produce empty search results.
+
+**Migration steps:**
+1. Backup LanceDB and SQLite data.
+2. Run `python scripts/migrate_embeddings.py` (wipes LanceDB, resets file statuses).
+3. Restart the service — the background processor re-indexes all documents.
+
+The `/api/health?deep=true` endpoint now returns `"stale_embeddings": true` in the
+`vector_store` section when a dimension mismatch is detected, surfacing this issue
+without a silent failure mode.
+
+#### New Features
+
+- **Parent-document retrieval / small-to-big (Issue #12):** When `PARENT_RETRIEVAL_ENABLED=true`,
+  the RAG engine retrieves a ±3000-character window around each matched chunk and surfaces
+  it to the LLM with a `[[MATCH: ...]]` anchor so the model sees precise evidence in context.
+  Feature-flagged off by default. New config: `PARENT_RETRIEVAL_ENABLED`, `PARENT_WINDOW_CHARS`.
+
+- **Group-aware dedup (Issue #12):** Replaces the UID-strip dedup that collapsed multiple
+  strong chunks from the same document into a single result. The best document now contributes
+  up to 2 chunks (configurable via `PER_DOC_CHUNK_CAP`), preserving evidence density. Up to
+  5 distinct documents are returned (`UNIQUE_DOCS_IN_TOP_K`).
+
+- **Atomic ingestion visibility (Issue #13):** Chunks from documents still being processed
+  (status `pending` or `processing`) are hidden from RAG search results until the file
+  reaches `indexed` status, preventing partial-document answers.
+
+- **Safe re-upload ordering (Issue #13):** When `REUPLOAD_SAFE_ORDER=true` (default), new
+  chunk generations are inserted before old ones are deleted, eliminating the zero-chunk
+  window during re-upload that could produce empty results.
+
+- **ANN index lifecycle management (Issue #13):** The IVF_PQ vector index is now automatically
+  rebuilt after ≥20% row churn from deletes, and dropped when row count falls below 256
+  (brute-force threshold). `INDEX_REBUILD_DELTA` controls the churn threshold.
+
+- **Schema migration — parent window columns (Issue #12):** LanceDB schema now includes
+  `parent_doc_id`, `parent_window_start`, `parent_window_end`, and `chunk_position` columns.
+  Run `python -m app.migrations.add_parent_window` to backfill existing databases.
+
+- **Vault-1 default audit (Issue #13):** `python -m app.migrations.audit_vault_defaults`
+  reports documents that were silently assigned to vault 1 before the vault_id-required change.
+
+#### Configuration Changes
+
+New environment variables (all optional, sensible defaults):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PARENT_RETRIEVAL_ENABLED` | `false` | Enable small-to-big context expansion |
+| `PARENT_WINDOW_CHARS` | `6000` | Characters per parent window (±3000 around chunk) |
+| `NEW_DEDUP_POLICY` | `true` | Use group-aware dedup (replaces UID-strip) |
+| `PER_DOC_CHUNK_CAP` | `2` | Max chunks per document in final result set |
+| `UNIQUE_DOCS_IN_TOP_K` | `5` | Max distinct documents in final result set |
+| `INDEX_REBUILD_DELTA` | `0.2` | Churn fraction (deletes/last_build) to trigger ANN rebuild |
+| `REUPLOAD_SAFE_ORDER` | `true` | Insert new chunks before deleting old on re-upload |
+
+---
+
 ### Version 0.1.0 (Phase 6)
 
 - Added comprehensive integration test suite

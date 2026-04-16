@@ -268,12 +268,13 @@ class ContextualChunker:
                 context = context.strip()
 
                 if context:
-                    # Preserve raw text before contextual enrichment
-                    chunk.raw_text = chunk.text
-                    # Prepend context to chunk text for embedding (search uses enriched text)
-                    chunk.text = f"{context}\n\n{chunk.text}"
+                    # Dual-store: keep enriched text for embedding precision,
+                    # AND store context separately for prompt builder access.
+                    chunk.raw_text = chunk.text  # preserve original
+                    chunk.metadata["contextual_context"] = context
+                    chunk.text = f"{context}\n\n{chunk.text}"  # enriched for embedding
                     logger.debug(
-                        f"Added context to chunk {chunk_index}: {context[:50]}..."
+                        f"Added context metadata to chunk {chunk_index}: {context[:50]}..."
                     )
                 else:
                     logger.warning(f"Empty context response for chunk {chunk_index}")

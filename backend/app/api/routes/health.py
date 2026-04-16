@@ -8,6 +8,7 @@ Expensive model checks are opt-in via ?deep=true query parameter.
 import logging
 
 from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import JSONResponse
 
 from app.api.deps import get_llm_health_checker, get_model_checker
 from app.services.llm_health import LLMHealthChecker
@@ -43,13 +44,38 @@ async def health_check(
         llm_status = await llm_checker.check_all()
         models_status = await model_checker.check_models()
 
-        # Probe vector store connectivity
+        # Probe vector store connectivity and embedding dimension consistency
         vector_status = {"ok": False}
         try:
             vector_store = getattr(request.app.state, "vector_store", None)
             if vector_store and vector_store.table:
                 row_count = await vector_store.table.count_rows()
                 vector_status = {"ok": True, "rows": row_count}
+
+                # Issue #2: Warn if stored embedding dimension mismatches configured dim.
+                # A mismatch means documents were indexed with a different model and
+                # searches will return empty or incorrect results until re-embedded.
+                try:
+                    from app.config import settings as _settings
+                    stored_dim = await vector_store._get_expected_embedding_dim()
+                    configured_dim = _settings.embedding_dim
+                    if stored_dim and stored_dim != configured_dim:
+                        vector_status["stale_embeddings"] = True
+                        vector_status["stale_embeddings_detail"] = (
+                            f"LanceDB index was built with {stored_dim}-dim embeddings but "
+                            f"EMBEDDING_DIM is now {configured_dim}. "
+                            f"Run scripts/migrate_embeddings.py to re-index."
+                        )
+                        logger.warning(
+                            "Stale embedding dimensions detected: stored=%d, configured=%d. "
+                            "Documents will not be searchable until re-embedded. "
+                            "Run scripts/migrate_embeddings.py.",
+                            stored_dim,
+                            configured_dim,
+                        )
+                except Exception as _dim_exc:
+                    logger.debug("Embedding dimension check failed (non-fatal): %s", _dim_exc)
+
             elif vector_store:
                 vector_status = {"ok": True, "rows": 0}
             else:
@@ -69,3 +95,34 @@ async def health_check(
         }
 
     return result
+
+
+@router.get("/healthz")
+async def healthz(request: Request):
+    """
+    Lightweight readiness probe.
+
+    Returns 200 when critical services (db, vector store, embedding) are initialized.
+    Returns 503 with a list of issues otherwise.
+    Suitable for Kubernetes liveness/readiness probes and load-balancer health checks.
+    Does not run expensive model availability checks.
+    """
+    state = request.app.state
+    issues = []
+
+    if not getattr(state, "db_pool", None):
+        issues.append("db_pool not initialized")
+    vector_store = getattr(state, "vector_store", None)
+    if not vector_store:
+        issues.append("vector_store not initialized")
+    elif not getattr(vector_store, "table", None):
+        issues.append("vector_store not connected")
+    if not getattr(state, "embedding_service", None):
+        issues.append("embedding_service not initialized")
+
+    if issues:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "degraded", "issues": issues},
+        )
+    return {"status": "ok"}
