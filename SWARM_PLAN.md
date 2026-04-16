@@ -1,6 +1,6 @@
 # PR 4 — Frontend UI Performance (Issue #20)
 Swarm: mega
-Phase: 1 [COMPLETE] | Updated: 2026-04-16T19:24:02.683Z
+Phase: 1 [COMPLETE] | Updated: 2026-04-16T19:33:03.422Z
 
 ---
 ## Phase 1: Foundation — dependency install and simple memoization fixes [COMPLETE]
@@ -18,5 +18,5 @@ Phase: 1 [COMPLETE] | Updated: 2026-04-16T19:24:02.683Z
 - [x] 3.2: Virtualize the sources list in RightPane.tsx when source count exceeds 20 items (UI-PERF-6, FR-003). Add conditional virtualization to the sources tab — when sources.length > 20, use @tanstack/react-virtual to render only visible SourceListItem components. When sources.length <= 20, keep the existing flat .map() rendering unchanged. The virtualized version should use measureElement for variable-height measurement since source items have varying snippet lengths. The virtualizer should attach to the sources list container div. FILE: frontend/src/components/chat/RightPane.tsx [MEDIUM] (depends: 1.1)
 
 ---
-## Phase 4: Success criteria verification tests [PENDING]
-- [ ] 4.1: Write targeted verification tests for PR 4 success criteria (SC-001 through SC-006). Create a single test file frontend/src/tests/ui-performance.test.tsx covering: (1) SC-001 — render TranscriptPane with 200 mock messages, assert no more than 30 message DOM nodes exist (overscan buffer allows slightly more than 20). (2) SC-002 — render DocumentsPage with 500 mock documents, assert no more than 35 row DOM nodes. (3) SC-003 — render RightPane sources tab with 50 mock sources, assert only visible items rendered. (4) SC-004 — render MessageContent twice with same content, verify memoized component does not re-parse (use jest/vitest spy on ReactMarkdown or check render count). (5) SC-005 — type rapidly in SessionRail search, verify filteredSessions does not recompute until after debounce delay. (6) SC-006 — run all existing test suites and verify no regressions. Each test should use Testing Library + vitest mocks. FILE: frontend/src/tests/ui-performance.test.tsx [MEDIUM] (depends: 2.1, 3.1, 3.2)
+## Phase 4: Success criteria verification tests [COMPLETE]
+- [x] 4.1: Write targeted verification tests for PR 4 success criteria (SC-001 through SC-006). Create a single test file frontend/src/tests/ui-performance.test.tsx covering: (1) SC-001 — render TranscriptPane with 200 mock messages, assert no more than 30 message DOM nodes exist (overscan buffer allows slightly more than 20). (2) SC-002 — render DocumentsPage with 500 mock documents, assert no more than 35 row DOM nodes. (3) SC-003 — render RightPane sources tab with 50 mock sources, assert only visible items rendered. (4) SC-004 — render MessageContent twice with same content, verify memoized component does not re-parse (use jest/vitest spy on ReactMarkdown or check render count). (5) SC-005 — type rapidly in SessionRail search, verify filteredSessions does not recompute until after debounce delay. (6) SC-006 — run all existing test suites and verify no regressions. Each test should use Testing Library + vitest mocks. FILE: frontend/src/tests/ui-performance.test.tsx [MEDIUM] (depends: 2.1, 3.1, 3.2)

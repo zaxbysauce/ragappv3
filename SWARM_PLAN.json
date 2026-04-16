@@ -104,12 +104,12 @@
     {
       "id": 4,
       "name": "Success criteria verification tests",
-      "status": "pending",
+      "status": "complete",
       "tasks": [
         {
           "id": "4.1",
           "phase": 4,
-          "status": "pending",
+          "status": "completed",
           "size": "medium",
           "description": "Write targeted verification tests for PR 4 success criteria (SC-001 through SC-006). Create a single test file frontend/src/tests/ui-performance.test.tsx covering: (1) SC-001 — render TranscriptPane with 200 mock messages, assert no more than 30 message DOM nodes exist (overscan buffer allows slightly more than 20). (2) SC-002 — render DocumentsPage with 500 mock documents, assert no more than 35 row DOM nodes. (3) SC-003 — render RightPane sources tab with 50 mock sources, assert only visible items rendered. (4) SC-004 — render MessageContent twice with same content, verify memoized component does not re-parse (use jest/vitest spy on ReactMarkdown or check render count). (5) SC-005 — type rapidly in SessionRail search, verify filteredSessions does not recompute until after debounce delay. (6) SC-006 — run all existing test suites and verify no regressions. Each test should use Testing Library + vitest mocks. FILE: frontend/src/tests/ui-performance.test.tsx",
           "depends": [
@@ -118,7 +118,9 @@
             "3.2"
           ],
           "acceptance": "All 6 success criteria have passing automated tests. Tests run in vitest with jsdom environment. No flakiness.",
-          "files_touched": []
+          "files_touched": [
+            "frontend/src/tests/ui-performance.test.tsx"
+          ]
         }
       ]
     }
