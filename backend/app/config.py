@@ -151,7 +151,7 @@ class Settings(BaseSettings):
     """Cosine similarity threshold for sentence deduplication in context distillation (0.0-1.0)."""
 
     context_distillation_synthesis_enabled: bool = True
-    """Enable LLM-based context synthesis when retrieval evaluation returns NO_MATCH or AMBIGUOUS."""
+    """Enable LLM-based context synthesis when retrieval evaluation returns NO_MATCH only."""
 
     # ── Token budget configuration ────────────────────────────────────────
     context_max_tokens: int = 6000
