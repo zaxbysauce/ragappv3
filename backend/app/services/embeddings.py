@@ -409,12 +409,15 @@ class EmbeddingService:
             return []
 
         # Input validation guards
+        prefix_len = len(self.embedding_doc_prefix) if self.embedding_doc_prefix else 0
+        effective_max = self.MAX_TEXT_LENGTH - prefix_len
+
         for idx, text in enumerate(texts):
             if not text.strip():
                 raise EmbeddingError(f"Text at index {idx} is empty or whitespace only")
-            if len(text) > self.MAX_TEXT_LENGTH:
+            if len(text) > effective_max:
                 raise EmbeddingError(
-                    f"Text at index {idx} exceeds maximum length ({self.MAX_TEXT_LENGTH} characters)"
+                    f"Text at index {idx} exceeds maximum length ({effective_max} characters after prefix accounting)"
                 )
 
         # Use configured batch size if not specified

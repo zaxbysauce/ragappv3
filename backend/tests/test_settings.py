@@ -289,7 +289,7 @@ class TestSettingsUpdateValidation(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         
         # Test maximum valid value
-        payload = {"embedding_batch_size": 2048}
+        payload = {"embedding_batch_size": 128}
         response = self.client.post("/api/settings", json=payload)
         self.assertEqual(response.status_code, 200)
     
@@ -302,8 +302,8 @@ class TestSettingsUpdateValidation(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
     
     def test_post_settings_invalid_embedding_batch_size_above_max(self):
-        """Test POST /api/settings with embedding_batch_size > 2048 returns 422."""
-        payload = {"embedding_batch_size": 2049}
+        """Test POST /api/settings with embedding_batch_size > 128 returns 422."""
+        payload = {"embedding_batch_size": 129}
         
         response = self.client.post("/api/settings", json=payload)
         
@@ -337,7 +337,7 @@ class TestSettingsUpdateValidation(unittest.TestCase):
             "reranker_top_n": 15,
             "hybrid_search_enabled": False,
             "hybrid_alpha": 0.7,
-            "embedding_batch_size": 512
+            "embedding_batch_size": 32
         }
         
         response = self.client.post("/api/settings", json=payload)
@@ -349,7 +349,7 @@ class TestSettingsUpdateValidation(unittest.TestCase):
         self.assertEqual(data["reranker_top_n"], 15)
         self.assertEqual(data["hybrid_search_enabled"], False)
         self.assertEqual(data["hybrid_alpha"], 0.7)
-        self.assertEqual(data["embedding_batch_size"], 512)
+        self.assertEqual(data["embedding_batch_size"], 32)
 
 
 class TestConnectionEndpoint(unittest.TestCase):

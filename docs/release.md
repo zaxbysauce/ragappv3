@@ -4,11 +4,56 @@ This document provides comprehensive guidance for deploying, maintaining, and op
 
 ## Table of Contents
 
-1. [Pre-Deployment Checklist](#pre-deployment-checklist)
-2. [Encrypted Backup & Rollback Process](#encrypted-backup--rollback-process)
-3. [Maintenance Flag Usage](#maintenance-flag-usage)
-4. [Connection Test Guidance](#connection-test-guidance)
-5. [Observability & Monitoring](#observability--monitoring)
+1. [Deployment Fixes & Configuration Changes](#deployment-fixes--configuration-changes)
+2. [Pre-Deployment Checklist](#pre-deployment-checklist)
+3. [Encrypted Backup & Rollback Process](#encrypted-backup--rollback-process)
+4. [Maintenance Flag Usage](#maintenance-flag-usage)
+5. [Connection Test Guidance](#connection-test-guidance)
+6. [Observability & Monitoring](#observability--monitoring)
+
+---
+
+## Deployment Fixes & Configuration Changes
+
+### Embedding Batch Size Configuration (Critical Fix)
+
+**Issue:** Remote deployments with TEI (Text Embeddings Inference) were failing with:
+```
+422 Validation: batch size 512 > maximum allowed batch size 32
+```
+
+**Solution:** 
+- `EMBEDDING_BATCH_SIZE` now defaults to 32 (aligned with TEI's actual limit)
+- Valid range: 1-128 (validator caps at 128 for safety)
+- Configure in `.env` or `docker-compose.yml`
+
+**Migration:**
+- If upgrading from a deployment with `EMBEDDING_BATCH_SIZE > 32`, you must:
+  1. Update `.env` or docker-compose environment to set `EMBEDDING_BATCH_SIZE=32` (or appropriate value for your embedding service)
+  2. Restart containers: `docker compose up -d`
+  3. Verify: `docker exec knowledgevault python -c "from app.config import settings; print(settings.embedding_batch_size)"`
+
+### Spreadsheet Chunking & Data Preservation
+
+**Issue:** Wide spreadsheets (100+ columns) produced chunks exceeding the embedding model's 8192-character limit, causing data truncation.
+
+**Solution:**
+- Implemented column-group splitting: spreadsheets are now split by columns when a single row exceeds 8192 chars
+- All column data is preserved; only single cell values exceeding 8192 chars are truncated (with logging)
+- Each chunk includes sheet name + column headers + values for full context
+
+**Behavior:**
+- Wide spreadsheets are processed automatically without user action
+- Check logs for warnings: `"Document '...' has ... chunk(s) exceeding max embedding length"`
+- Retrieved chunks for wide spreadsheets may include multiple column-group chunks for the same row
+
+### Pre-Embedding Validation
+
+New validation logs chunk sizes before embedding:
+- **Log level:** WARNING for oversized chunks
+- **Location:** Application logs
+- **Example:** `Document 'wide_sheet.xlsx' has 3 chunk(s) exceeding max embedding length (8192 chars): chunk 0 (8200 chars), chunk 2 (9150 chars)`
+- **Action:** Monitor logs during initial document processing; this is observational (embedding service has its own safeguard)
 
 ---
 

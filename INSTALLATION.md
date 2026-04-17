@@ -519,6 +519,13 @@ OLLAMA_HOST=http://localhost:11434
 DEFAULT_LLM_MODEL=llama3.2
 DEFAULT_EMBEDDING_MODEL=nomic-embed-text
 
+# Embedding Configuration
+# Batch size for embedding requests (default: 32)
+# Valid range: 1-128. Higher values increase throughput but use more memory.
+# Set based on your embedding service capacity. For TEI (Text Embeddings Inference),
+# the default of 32 is safe for most deployments.
+EMBEDDING_BATCH_SIZE=32
+
 # Optional Features
 USERS_ENABLED=true
 HYBRID_SEARCH_ENABLED=true

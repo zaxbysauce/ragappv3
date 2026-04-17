@@ -62,8 +62,8 @@ class Settings(BaseSettings):
     """Prefix to prepend to queries during embedding."""
     retrieval_window: int = 1
     """Window size for retrieval context expansion."""
-    embedding_batch_size: int = 512
-    """Number of texts to send per embedding API request. Higher = better GPU utilization."""
+    embedding_batch_size: int = 32
+    """Number of texts to send per embedding API request. Capped at 128 for TEI compatibility."""
     embedding_batch_max_retries: int = 3
     """Maximum number of retries for adaptive batching when token overflow occurs."""
     embedding_batch_min_sub_size: int = 1
@@ -453,8 +453,8 @@ class Settings(BaseSettings):
     @field_validator("embedding_batch_size", mode="after")
     @classmethod
     def validate_embedding_batch_size(cls, v: int) -> int:
-        """Validate embedding batch size is >= 1."""
-        return cls._validate_int_range(v, 1, None, "embedding_batch_size")
+        """Validate embedding batch size is within safe TEI limits (1-128)."""
+        return cls._validate_int_range(v, 1, 128, "embedding_batch_size")
 
     @field_validator("document_parsing_strategy", mode="after")
     @classmethod

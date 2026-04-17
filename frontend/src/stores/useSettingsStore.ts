@@ -102,7 +102,7 @@ const defaultFormData: SettingsFormData = {
   vector_metric: "cosine",
   embedding_doc_prefix: "Passage: ",
   embedding_query_prefix: "Query: ",
-  embedding_batch_size: 512,
+  embedding_batch_size: 32,
   reranking_enabled: false,
   reranker_url: "",
   reranker_model: "",
@@ -179,7 +179,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         vector_metric: settings.vector_metric ?? "cosine",
         embedding_doc_prefix: settings.embedding_doc_prefix ?? "Passage: ",
         embedding_query_prefix: settings.embedding_query_prefix ?? "Query: ",
-        embedding_batch_size: settings.embedding_batch_size ?? 512,
+        embedding_batch_size: settings.embedding_batch_size ?? 32,
         reranking_enabled: settings.reranking_enabled ?? false,
         reranker_url: settings.reranker_url ?? "",
         reranker_model: settings.reranker_model ?? "",
@@ -215,8 +215,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     if (formData.auto_scan_interval_minutes <= 0) {
       newErrors.auto_scan_interval_minutes = "Scan interval must be a positive integer";
     }
-    if (formData.embedding_batch_size < 64 || formData.embedding_batch_size > 2048) {
-      newErrors.embedding_batch_size = "Embedding batch size must be between 64 and 2048";
+    if (formData.embedding_batch_size < 1 || formData.embedding_batch_size > 128) {
+      newErrors.embedding_batch_size = "Embedding batch size must be between 1 and 128";
     }
 
     // Validate overlap < size
@@ -277,7 +277,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       formData.vector_metric !== (settings.vector_metric ?? "cosine") ||
       formData.embedding_doc_prefix !== (settings.embedding_doc_prefix ?? "Passage: ") ||
       formData.embedding_query_prefix !== (settings.embedding_query_prefix ?? "Query: ") ||
-      formData.embedding_batch_size !== (settings.embedding_batch_size ?? 512) ||
+      formData.embedding_batch_size !== (settings.embedding_batch_size ?? 32) ||
        formData.reranking_enabled !== (settings.reranking_enabled ?? false) ||
        formData.reranker_url !== (settings.reranker_url ?? "") ||
        formData.reranker_model !== (settings.reranker_model ?? "") ||
