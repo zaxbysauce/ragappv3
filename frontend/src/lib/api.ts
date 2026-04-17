@@ -695,8 +695,18 @@ export function chatStream(
         }
       }
 
+      // Get CSRF token for the POST request
+      let csrfToken: string;
+      try {
+        csrfToken = await ensureCsrfToken();
+      } catch {
+        callbacks.onError?.(new Error("Failed to get CSRF token"));
+        return;
+      }
+
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
+        "X-CSRF-Token": csrfToken,
       };
       // JWT takes precedence over API key
       if (_jwtAccessToken) {

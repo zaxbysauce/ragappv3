@@ -1,18 +1,18 @@
 /// <reference types="vitest/globals" />
 import '@testing-library/jest-dom';
+import { vi } from 'vitest';
 
-// Mock localStorage before any modules access it
-const localStorageMock = {
-  getItem: vi.fn(() => null),
-  setItem: vi.fn(),
-  removeItem: vi.fn(),
-  clear: vi.fn(),
-  length: 0,
-  key: vi.fn(),
-};
-
+// Mock localStorage BEFORE any modules access it - must be at the very top
 Object.defineProperty(global, 'localStorage', {
-  value: localStorageMock,
+  value: {
+    getItem: vi.fn(() => null),
+    setItem: vi.fn(),
+    removeItem: vi.fn(),
+    clear: vi.fn(),
+    length: 0,
+    key: vi.fn(),
+  },
+  writable: true,
 });
 
 // Mock window.confirm

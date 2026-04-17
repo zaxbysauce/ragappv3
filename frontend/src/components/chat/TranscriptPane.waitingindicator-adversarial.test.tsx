@@ -257,7 +257,7 @@ describe("ADVERSARIAL: WaitingIndicator + scroll-to-bottom (Task 4.1)", () => {
   // AV2: Null content edge case - content === null (not empty string)
   // ===========================================================================
   describe("AV2: Message content is null (not empty string)", () => {
-    it("does NOT show WaitingIndicator when last assistant content is null (AV2-FINDING)", async () => {
+    it("SHOWS WaitingIndicator when last assistant content is null (AV2-FIXED)", async () => {
       _mockMessageCount = 2;
       (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
         messages: [
@@ -285,11 +285,9 @@ describe("ADVERSARIAL: WaitingIndicator + scroll-to-bottom (Task 4.1)", () => {
         vi.advanceTimersByTime(150);
       });
 
-      // AV2-FINDING: With content === null, condition `content === ""` is FALSE
-      // BUG: null content should be treated same as "" for streaming state
-      // The WaitingIndicator WILL incorrectly NOT show because `null === ""` is false
-      const indicator = screen.queryByRole("status", { name: "Waiting for response" });
-      expect(indicator).not.toBeInTheDocument();  // Documents the bug
+      // AV2-FIXED: With !content check, null is treated as "no content"
+      // WaitingIndicator SHOULD show when content is null, undefined, or empty string
+      expect(screen.getByRole("status", { name: "Waiting for response" })).toBeInTheDocument();
     });
 
     it("correctly shows WaitingIndicator when content is exactly empty string", async () => {
@@ -324,7 +322,7 @@ describe("ADVERSARIAL: WaitingIndicator + scroll-to-bottom (Task 4.1)", () => {
       expect(screen.getByRole("status", { name: "Waiting for response" })).toBeInTheDocument();
     });
 
-    it("does NOT show indicator when content is undefined", async () => {
+    it("correctly shows WaitingIndicator when content is undefined", async () => {
       _mockMessageCount = 2;
       (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
         messages: [
@@ -352,11 +350,11 @@ describe("ADVERSARIAL: WaitingIndicator + scroll-to-bottom (Task 4.1)", () => {
         vi.advanceTimersByTime(150);
       });
 
-      // undefined === "" is false - this also demonstrates the same issue as AV2
-      expect(screen.queryByRole("status", { name: "Waiting for response" })).not.toBeInTheDocument();
+      // With !content check, undefined is treated as "no content" - indicator should show
+      expect(screen.getByRole("status", { name: "Waiting for response" })).toBeInTheDocument();
     });
 
-    it("handles content that is number 0 (falsy but not empty)", async () => {
+    it("shows WaitingIndicator when content is number 0 (falsy but not empty)", async () => {
       _mockMessageCount = 2;
       (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
         messages: [
@@ -384,11 +382,11 @@ describe("ADVERSARIAL: WaitingIndicator + scroll-to-bottom (Task 4.1)", () => {
         vi.advanceTimersByTime(150);
       });
 
-      // 0 === "" is false - indicator won't show even though it's falsy
-      expect(screen.queryByRole("status", { name: "Waiting for response" })).not.toBeInTheDocument();
+      // With !content check, 0 is treated as "no content" - indicator should show
+      expect(screen.getByRole("status", { name: "Waiting for response" })).toBeInTheDocument();
     });
 
-    it("handles content that is boolean false", async () => {
+    it("shows WaitingIndicator when content is boolean false", async () => {
       _mockMessageCount = 2;
       (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
         messages: [
@@ -416,8 +414,8 @@ describe("ADVERSARIAL: WaitingIndicator + scroll-to-bottom (Task 4.1)", () => {
         vi.advanceTimersByTime(150);
       });
 
-      // false === "" is false
-      expect(screen.queryByRole("status", { name: "Waiting for response" })).not.toBeInTheDocument();
+      // With !content check, false is treated as "no content" - indicator should show
+      expect(screen.getByRole("status", { name: "Waiting for response" })).toBeInTheDocument();
     });
   });
 

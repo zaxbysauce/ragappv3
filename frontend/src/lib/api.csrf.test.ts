@@ -1016,4 +1016,144 @@ describe("CSRF Exports from @/lib/api", () => {
       expect(mockInstance).toHaveBeenCalledTimes(1);
     });
   });
+
+  // =============================================================================
+  // chatStream — CSRF token included in POST request headers
+  // =============================================================================
+  describe("chatStream CSRF Protection", () => {
+    beforeEach(() => {
+      mockCookies = "";
+      mockFetch.mockReset();
+      vi.resetModules();
+    });
+
+    it("should include X-CSRF-Token header in chat stream request", async () => {
+      // Mock CSRF token endpoint
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ csrf_token: "test-csrf-token" }),
+        })
+        // Mock the chat stream response
+        .mockResolvedValueOnce({
+          ok: true,
+          body: new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode("data: {\"content\":\"test\"}\n"));
+              controller.enqueue(new TextEncoder().encode("data: [DONE]\n"));
+              controller.close();
+            },
+          }),
+        });
+
+      const { chatStream } = await import("@/lib/api");
+
+      const messages = [{ role: "user" as const, content: "Hello" }];
+      const callbacks = {
+        onMessage: vi.fn(),
+        onSources: vi.fn(),
+        onError: vi.fn(),
+        onComplete: vi.fn(),
+      };
+
+      // Start the stream
+      const cancel = chatStream(messages, callbacks, 1);
+
+      // Wait for the stream to complete
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // Cancel the stream
+      cancel();
+
+      // Verify CSRF token was fetched
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining("/csrf-token"),
+        expect.objectContaining({ credentials: "include" })
+      );
+
+      // Verify chat stream request included CSRF token
+      const chatStreamCall = mockFetch.mock.calls[1];
+      expect(chatStreamCall[1].headers["X-CSRF-Token"]).toBe("test-csrf-token");
+    });
+
+    it("should call onError and return early when CSRF token fetch fails", async () => {
+      // Mock CSRF token endpoint failure
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+      });
+
+      const { chatStream } = await import("@/lib/api");
+
+      const messages = [{ role: "user" as const, content: "Hello" }];
+      const onError = vi.fn();
+      const callbacks = {
+        onMessage: vi.fn(),
+        onSources: vi.fn(),
+        onError,
+        onComplete: vi.fn(),
+      };
+
+      // Start the stream
+      const cancel = chatStream(messages, callbacks, 1);
+
+      // Wait for async error handling
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // Cancel the stream
+      cancel();
+
+      // Verify error was reported
+      expect(onError).toHaveBeenCalledWith(new Error("Failed to get CSRF token"));
+      // Verify no chat stream request was made
+      expect(mockFetch).toHaveBeenCalledTimes(1); // Only CSRF fetch, no chat request
+    });
+
+    it("should include CSRF token from cookie without fetch", async () => {
+      // Set CSRF token in cookie
+      mockCookies = "X-CSRF-Token=cookie-csrf-token";
+
+      // Mock the chat stream response
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        body: new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("data: {\"content\":\"test\"}\n"));
+            controller.enqueue(new TextEncoder().encode("data: [DONE]\n"));
+            controller.close();
+          },
+        }),
+      });
+
+      const { chatStream } = await import("@/lib/api");
+
+      const messages = [{ role: "user" as const, content: "Hello" }];
+      const callbacks = {
+        onMessage: vi.fn(),
+        onSources: vi.fn(),
+        onError: vi.fn(),
+        onComplete: vi.fn(),
+      };
+
+      // Start the stream
+      const cancel = chatStream(messages, callbacks, 1);
+
+      // Wait for the stream to complete
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // Cancel the stream
+      cancel();
+
+      // Verify no fetch was made for CSRF token (cookie took precedence)
+      expect(mockFetch).not.toHaveBeenCalledWith(
+        expect.stringContaining("/csrf-token"),
+        expect.any(Object)
+      );
+
+      // Verify chat stream request included CSRF token from cookie
+      expect(mockFetch).toHaveBeenCalled();
+      const chatStreamCall = mockFetch.mock.calls[0];
+      expect(chatStreamCall[1].headers["X-CSRF-Token"]).toBe("cookie-csrf-token");
+    });
+  });
 });

@@ -541,17 +541,24 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
   }, [isStreaming, messages, virtualizer]);
 
   // Anti-flicker: only show waiting indicator after 100ms of streaming
+  // Use hasShownWaitingRef to prevent rapid toggles from preventing indicator from showing
+  const hasShownWaitingRef = useRef(false);
+
   useEffect(() => {
     if (isStreaming) {
-      waitingDebounceRef.current = setTimeout(() => {
-        setIsWaitingForResponse(true);
-      }, 100);
+      if (!hasShownWaitingRef.current) {
+        waitingDebounceRef.current = setTimeout(() => {
+          setIsWaitingForResponse(true);
+          hasShownWaitingRef.current = true;
+        }, 100);
+      }
     } else {
-      if (waitingDebounceRef.current) {
+      if (waitingDebounceRef.current && !hasShownWaitingRef.current) {
         clearTimeout(waitingDebounceRef.current);
         waitingDebounceRef.current = null;
       }
       setIsWaitingForResponse(false);
+      hasShownWaitingRef.current = false;
     }
     return () => {
       if (waitingDebounceRef.current) {
@@ -695,12 +702,22 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
                       </div>
                     );
                   })}
-                </div>
-                <AnimatePresence>
-                  {isWaitingForResponse && messages.length > 0 && messages[messages.length - 1].role === "assistant" && messages[messages.length - 1].content === "" && (
-                    <WaitingIndicator />
-                  )}
-                </AnimatePresence>
+                    {/* WaitingIndicator positioned at the bottom of the virtualized content */}
+                    <AnimatePresence>
+                      {isWaitingForResponse && messages.length > 0 && messages[messages.length - 1].role === "assistant" && !messages[messages.length - 1].content && (
+                        <div
+                          style={{
+                            position: 'absolute',
+                            top: virtualizer.getTotalSize(),
+                            left: 0,
+                            width: '100%',
+                          }}
+                        >
+                          <WaitingIndicator />
+                        </div>
+                      )}
+                    </AnimatePresence>
+                  </div>
               </>
             )}
             </div>
