@@ -187,5 +187,311 @@ CREATE TABLE posts (
         )
 
 
+class TestSpreadsheetAdaptiveChunking(unittest.TestCase):
+    """Test cases for adaptive spreadsheet chunking."""
+
+    def setUp(self):
+        """Create temporary directory for test files."""
+        self.temp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        """Clean up temp files."""
+        import shutil
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+
+    def test_wide_spreadsheet_chunks_respect_max_size(self):
+        """
+        Test that wide spreadsheets (100+ columns) produce chunks
+        under the 8192 char embedding limit.
+        """
+        try:
+            import pandas as pd
+        except ImportError:
+            self.skipTest("pandas not available")
+
+        # Create a wide spreadsheet: 100 columns × 50 rows
+        # Each cell has ~20 chars, so estimated chunk size would be huge
+        # without adaptive chunking
+        num_cols = 100
+        num_rows = 50
+        data = {
+            f"col_{i}": [f"value_{i}_{j}" for j in range(num_rows)]
+            for i in range(num_cols)
+        }
+        df = pd.DataFrame(data)
+
+        csv_path = os.path.join(self.temp_dir, "wide_sheet.csv")
+        df.to_csv(csv_path, index=False)
+
+        from app.services.document_processor import SpreadsheetParser
+        parser = SpreadsheetParser()
+        chunks = parser.parse(csv_path)
+
+        # Verify chunks were produced
+        self.assertGreater(len(chunks), 0, "Expected at least one chunk")
+
+        # Verify all chunks are under the max size
+        max_chunk_chars = parser.MAX_CHUNK_CHARS
+        for i, chunk in enumerate(chunks):
+            chunk_size = len(chunk["text"])
+            self.assertLessEqual(
+                chunk_size,
+                max_chunk_chars,
+                f"Chunk {i} exceeds max size: {chunk_size} > {max_chunk_chars}",
+            )
+
+        # Verify adaptive chunking reduced row count from 50
+        # (With 100 columns, 50 rows would be ~20000+ chars)
+        # If chunks respect max, row count must have been reduced
+        total_rows = sum(
+            chunk["metadata"]["row_end"] - chunk["metadata"]["row_start"] + 1
+            for chunk in chunks
+        )
+        self.assertEqual(
+            total_rows,
+            num_rows,
+            f"Expected {num_rows} total rows across chunks, got {total_rows}",
+        )
+
+    def test_narrow_spreadsheet_uses_default_rows_per_chunk(self):
+        """
+        Test that narrow spreadsheets (few columns) still use the default
+        ROWS_PER_CHUNK value for efficiency.
+        """
+        try:
+            import pandas as pd
+        except ImportError:
+            self.skipTest("pandas not available")
+
+        # Create a narrow spreadsheet: 5 columns × 100 rows
+        # This should fit many rows per chunk
+        num_cols = 5
+        num_rows = 100
+        data = {
+            f"col_{i}": [f"val_{i}_{j}" for j in range(num_rows)]
+            for i in range(num_cols)
+        }
+        df = pd.DataFrame(data)
+
+        csv_path = os.path.join(self.temp_dir, "narrow_sheet.csv")
+        df.to_csv(csv_path, index=False)
+
+        from app.services.document_processor import SpreadsheetParser
+        parser = SpreadsheetParser()
+        chunks = parser.parse(csv_path)
+
+        # Verify chunks were produced
+        self.assertGreater(len(chunks), 0, "Expected at least one chunk")
+
+        # With narrow columns, should have fewer chunks (more rows per chunk)
+        # 100 rows / 50 rows_per_chunk = 2 chunks (approximately)
+        # Due to header overhead and filtering, might be 2-3 chunks
+        self.assertLessEqual(
+            len(chunks),
+            3,
+            f"Narrow spreadsheet should have ~2 chunks, got {len(chunks)}",
+        )
+
+        # Verify all chunks respect max size
+        for i, chunk in enumerate(chunks):
+            chunk_size = len(chunk["text"])
+            self.assertLessEqual(
+                chunk_size,
+                parser.MAX_CHUNK_CHARS,
+                f"Chunk {i} exceeds max size: {chunk_size}",
+            )
+
+    def test_single_row_with_long_cell_values_no_data_loss(self):
+        """
+        Test that a single row with extremely long cell values is split
+        into multiple column-group chunks without data loss.
+        """
+        try:
+            import pandas as pd
+        except ImportError:
+            self.skipTest("pandas not available")
+
+        # Create a spreadsheet with 1 row and 10 columns, each with a 1000-char value
+        # Total row would be ~15,000 chars (exceeds 8192)
+        num_cols = 10
+        long_val = "x" * 1000
+        data = {f"col_{i}": [long_val] for i in range(num_cols)}
+        df = pd.DataFrame(data)
+
+        csv_path = os.path.join(self.temp_dir, "long_cells.csv")
+        df.to_csv(csv_path, index=False)
+
+        from app.services.document_processor import SpreadsheetParser
+        parser = SpreadsheetParser()
+        chunks = parser.parse(csv_path)
+
+        # Should produce multiple column-group chunks
+        self.assertGreater(
+            len(chunks),
+            1,
+            "Long cell values should trigger column-group splitting",
+        )
+
+        # Verify all chunks respect max size
+        for i, chunk in enumerate(chunks):
+            chunk_size = len(chunk["text"])
+            self.assertLessEqual(
+                chunk_size,
+                parser.MAX_CHUNK_CHARS,
+                f"Chunk {i} exceeds max size: {chunk_size}",
+            )
+
+        # Verify no data loss: all column names should appear in at least one chunk
+        all_chunk_text = " ".join(chunk["text"] for chunk in chunks)
+        for col_idx in range(num_cols):
+            col_name = f"col_{col_idx}"
+            self.assertIn(
+                col_name,
+                all_chunk_text,
+                f"Column '{col_name}' missing from all chunks",
+            )
+
+        # Verify column-group metadata is present (proves column splitting happened)
+        col_group_chunks = [c for c in chunks if c["metadata"].get("col_group") is not None]
+        self.assertGreaterEqual(
+            len(col_group_chunks),
+            1,
+            "Column-group chunks not found; splitting may not have occurred",
+        )
+
+    def test_mixed_row_sizes_with_column_splitting(self):
+        """
+        Test a spreadsheet where some rows are normal and one row is very wide,
+        triggering column splitting only for the wide row.
+        """
+        try:
+            import pandas as pd
+        except ImportError:
+            self.skipTest("pandas not available")
+
+        # Create a spreadsheet:
+        # - Row 0: 50 columns with short values (fits in one chunk)
+        # - Row 1: 50 columns with 500-char values each (will trigger column splitting)
+        # - Row 2: 50 columns with short values (fits in one chunk)
+        num_cols = 50
+        short_val = "s"
+        long_val = "x" * 500
+
+        data = {
+            f"col_{i}": [short_val, long_val, short_val] for i in range(num_cols)
+        }
+        df = pd.DataFrame(data)
+
+        csv_path = os.path.join(self.temp_dir, "mixed_rows.csv")
+        df.to_csv(csv_path, index=False)
+
+        from app.services.document_processor import SpreadsheetParser
+        parser = SpreadsheetParser()
+        chunks = parser.parse(csv_path)
+
+        # Should produce multiple chunks due to row 1 column splitting
+        self.assertGreater(len(chunks), 1, "Expected multiple chunks due to column splitting")
+
+        # Verify all chunks respect max size
+        for i, chunk in enumerate(chunks):
+            chunk_size = len(chunk["text"])
+            self.assertLessEqual(
+                chunk_size,
+                parser.MAX_CHUNK_CHARS,
+                f"Chunk {i} exceeds max size: {chunk_size}",
+            )
+
+    def test_non_uniform_column_sizes_triggers_validation(self):
+        """
+        Test that non-uniform column sizes (some moderate, some huge) correctly
+        trigger the validation check that prevents oversized columns from being
+        flushed as single-column chunks.
+
+        This test specifically catches the bug where a column that fits alone
+        (1035 chars) is followed by one that exceeds alone (8193 chars).
+        """
+        try:
+            import pandas as pd
+        except ImportError:
+            self.skipTest("pandas not available")
+
+        # Create a row with:
+        # - col_0 to col_4: moderate values that fit together
+        # - col_5: huge value that exceeds 8192 when rendered alone
+        data = {
+            "col_0": ["moderate_0" * 50],  # ~500 chars
+            "col_1": ["moderate_1" * 50],  # ~500 chars
+            "col_2": ["moderate_2" * 50],  # ~500 chars
+            "col_3": ["moderate_3" * 50],  # ~500 chars
+            "col_4": ["moderate_4" * 50],  # ~500 chars
+            "col_5": ["huge" * 2500],  # ~10,000 chars (exceeds 8192 alone)
+        }
+        df = pd.DataFrame(data)
+
+        csv_path = os.path.join(self.temp_dir, "non_uniform_cols.csv")
+        df.to_csv(csv_path, index=False)
+
+        from app.services.document_processor import SpreadsheetParser
+        parser = SpreadsheetParser()
+        chunks = parser.parse(csv_path)
+
+        # Should produce multiple chunks (normal cols + split huge col)
+        self.assertGreater(len(chunks), 1, "Expected multiple chunks")
+
+        # Verify ALL chunks respect max size (the critical check)
+        for i, chunk in enumerate(chunks):
+            chunk_size = len(chunk["text"])
+            self.assertLessEqual(
+                chunk_size,
+                parser.MAX_CHUNK_CHARS,
+                f"Chunk {i} EXCEEDS max size: {chunk_size} > {parser.MAX_CHUNK_CHARS}. "
+                f"This indicates the validation check failed.",
+            )
+
+        # Verify column data is present (no complete loss)
+        all_text = " ".join(c["text"] for c in chunks)
+        self.assertIn("col_0", all_text, "col_0 missing")
+        self.assertIn("col_5", all_text, "col_5 missing")
+        self.assertIn("huge", all_text, "col_5 value data missing — may have been dropped instead of truncated")
+
+    def test_single_column_overflow_truncation(self):
+        """
+        Test that a single column with a value exceeding MAX_CHUNK_CHARS is
+        truncated rather than dropped. Exercises lines 224-244 (the truncation
+        path). Requires a value >= 8156 chars to trigger it.
+        """
+        try:
+            import pandas as pd
+        except ImportError:
+            self.skipTest("pandas not available")
+
+        long_val = "overflow" * 1125  # 9000 chars, exceeds 8192 alone
+        data = {"col_overflow": [long_val]}
+        df = pd.DataFrame(data)
+
+        csv_path = os.path.join(self.temp_dir, "single_col_overflow.csv")
+        df.to_csv(csv_path, index=False)
+
+        from app.services.document_processor import SpreadsheetParser
+        parser = SpreadsheetParser()
+        chunks = parser.parse(csv_path)
+
+        self.assertEqual(len(chunks), 1, "Expected exactly 1 chunk for single-column overflow")
+
+        chunk = chunks[0]
+        self.assertLessEqual(
+            len(chunk["text"]),
+            parser.MAX_CHUNK_CHARS,
+            f"Chunk size {len(chunk['text'])} exceeds MAX_CHUNK_CHARS {parser.MAX_CHUNK_CHARS}",
+        )
+        self.assertIn("col_overflow", chunk["text"], "Column name missing from truncated chunk")
+        self.assertIn("overflow", chunk["text"], "Cell data missing — value may have been dropped instead of truncated")
+        self.assertIsNotNone(
+            chunk["metadata"].get("col_group"),
+            "col_group metadata missing — column-split path was not taken",
+        )
+
+
 if __name__ == '__main__':
     unittest.main()

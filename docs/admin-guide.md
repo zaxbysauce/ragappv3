@@ -432,19 +432,47 @@ services:
 **In `.env`:**
 
 ```bash
-# Reduce memory usage
-CHUNK_SIZE_CHARS=1000
-RETRIEVAL_TOP_K=5
+# Document chunking (affects memory and vector store size)
+CHUNK_SIZE_CHARS=1000      # Smaller chunks = more embeddings, better granularity
+CHUNK_OVERLAP_CHARS=100    # Faster processing (less accurate)
+CHUNK_OVERLAP_CHARS=400    # Slower processing (more accurate)
 
-# Improve response quality
-MAX_DISTANCE_THRESHOLD=0.3
+# Embedding batch processing (critical for performance)
+# Default: 32 (safe for most TEI deployments)
+# Valid range: 1-128
+# Increase for higher throughput if your embedding service has capacity
+# Decrease if you see "batch size exceeds maximum" errors
+EMBEDDING_BATCH_SIZE=32
 
-# Faster processing (less accurate)
-CHUNK_OVERLAP_CHARS=100
-
-# Slower processing (more accurate)
-CHUNK_OVERLAP_CHARS=400
+# Retrieval tuning
+RETRIEVAL_TOP_K=5          # Fewer results = faster retrieval
+MAX_DISTANCE_THRESHOLD=0.3 # Improve response quality
 ```
+
+#### Embedding Batch Size Tuning
+
+The `EMBEDDING_BATCH_SIZE` setting controls how many document chunks are sent to the embedding service in a single request:
+
+| Setting | Best For | Notes |
+|---------|----------|-------|
+| 1-16 | Memory-constrained environments | Slowest throughput, minimal memory impact |
+| 32 (default) | Most production deployments | Good balance of speed and stability |
+| 64-128 | High-capacity embedding services | Faster throughput if your service allows it |
+
+**Important:** TEI (Text Embeddings Inference) and similar services have hard limits on batch sizes:
+- Exceeding the limit will cause `422 Validation: batch size X > maximum allowed batch size Y` errors
+- Default TEI limit is 32 sequences per request
+- When using remote embedding services, verify their batch size limit before increasing this setting
+
+#### Spreadsheet Handling
+
+Wide spreadsheets (100+ columns) are automatically split into column groups to ensure chunks stay within the embedding model's input limit (8192 characters):
+
+- **No data loss:** All columns are preserved; only extremely wide cell values (>8192 chars) are truncated
+- **Pre-embedding validation:** Check logs for warnings about oversized chunks
+- **Column-group metadata:** Each chunk is tagged with `col_group` index for identification
+
+If you process many wide spreadsheets, monitor logs for chunk size warnings and consider adjusting `CHUNK_SIZE_CHARS` if needed.
 
 ### Database Optimization
 

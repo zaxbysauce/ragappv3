@@ -124,10 +124,201 @@ class SpreadsheetParser:
     can orient itself when answering questions about the data.
     """
 
-    # Number of data rows per chunk. Tune lower for wide sheets (many columns),
-    # higher for narrow sheets. 50 rows * ~5 cols * ~15 chars ≈ ~3750 chars,
-    # safely under a 2000-char chunk_size_chars default with header overhead.
+    # Default number of rows to attempt per chunk. Adaptively reduced for wide sheets.
     ROWS_PER_CHUNK: int = 50
+    # Maximum characters per chunk (embedding service limit is 8192)
+    MAX_CHUNK_CHARS: int = 8192
+
+    def _calculate_adaptive_rows_per_chunk(
+        self, sample_df, headers: list, sheet_name: str
+    ) -> int:
+        """
+        Calculate how many rows fit in MAX_CHUNK_CHARS by sampling the data.
+
+        Uses the first few rows to estimate average row size, then calculates
+        how many rows can fit before hitting the MAX_CHUNK_CHARS limit.
+
+        Args:
+            sample_df: DataFrame with first few rows for size estimation
+            headers: Column names
+            sheet_name: Sheet name for logging
+
+        Returns:
+            Estimated number of rows per chunk (minimum 1)
+        """
+        if sample_df.empty:
+            return self.ROWS_PER_CHUNK
+
+        # Estimate header and sheet overhead
+        header_str = " | ".join(str(h) for h in headers)
+        header_overhead = len(f"Sheet: {sheet_name}\nColumns: {header_str}\n\n")
+
+        # Estimate average row size from samples
+        total_row_chars = 0
+        row_count = 0
+
+        for _, row in sample_df.iterrows():
+            row_parts = [
+                f"{col}: {val}"
+                for col, val in zip(headers, row)
+                if str(val).strip()
+            ]
+            if row_parts:
+                row_text = " | ".join(row_parts)
+                total_row_chars += len(row_text) + 1  # +1 for newline
+                row_count += 1
+
+        if row_count == 0:
+            return self.ROWS_PER_CHUNK
+
+        avg_row_chars = total_row_chars / row_count
+        available_chars = self.MAX_CHUNK_CHARS - header_overhead
+
+        if available_chars <= 0:
+            return 1
+
+        # Calculate rows that fit, with safety margin
+        estimated_rows = max(1, int(available_chars / avg_row_chars) - 2)
+        result = min(self.ROWS_PER_CHUNK, estimated_rows)
+
+        logger.debug(
+            "Sheet '%s': avg_row=%d chars, available=%d, estimated rows=%d",
+            sheet_name,
+            int(avg_row_chars),
+            available_chars,
+            result,
+        )
+
+        return result
+
+    def _split_row_by_columns(
+        self, col_val_pairs: List[tuple], sheet_name: str, row_idx: int, total_rows: int, total_col_count: int
+    ) -> List[dict]:
+        """
+        Split a single wide row into multiple chunks by column groups.
+        Each chunk includes only columns that fit within MAX_CHUNK_CHARS.
+
+        Args:
+            col_val_pairs: List of (col_name, str_value) tuples for non-empty cells
+            sheet_name: Sheet name for chunk prefix
+            row_idx: 0-based row index (for metadata)
+            total_rows: Total rows in sheet (for metadata)
+            total_col_count: Total columns in sheet (for metadata)
+
+        Returns:
+            List of chunk dicts, one per column group. No data loss unless a single
+            cell value exceeds MAX_CHUNK_CHARS (which then gets truncated).
+        """
+        if not col_val_pairs:
+            return []
+
+        result = []
+        group_pairs = []  # Current column group: list of (col, val) tuples
+
+        for col, val in col_val_pairs:
+            # Test adding this column to current group
+            group_pairs.append((col, val))
+            test_chunk_text = self._build_column_group_text(group_pairs, sheet_name)
+
+            if len(test_chunk_text) > self.MAX_CHUNK_CHARS:
+                group_pairs.pop()  # revert the probe append
+                if not group_pairs:
+                    # Single column exceeds limit: truncate this cell's value only
+                    header_section = f"Sheet: {sheet_name}\nColumns: {col}\n\n{col}: "
+                    available = self.MAX_CHUNK_CHARS - len(header_section)
+                    truncated_val = val[:max(0, available)]
+                    logger.warning(
+                        "Column '%s' value exceeds max chunk size; truncating from %d to %d chars.",
+                        col,
+                        len(val),
+                        len(truncated_val),
+                    )
+                    result.append(
+                        self._make_column_group_chunk(
+                            [(col, truncated_val)],
+                            sheet_name,
+                            row_idx,
+                            total_rows,
+                            total_col_count,
+                            len(result),
+                        )
+                    )
+                    # group_pairs stays empty, continue to next column
+                else:
+                    # Current group is full; flush it and start new group with this column
+                    result.append(
+                        self._make_column_group_chunk(
+                            group_pairs,
+                            sheet_name,
+                            row_idx,
+                            total_rows,
+                            total_col_count,
+                            len(result),
+                        )
+                    )
+                    # Validate that single column fits by itself before starting new group
+                    single_col_text = self._build_column_group_text([(col, val)], sheet_name)
+                    if len(single_col_text) > self.MAX_CHUNK_CHARS:
+                        # Single column exceeds limit; truncate it
+                        header_section = f"Sheet: {sheet_name}\nColumns: {col}\n\n{col}: "
+                        available = self.MAX_CHUNK_CHARS - len(header_section)
+                        truncated_val = val[:max(0, available)]
+                        logger.warning(
+                            "Column '%s' value exceeds max chunk size; truncating from %d to %d chars.",
+                            col,
+                            len(val),
+                            len(truncated_val),
+                        )
+                        group_pairs = [(col, truncated_val)]
+                    else:
+                        group_pairs = [(col, val)]
+            else:
+                # Column fits; already appended above
+                pass
+
+        # Flush any remaining columns
+        if group_pairs:
+            result.append(
+                self._make_column_group_chunk(
+                    group_pairs,
+                    sheet_name,
+                    row_idx,
+                    total_rows,
+                    total_col_count,
+                    len(result),
+                )
+            )
+
+        return result
+
+    def _build_column_group_text(self, col_val_pairs: List[tuple], sheet_name: str) -> str:
+        """Build the text for a column group (helper for _split_row_by_columns)."""
+        col_str = " | ".join(col for col, _ in col_val_pairs)
+        row_str = " | ".join(f"{col}: {val}" for col, val in col_val_pairs)
+        return f"Sheet: {sheet_name}\nColumns: {col_str}\n\n{row_str}"
+
+    def _make_column_group_chunk(
+        self,
+        col_val_pairs: List[tuple],
+        sheet_name: str,
+        row_idx: int,
+        total_rows: int,
+        total_col_count: int,
+        group_idx: int,
+    ) -> dict:
+        """Create a chunk dict for a column group (helper for _split_row_by_columns)."""
+        return {
+            "text": self._build_column_group_text(col_val_pairs, sheet_name),
+            "metadata": {
+                "sheet_name": sheet_name,
+                "row_start": row_idx,
+                "row_end": row_idx,
+                "total_rows": total_rows,
+                "column_count": total_col_count,
+                "col_group": group_idx,
+                "source_type": "spreadsheet",
+            },
+        }
 
     def parse(self, file_path: str) -> List[dict]:
         """
@@ -192,8 +383,16 @@ class SpreadsheetParser:
             header_str = " | ".join(str(h) for h in headers)
             total_rows = len(df)
 
-            for start in range(0, total_rows, self.ROWS_PER_CHUNK):
-                batch = df.iloc[start : start + self.ROWS_PER_CHUNK]
+            # Calculate adaptive row count for this sheet based on column width
+            rows_per_chunk = self._calculate_adaptive_rows_per_chunk(
+                df.iloc[0:min(5, total_rows)], headers, sheet_name
+            )
+
+            start = 0
+            while start < total_rows:
+                # Try to add rows up to rows_per_chunk, but adjust if needed
+                end = min(start + rows_per_chunk, total_rows)
+                batch = df.iloc[start:end]
                 rows_text_lines = []
 
                 for _, row in batch.iterrows():
@@ -209,6 +408,7 @@ class SpreadsheetParser:
 
                 if not rows_text_lines:
                     # All rows in this batch were entirely empty — skip
+                    start = end
                     continue
 
                 chunk_text = (
@@ -217,19 +417,42 @@ class SpreadsheetParser:
                     + "\n".join(rows_text_lines)
                 )
 
+                # If chunk exceeds max chars, reduce row count or split by columns
+                if len(chunk_text) > self.MAX_CHUNK_CHARS:
+                    if end - start <= 1:
+                        # Single row exceeds limit; split into column groups
+                        single_row = df.iloc[start]
+                        col_val_pairs = [
+                            (col, str(val))
+                            for col, val in zip(headers, single_row)
+                            if str(val).strip()
+                        ]
+                        col_group_chunks = self._split_row_by_columns(
+                            col_val_pairs, sheet_name, start, total_rows, len(headers)
+                        )
+                        chunks.extend(col_group_chunks)
+                        start = end
+                        continue
+                    else:
+                        # Multi-row batch exceeds limit; reduce row count and retry
+                        rows_per_chunk = max(1, rows_per_chunk // 2)
+                        continue
+
                 chunks.append(
                     {
                         "text": chunk_text,
                         "metadata": {
                             "sheet_name": sheet_name,
                             "row_start": start,
-                            "row_end": start + len(batch) - 1,
+                            "row_end": end - 1,
                             "total_rows": total_rows,
                             "column_count": len(headers),
                             "source_type": "spreadsheet",
+                            "col_group": None,
                         },
                     }
                 )
+                start = end
 
         return chunks
 
@@ -302,6 +525,39 @@ class DocumentProcessor:
         if self._contextual_chunker is None:
             self._contextual_chunker = ContextualChunker(self._llm_client)
         return self._contextual_chunker
+
+    def _validate_chunk_sizes(self, texts: List[str], source_filename: str) -> None:
+        """
+        Validate that chunks don't exceed embedding service's max text length.
+
+        Logs warnings for chunks exceeding the limit.
+
+        Args:
+            texts: List of chunk texts to validate
+            source_filename: Source filename for logging context
+        """
+        if not self.embedding_service:
+            return
+
+        max_len = getattr(self.embedding_service, "MAX_TEXT_LENGTH", 8192)
+        raw_prefix = getattr(self.embedding_service, "embedding_doc_prefix", "") or ""
+        prefix_len = len(raw_prefix)
+        effective_max = max_len - prefix_len
+        oversized = []
+
+        for i, text in enumerate(texts):
+            if len(text) > effective_max:
+                oversized.append((i, len(text)))
+
+        if oversized:
+            logger.warning(
+                "Document '%s' has %d chunk(s) exceeding effective embedding length (%d chars after prefix): %s. "
+                "embed_batch() will raise EmbeddingError for these chunks.",
+                source_filename,
+                len(oversized),
+                effective_max,
+                ", ".join(f"chunk {i} ({size} chars)" for i, size in oversized),
+            )
 
     def _get_chunk_enrichment_service(self) -> Optional[ChunkEnrichmentService]:
         """Lazily create a ChunkEnrichmentService when needed."""
@@ -870,6 +1126,9 @@ class DocumentProcessor:
 
                     # Extract texts from chunks
                     texts = [c.text for c in chunks]
+
+                    # Validate chunk sizes before embedding
+                    self._validate_chunk_sizes(texts, source_filename)
 
                     # Generate dense embeddings (Harrier dense-only)
                     embeddings = await self.embedding_service.embed_batch(texts)
