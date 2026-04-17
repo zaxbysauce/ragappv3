@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Use vi.hoisted to make mock functions available at mock time
-const { mockPostFn, mockGetFn, mockPatchFn } = vi.hoisted(() => ({
+const { mockPostFn, mockGetFn, mockPatchFn, mockResetCsrfToken, mockEnsureCsrfToken } = vi.hoisted(() => ({
   mockPostFn: vi.fn(),
   mockGetFn: vi.fn(),
   mockPatchFn: vi.fn(),
+  mockResetCsrfToken: vi.fn(),
+  mockEnsureCsrfToken: vi.fn().mockResolvedValue("mock-csrf-token"),
 }));
 
 // Mock axios before importing the store
@@ -28,6 +30,9 @@ vi.mock("axios", () => ({
 vi.mock("@/lib/api", () => ({
   setJwtAccessToken: vi.fn(),
   getJwtAccessToken: vi.fn(() => null),
+  resetCsrfToken: mockResetCsrfToken,
+  ensureCsrfToken: mockEnsureCsrfToken,
+  attachCsrfInterceptor: vi.fn(),
   default: {
     get: vi.fn(),
     post: vi.fn(),
@@ -62,6 +67,9 @@ describe("useAuthStore", () => {
     mockPost.mockReset();
     mockGet.mockReset();
     mockPatch.mockReset();
+    mockResetCsrfToken.mockReset();
+    mockEnsureCsrfToken.mockReset();
+    mockEnsureCsrfToken.mockResolvedValue("mock-csrf-token");
 
     // Reset store state
     useAuthStore.setState({
@@ -188,7 +196,7 @@ describe("useAuthStore", () => {
       mockPost?.mockResolvedValueOnce({
         data: {
           access_token: "jwt123",
-          user: mockUser,
+          ...mockUser,
         },
       });
 
@@ -204,19 +212,43 @@ describe("useAuthStore", () => {
 
     it("should handle register without full name", async () => {
       const { register } = useAuthStore.getState();
-      
+
       mockPost?.mockResolvedValueOnce({
         data: {
-          access_token: "jwt456",
-          user: { ...mockUser, username: "anotheruser" },
+          access_token: "jwt123",
+          ...mockUser,
         },
       });
 
       await register("anotheruser", "password123");
 
       const state = useAuthStore.getState();
-      expect(state.accessToken).toBe("jwt456");
+      expect(state.accessToken).toBe("jwt123");
       expect(state.isAuthenticated).toBe(true);
+    });
+
+    // =============================================================================
+    // C1 — register() calls resetCsrfToken and ensureCsrfToken (review council fix)
+    // =============================================================================
+    it("should call resetCsrfToken and ensureCsrfToken after successful registration", async () => {
+      const { register } = useAuthStore.getState();
+
+      mockPost?.mockResolvedValueOnce({
+        data: {
+          access_token: "jwt789",
+          id: 2,
+          username: "newuser2",
+          full_name: "New User 2",
+          role: "member",
+          is_active: true,
+        },
+      });
+
+      await register("newuser2", "password123", "New User 2");
+
+      // C1 fix: register() resets and re-fetches CSRF for the new session
+      expect(mockResetCsrfToken).toHaveBeenCalledTimes(1);
+      expect(mockEnsureCsrfToken).toHaveBeenCalledTimes(1);
     });
   });
 

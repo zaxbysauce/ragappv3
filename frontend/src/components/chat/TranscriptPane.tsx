@@ -25,6 +25,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { cn } from "@/lib/utils";
 import { MessageBubble } from "./MessageBubble";
 import { AssistantMessage } from "./AssistantMessage";
+import { WaitingIndicator } from "./WaitingIndicator";
 import { useChatStore } from "@/stores/useChatStore";
 import { useVaultStore } from "@/stores/useVaultStore";
 import { useSendMessage, MAX_INPUT_LENGTH } from "@/hooks/useSendMessage";
@@ -313,7 +314,7 @@ function Composer({ onSend, onStop, isStreaming, className, inputRef }: Composer
           onChange={handleInputChange}
           onKeyDown={handleKeyDown}
           placeholder="Message... (type / for commands, Enter to send, Shift+Enter for new line)"
-          className="min-h-[44px] max-h-[200px] resize-none border-0 bg-transparent px-4 py-3 text-sm placeholder:text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0"
+          className="min-h-[44px] max-h-[200px] resize-none border-0 bg-transparent px-4 py-3 text-sm placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
           disabled={isStreaming}
           aria-label="Message input"
           aria-describedby={inputError ? "input-error" : undefined}
@@ -496,6 +497,10 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [showDebug, setShowDebug] = useState(false);
 
+  // Waiting indicator state with anti-flicker debounce
+  const [isWaitingForResponse, setIsWaitingForResponse] = useState(false);
+  const waitingDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Check if vault has indexed documents (using file_count from Vault interface)
   const hasIndexedDocs = activeVault ? activeVault.file_count > 0 : false;
 
@@ -517,12 +522,50 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
     }
   }, [messages, isStreaming, isAtBottom, virtualizer]);
 
+  // Scroll to bottom when waiting indicator appears
+  useEffect(() => {
+    if (isWaitingForResponse && isAtBottom && messages.length > 0 && scrollRef.current) {
+      requestAnimationFrame(() => {
+        if (scrollRef.current) {
+          scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+        }
+      });
+    }
+  }, [isWaitingForResponse, isAtBottom, messages.length]);
+
   // Re-measure virtual items during streaming to handle growing content
   useEffect(() => {
     if (isStreaming) {
       virtualizer.measure();
     }
   }, [isStreaming, messages, virtualizer]);
+
+  // Anti-flicker: only show waiting indicator after 100ms of streaming
+  useEffect(() => {
+    if (isStreaming) {
+      waitingDebounceRef.current = setTimeout(() => {
+        setIsWaitingForResponse(true);
+      }, 100);
+    } else {
+      if (waitingDebounceRef.current) {
+        clearTimeout(waitingDebounceRef.current);
+        waitingDebounceRef.current = null;
+      }
+      setIsWaitingForResponse(false);
+    }
+    return () => {
+      if (waitingDebounceRef.current) {
+        clearTimeout(waitingDebounceRef.current);
+      }
+    };
+  }, [isStreaming]);
+
+  // Auto-focus chat input on mount (only if no dialog/modal is open)
+  useEffect(() => {
+    if (!document.querySelector('[role="dialog"], [role="alertdialog"], [data-radix-popper-content-wrapper]')) {
+      composerRef.current?.focus();
+    }
+  }, []);
 
   // Handle scroll events - track if user is near bottom (<100px)
   const handleScroll = () => {
@@ -597,14 +640,15 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
                   onNavigateToDocuments={handleNavigateToDocuments}
                 />
               ) : (
-                <div
-                  style={{
-                    height: virtualizer.getTotalSize(),
-                    width: '100%',
-                    position: 'relative',
-                  }}
-                >
-                  {virtualizer.getVirtualItems().map((virtualItem) => {
+                <>
+                  <div
+                    style={{
+                      height: virtualizer.getTotalSize(),
+                      width: '100%',
+                      position: 'relative',
+                    }}
+                  >
+                    {virtualizer.getVirtualItems().map((virtualItem) => {
                     const message = messages[virtualItem.index];
                     const isLastMessage = virtualItem.index === messages.length - 1;
                     const isAssistantStreaming = isStreaming && isLastMessage && message.role === "assistant";
@@ -640,7 +684,13 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
                     );
                   })}
                 </div>
-              )}
+                <AnimatePresence>
+                  {isWaitingForResponse && messages.length > 0 && messages[messages.length - 1].role === "assistant" && !messages[messages.length - 1].content && (
+                    <WaitingIndicator />
+                  )}
+                </AnimatePresence>
+              </>
+            )}
             </div>
           </div>
 

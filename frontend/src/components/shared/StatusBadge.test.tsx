@@ -109,7 +109,7 @@ describe("StatusBadge", () => {
     it("indexed badge has green background with CheckCircle icon", () => {
       render(<StatusBadge status="indexed" />);
       const badge = screen.getByText("Indexed").closest("div");
-      expect(badge).toHaveClass("bg-green-500");
+      expect(badge).toHaveClass("bg-success");
     });
 
     it("error badge has destructive variant with AlertCircle icon", () => {

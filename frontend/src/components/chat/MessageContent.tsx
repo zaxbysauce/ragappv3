@@ -97,7 +97,7 @@ export function MessageContent({ content, sources, isStreaming }: MessageContent
         aria-label={copied ? "Copied to clipboard" : "Copy message to clipboard"}
       >
         {copied ? (
-          <Check className="h-4 w-4 text-green-500" />
+          <Check className="h-4 w-4 text-success" />
         ) : (
           <Copy className="h-4 w-4" />
         )}

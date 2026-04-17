@@ -17,7 +17,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { FileText, Upload, Search, Trash2, ScanLine, AlertCircle, Loader2, X, RotateCcw, Trash } from "lucide-react";
+import { FileText, Upload, Search, Trash2, ScanLine, AlertCircle, Loader2, X, RotateCcw, Trash, Info } from "lucide-react";
 import { listDocuments, scanDocuments, deleteDocument, deleteDocuments, deleteAllDocumentsInVault, getDocumentStats, type Document, type DocumentStatsResponse } from "@/lib/api";
 import { formatFileSize, formatDate } from "@/lib/formatters";
 import { useDebounce } from "@/hooks/useDebounce";
@@ -54,11 +54,21 @@ export default function DocumentsPage() {
   const pollIntervalMsRef = useRef(2_000);
   const tableScrollRef = useRef<HTMLDivElement>(null);
   const mobileScrollRef = useRef<HTMLDivElement>(null);
+  // Optimistic delete state
+  const [optimisticallyDeletedIds, setOptimisticallyDeletedIds] = useState<Set<string>>(new Set());
+  const pendingDeleteTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   // Cleanup on unmount: restore cursor if component is destroyed during a drag
   useEffect(() => {
     return () => {
       document.body.style.cursor = '';
+    };
+  }, []);
+
+  // Cleanup pending delete timers on unmount
+  useEffect(() => {
+    return () => {
+      pendingDeleteTimersRef.current.forEach((timer) => clearTimeout(timer));
     };
   }, []);
 
@@ -279,24 +289,77 @@ export default function DocumentsPage() {
       open: true,
       title: "Delete Document",
       description: "Are you sure you want to delete this document? This will also remove all associated chunks.",
-      onConfirm: async () => {
-        try {
-          await deleteDocument(docId);
-          toast.success("Document deleted successfully");
-          await Promise.all([fetchDocuments(), fetchStats()]);
-        } catch (err) {
-          toast.error(err instanceof Error ? err.message : "Failed to delete document");
-        }
+      onConfirm: () => {
+        // Guard: prevent duplicate delete for same document
+        if (pendingDeleteTimersRef.current.has(docId)) return;
+
+        // 1. Optimistically remove from local list
+        setOptimisticallyDeletedIds((prev) => new Set(prev).add(docId));
+
+        // 2. Show undo toast
+        const toastId = toast("Document deleted", {
+          description: "You can undo this action",
+          duration: 3000,
+          action: {
+            label: "Undo",
+            onClick: () => {
+              // Cancel the pending delete timer
+              const timer = pendingDeleteTimersRef.current.get(docId);
+              if (timer) {
+                clearTimeout(timer);
+                pendingDeleteTimersRef.current.delete(docId);
+              }
+              // Restore document to list
+              setOptimisticallyDeletedIds((prev) => {
+                const next = new Set(prev);
+                next.delete(docId);
+                return next;
+              });
+              toast.dismiss(toastId);
+            },
+          },
+        });
+
+        // 3. Start 3-second timer before actual API call
+        const timer = setTimeout(async () => {
+          pendingDeleteTimersRef.current.delete(docId);
+          toast.dismiss(toastId); // Dismiss undo toast before showing success/error
+          try {
+            await deleteDocument(docId);
+            toast.success("Document deleted successfully");
+            await Promise.all([fetchDocuments(), fetchStats()]);
+            // Clean up optimistic state after successful server-side delete
+            setOptimisticallyDeletedIds((prev) => {
+              const next = new Set(prev);
+              next.delete(docId);
+              return next;
+            });
+          } catch (err) {
+            toast.error(err instanceof Error ? err.message : "Failed to delete document");
+            // Restore on failure
+            setOptimisticallyDeletedIds((prev) => {
+              const next = new Set(prev);
+              next.delete(docId);
+              return next;
+            });
+            await fetchDocuments();
+          }
+        }, 3000);
+
+        pendingDeleteTimersRef.current.set(docId, timer);
       },
       variant: "destructive",
     });
   };
 
   const filteredDocuments = useMemo(
-    () => documents?.filter((doc) =>
-      doc.filename.toLowerCase().includes(debouncedSearchQuery.toLowerCase())
-    ) ?? [],
-    [documents, debouncedSearchQuery]
+    () =>
+      documents
+        ?.filter((doc) => !optimisticallyDeletedIds.has(doc.id))
+        .filter((doc) =>
+          doc.filename.toLowerCase().includes(debouncedSearchQuery.toLowerCase())
+        ) ?? [],
+    [documents, debouncedSearchQuery, optimisticallyDeletedIds]
   );
 
   const tableVirtualizer = useVirtualizer({
@@ -386,6 +449,10 @@ export default function DocumentsPage() {
         <input {...getInputProps()} />
         <CardContent className="py-8">
           <div className="flex flex-col items-center justify-center text-center">
+            <Badge variant="secondary" className="mb-3 gap-1.5 text-xs font-medium">
+              <Info className="h-3 w-3" aria-hidden="true" />
+              Max 50 MB
+            </Badge>
             <Upload className="w-12 h-12 text-muted-foreground mb-4" />
             <p className="text-lg font-medium">
               {isDragActive ? "Drop files here..." : "Drag & drop files here, or click to select"}
@@ -424,7 +491,7 @@ export default function DocumentsPage() {
                   </span>
                   <div className="flex items-center gap-2">
                     {upload.status === "completed" && (
-                      <span className="text-green-500 text-xs">Done</span>
+                      <span className="text-success text-xs">Done</span>
                     )}
                     {upload.status === "error" && (
                       <span className="text-destructive text-xs" title={upload.error}>

@@ -1,7 +1,14 @@
 import { render, screen, fireEvent } from "@testing-library/react";
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { MemoryRouter } from "react-router-dom";
 import { NavigationRail } from "./NavigationRail";
 import type { NavItemId } from "./navigationTypes";
+
+// Mock useThemeStore before importing NavigationRail (NavigationRail imports useThemeStore)
+vi.mock("@/stores/useThemeStore", () => ({
+  useThemeStore: vi.fn(() => "dark"),
+  applyTheme: vi.fn(),
+}));
 
 // Mock health status
 const mockHealthStatus = {
@@ -22,11 +29,13 @@ describe("NavigationRail", () => {
   describe("Navigation Items", () => {
     it("renders all navigation items including chatNew", () => {
       render(
-        <NavigationRail
-          activeItem="chat"
-          onItemSelect={vi.fn()}
-          healthStatus={mockHealthStatus}
-        />
+        <MemoryRouter>
+          <NavigationRail
+            activeItem="chat"
+            onItemSelect={vi.fn()}
+            healthStatus={mockHealthStatus}
+          />
+        </MemoryRouter>
       );
 
       // Check for all expected nav items
@@ -40,11 +49,13 @@ describe("NavigationRail", () => {
 
     it("renders chatNew with NEW badge", () => {
       render(
-        <NavigationRail
-          activeItem="chat"
-          onItemSelect={vi.fn()}
-          healthStatus={mockHealthStatus}
-        />
+        <MemoryRouter>
+          <NavigationRail
+            activeItem="chat"
+            onItemSelect={vi.fn()}
+            healthStatus={mockHealthStatus}
+          />
+        </MemoryRouter>
       );
 
       // Check for NEW badge on chatNew item
@@ -55,11 +66,13 @@ describe("NavigationRail", () => {
 
     it("renders chatNew with gradient styling", () => {
       render(
-        <NavigationRail
-          activeItem="chat"
-          onItemSelect={vi.fn()}
-          healthStatus={mockHealthStatus}
-        />
+        <MemoryRouter>
+          <NavigationRail
+            activeItem="chat"
+            onItemSelect={vi.fn()}
+            healthStatus={mockHealthStatus}
+          />
+        </MemoryRouter>
       );
 
       const chatNewButton = screen.getByLabelText("Chat (New)");
@@ -69,11 +82,13 @@ describe("NavigationRail", () => {
 
     it("renders chatNew icon with gradient background", () => {
       render(
-        <NavigationRail
-          activeItem="chat"
-          onItemSelect={vi.fn()}
-          healthStatus={mockHealthStatus}
-        />
+        <MemoryRouter>
+          <NavigationRail
+            activeItem="chat"
+            onItemSelect={vi.fn()}
+            healthStatus={mockHealthStatus}
+          />
+        </MemoryRouter>
       );
 
       const chatNewIconContainer = screen.getByLabelText("Chat (New)").querySelector("div");
@@ -83,11 +98,13 @@ describe("NavigationRail", () => {
 
     it("renders chatNew label with gradient text", () => {
       render(
-        <NavigationRail
-          activeItem="chat"
-          onItemSelect={vi.fn()}
-          healthStatus={mockHealthStatus}
-        />
+        <MemoryRouter>
+          <NavigationRail
+            activeItem="chat"
+            onItemSelect={vi.fn()}
+            healthStatus={mockHealthStatus}
+          />
+        </MemoryRouter>
       );
 
       // Get the visible label by querying the button and filtering out sr-only
@@ -104,11 +121,13 @@ describe("NavigationRail", () => {
 
     it("chatNew icon has pulse animation", () => {
       render(
-        <NavigationRail
-          activeItem="chat"
-          onItemSelect={vi.fn()}
-          healthStatus={mockHealthStatus}
-        />
+        <MemoryRouter>
+          <NavigationRail
+            activeItem="chat"
+            onItemSelect={vi.fn()}
+            healthStatus={mockHealthStatus}
+          />
+        </MemoryRouter>
       );
 
       const chatNewIcon = screen.getByLabelText("Chat (New)").querySelector("svg");
@@ -119,11 +138,13 @@ describe("NavigationRail", () => {
   describe("Active State", () => {
     it("highlights active item with primary background", () => {
       render(
-        <NavigationRail
-          activeItem="chat"
-          onItemSelect={vi.fn()}
-          healthStatus={mockHealthStatus}
-        />
+        <MemoryRouter>
+          <NavigationRail
+            activeItem="chat"
+            onItemSelect={vi.fn()}
+            healthStatus={mockHealthStatus}
+          />
+        </MemoryRouter>
       );
 
       const chatButton = screen.getByLabelText("Chat");
@@ -132,11 +153,13 @@ describe("NavigationRail", () => {
 
     it("does not show active indicator on chatNew when active", () => {
       render(
-        <NavigationRail
-          activeItem="chatNew"
-          onItemSelect={vi.fn()}
-          healthStatus={mockHealthStatus}
-        />
+        <MemoryRouter>
+          <NavigationRail
+            activeItem="chatNew"
+            onItemSelect={vi.fn()}
+            healthStatus={mockHealthStatus}
+          />
+        </MemoryRouter>
       );
 
       // chatNew should NOT have the right-side active indicator
@@ -151,11 +174,13 @@ describe("NavigationRail", () => {
       const handleSelect = vi.fn<(id: NavItemId) => void>();
 
       render(
-        <NavigationRail
-          activeItem="chat"
-          onItemSelect={handleSelect}
-          healthStatus={mockHealthStatus}
-        />
+        <MemoryRouter>
+          <NavigationRail
+            activeItem="chat"
+            onItemSelect={handleSelect}
+            healthStatus={mockHealthStatus}
+          />
+        </MemoryRouter>
       );
 
       const documentsButton = screen.getByLabelText("Documents");
@@ -166,11 +191,13 @@ describe("NavigationRail", () => {
 
     it("navigates to /chat/redesign for chatNew item", () => {
       render(
-        <NavigationRail
-          activeItem="chat"
-          onItemSelect={vi.fn()}
-          healthStatus={mockHealthStatus}
-        />
+        <MemoryRouter>
+          <NavigationRail
+            activeItem="chat"
+            onItemSelect={vi.fn()}
+            healthStatus={mockHealthStatus}
+          />
+        </MemoryRouter>
       );
 
       const chatNewButton = screen.getByLabelText("Chat (New)");
@@ -183,11 +210,13 @@ describe("NavigationRail", () => {
   describe("Health Status Footer", () => {
     it("renders health status indicators", () => {
       render(
-        <NavigationRail
-          activeItem="chat"
-          onItemSelect={vi.fn()}
-          healthStatus={mockHealthStatus}
-        />
+        <MemoryRouter>
+          <NavigationRail
+            activeItem="chat"
+            onItemSelect={vi.fn()}
+            healthStatus={mockHealthStatus}
+          />
+        </MemoryRouter>
       );
 
       // Check for health status labels in the footer
@@ -199,7 +228,7 @@ describe("NavigationRail", () => {
 
       // Check green indicators (healthy) - look in the footer container by class
       const footerContainer = screen.getByText("API").closest("div");
-      const greenIndicators = footerContainer.querySelectorAll(".bg-green-500");
+      const greenIndicators = footerContainer.querySelectorAll(".bg-success");
       expect(greenIndicators.length).toBeGreaterThan(0);
     });
   });

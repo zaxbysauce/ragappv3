@@ -23,6 +23,85 @@ function getCsrfCookie(): string | null {
   return match ? decodeURIComponent(match.split('=', 2)[1]) : null;
 }
 
+// CSRF token cache and deduplication — single source of truth
+let _csrfToken: string | null = null;
+let _csrfFetchPromise: Promise<string> | null = null;
+
+export function resetCsrfToken(): void {
+  _csrfToken = null;
+  _csrfFetchPromise = null;
+}
+
+export function getCsrfToken(): string | null {
+  return _csrfToken;
+}
+
+export async function ensureCsrfToken(): Promise<string> {
+  if (_csrfToken) return _csrfToken;
+
+  // Check cookie first
+  const cookieToken = getCsrfCookie();
+  if (cookieToken) {
+    _csrfToken = cookieToken;
+    return _csrfToken;
+  }
+
+  if (!_csrfFetchPromise) {
+    _csrfFetchPromise = fetch(`${API_BASE_URL}/csrf-token`, { credentials: "include" })
+      .then(async (resp) => {
+        if (!resp.ok) throw new Error("Failed to fetch CSRF token");
+        const data = await resp.json();
+        if (!data.csrf_token || typeof data.csrf_token !== "string") {
+          throw new Error("CSRF token missing from response");
+        }
+        _csrfToken = data.csrf_token;
+        return _csrfToken;
+      })
+      .finally(() => {
+        _csrfFetchPromise = null;
+      });
+  }
+  return _csrfFetchPromise;
+}
+
+export function attachCsrfInterceptor(instance: ReturnType<typeof axios.create>): void {
+  // Request interceptor: attach CSRF to mutating requests
+  instance.interceptors.request.use(async (config) => {
+    if (config.method && ["post", "put", "patch", "delete"].includes(config.method.toLowerCase())) {
+      const token = await ensureCsrfToken();
+      if (token) {
+        if (!config.headers) {
+          config.headers = {};
+        }
+        config.headers["X-CSRF-Token"] = token;
+      }
+    }
+    return config;
+  });
+
+  // Response interceptor: on CSRF-specific 403, clear cached token and retry once
+  instance.interceptors.response.use(
+    (resp) => resp,
+    async (error) => {
+      const config = error.config;
+      const isCsrfError = error.response?.status === 403
+        && (typeof error.response?.data?.detail === 'string'
+            && error.response.data.detail.toLowerCase().includes('csrf'));
+      if (isCsrfError && config && !config._csrfRetry) {
+        resetCsrfToken(); // force refresh on next request
+        config._csrfRetry = true;
+        const newToken = await ensureCsrfToken();
+        if (!config.headers) {
+          config.headers = {};
+        }
+        config.headers["X-CSRF-Token"] = newToken;
+        return instance(config);
+      }
+      return Promise.reject(error);
+    }
+  );
+}
+
 // Singleton refresh promise — ensures only one /auth/refresh call is in flight
 // at a time. Concurrent 401s share the same promise so the refresh cookie is
 // not rotated twice (which would invalidate the second caller's session).
@@ -96,6 +175,9 @@ apiClient.interceptors.request.use((config) => {
   }
   return config;
 });
+
+// Attach CSRF protection for all mutating requests on apiClient
+attachCsrfInterceptor(apiClient);
 
 // Parse JWT token to extract expiry timestamp (exp claim)
 function getTokenExpiry(token: string): number | null {

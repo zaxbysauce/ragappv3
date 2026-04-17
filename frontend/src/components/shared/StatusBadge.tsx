@@ -12,7 +12,7 @@ export const FILE_STATUS_LABELS: Record<string, string> = {
 export const FILE_STATUS_COLORS: Record<string, { variant: "default" | "secondary" | "outline" | "destructive"; className: string; icon: LucideIcon }> = {
   pending: { variant: "outline", className: "", icon: Clock },
   processing: { variant: "secondary", className: "", icon: Loader2 },
-  indexed: { variant: "default", className: "bg-green-500", icon: CheckCircle },
+  indexed: { variant: "default", className: "bg-success", icon: CheckCircle },
   error: { variant: "destructive", className: "", icon: AlertCircle },
 };
 
