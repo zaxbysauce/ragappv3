@@ -9,9 +9,15 @@ from typing import AsyncGenerator, List, Dict, Any, Optional
 import httpx
 
 from app.config import settings
-from app.services.circuit_breaker import llm_cb, CircuitBreakerError, CircuitBreakerState
+from app.services.circuit_breaker import (
+    llm_cb,
+    CircuitBreakerError,
+    CircuitBreakerState,
+)
 
 logger = logging.getLogger(__name__)
+
+_MAX_THINKING_BUFFER = 1024 * 1024  # 1MB max thinking buffer
 
 
 class LLMError(Exception):
@@ -90,11 +96,44 @@ class LLMClient:
         except Exception as e:
             logger.debug("Could not log pool stats: %s", e)
 
+    def _strip_thinking_content(self, content: str) -> str:
+        """
+        Remove thinking content blocks from a complete response string.
+
+        Handles two patterns:
+        1. _lhs to _rhs tags (standard pattern with opening/closing tags)
+        2. "Thinking Process:" prefix to </think> closing tag (qwen3.5-122b pattern)
+
+        Args:
+            content: The complete response content string
+
+        Returns:
+            Content with all thinking blocks removed, whitespace stripped
+        """
+        result = content
+
+        # Pattern 1: _lhs to _rhs (standard tags)
+        while "_lhs" in result and "_rhs" in result:
+            start = result.find("_lhs")
+            end = result.find("_rhs") + 4  # Include "_rhs" length
+            result = result[:start] + result[end:]
+
+        # Pattern 2: "Thinking Process:" prefix to </think> closing tag (qwen3.5-122b)
+        # Content may start with "Thinking Process:\n\n" followed by thinking, ends with </think>
+        if result.startswith("Thinking Process:"):
+            close_pos = result.find("</think>")
+            if close_pos != -1:
+                result = result[close_pos + 8 :]
+            else:
+                result = ""
+
+        return result.strip()
+
     async def chat_completion(
         self,
         messages: List[Dict[str, str]],
         temperature: float = 0.7,
-        max_tokens: int = 2048,
+        max_tokens: int = 32768,
     ) -> str:
         """
         Send a chat completion request and return the full response.
@@ -136,7 +175,7 @@ class LLMClient:
             # Log connection pool metrics
             self._log_pool_stats()
 
-            return content
+            return self._strip_thinking_content(content)
         except CircuitBreakerError as e:
             raise LLMError(
                 f"LLM service is currently unavailable (circuit breaker open): {e}"
@@ -156,7 +195,7 @@ class LLMClient:
         self,
         messages: List[Dict[str, str]],
         temperature: float = 0.7,
-        max_tokens: int = 2048,
+        max_tokens: int = 32768,
     ) -> AsyncGenerator[str, None]:
         """
         Send a streaming chat completion request and yield content chunks.
@@ -193,6 +232,10 @@ class LLMClient:
                     raise LLMError(
                         "LLM service is currently unavailable (circuit breaker open)"
                     )
+
+        # State for filtering thinking content (_lhs/_rhs tags from qwen3.5)
+        _thinking_active = False
+        _buffer = ""
 
         stream_succeeded = False
         try:
@@ -247,8 +290,82 @@ class LLMClient:
                                 or ""
                             )
 
-                            if content:
-                                yield content
+                            # Filter thinking content from qwen3.5-122b model
+                            # Handles two patterns:
+                            # 1. _lhs to _rhs tags (standard)
+                            # 2. "Thinking Process:" prefix to </think> closing tag (qwen3.5-122b)
+                            _buffer += content
+
+                            if len(_buffer) > _MAX_THINKING_BUFFER:
+                                logger.error(
+                                    "Thinking content buffer exceeded %d bytes, possible malformed response",
+                                    _MAX_THINKING_BUFFER,
+                                )
+                                raise LLMError(
+                                    "Thinking content buffer overflow - model response may be malformed"
+                                )
+
+                            if not _thinking_active:
+                                # Not currently in thinking block - look for opening pattern
+                                # Check for standard _lhs opening tag
+                                if "_lhs" in _buffer:
+                                    # Log once when thinking content is first detected
+                                    logger.debug(
+                                        "Filtering thinking content from model response"
+                                    )
+                                    # Yield any content before the _lhs tag
+                                    pre_think, _, remainder = _buffer.partition("_lhs")
+                                    if pre_think:
+                                        yield pre_think
+                                    _thinking_active = True
+                                    _buffer = remainder
+                                    # Check if _rhs is also in this same chunk
+                                    if "_rhs" in _buffer:
+                                        # _rhs found in same chunk - extract content after it
+                                        _, _, after_think = _buffer.partition("_rhs")
+                                        _thinking_active = False
+                                        _buffer = after_think
+                                # Check for qwen3.5-122b pattern: "Thinking Process:" at start
+                                # Use substring check to handle fragmented streaming
+                                elif (
+                                    "Thinking Process:".startswith(_buffer)
+                                    or "Thinking Process:" in _buffer
+                                ):
+                                    # Could be the start of thinking content - check if full prefix present
+                                    if "Thinking Process:" in _buffer:
+                                        logger.debug(
+                                            "Filtering thinking content from model response (Thinking Process pattern)"
+                                        )
+                                        _thinking_active = True
+                                        _buffer = ""  # Discard everything up to and including the prefix
+                                    # else: still accumulating "Thinking Process:" prefix, hold buffer
+                                elif _buffer:
+                                    # Not in thinking mode and no opening pattern - yield buffer content
+                                    yield _buffer
+                                    _buffer = ""
+                            else:
+                                # Currently inside thinking block - look for closing tag
+                                # Check for standard _rhs closing tag
+                                if "_rhs" in _buffer:
+                                    # End of thinking block - extract content after _rhs
+                                    _, _, after_think = _buffer.partition("_rhs")
+                                    _thinking_active = False
+                                    _buffer = after_think
+                                # Check for qwen3.5-122b pattern: </think> closing tag
+                                elif "</think>" in _buffer:
+                                    # End of thinking block - extract content after </think>
+                                    _, _, after_think = _buffer.partition("</think>")
+                                    _thinking_active = False
+                                    _buffer = after_think
+                                # Else: still inside thinking, keep full buffer until closing tag arrives
+                            # Yield any buffered content when not in thinking mode
+                            if (
+                                not _thinking_active
+                                and _buffer
+                                and not "Thinking Process:".startswith(_buffer)
+                            ):
+                                yield _buffer
+                                _buffer = ""
                     stream_succeeded = True
                 except GeneratorExit:
                     # Generator was closed by consumer - clean exit
@@ -268,7 +385,9 @@ class LLMClient:
                 llm_cb.record_failure()
             # Read response content first to avoid ResponseNotRead error in streaming context
             try:
-                response_text = (await e.response.aread()).decode('utf-8', errors='replace')
+                response_text = (await e.response.aread()).decode(
+                    "utf-8", errors="replace"
+                )
             except Exception:
                 response_text = "<unable to read response>"
             raise LLMError(

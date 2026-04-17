@@ -87,10 +87,7 @@ class ChunkEnrichmentService:
         Returns:
             List of ChunkEnrichment objects (same order as input chunks)
         """
-        tasks = [
-            self._enrich_single(chunk, document_title)
-            for chunk in chunks
-        ]
+        tasks = [self._enrich_single(chunk, document_title) for chunk in chunks]
         return await asyncio.gather(*tasks)
 
     async def _enrich_single(
@@ -148,7 +145,7 @@ class ChunkEnrichmentService:
         ]
 
         response = await self._llm_client.chat_completion(
-            messages, max_tokens=500, temperature=0.2
+            messages, max_tokens=16384, temperature=0.2
         )
 
         enrichment = ChunkEnrichment(
@@ -172,6 +169,8 @@ class ChunkEnrichmentService:
             if "aliases" in self._fields:
                 enrichment.aliases = data.get("aliases", [])[:10]
         except (json.JSONDecodeError, KeyError, TypeError) as e:
-            logger.warning("Failed to parse enrichment JSON for chunk %s: %s", chunk_id, e)
+            logger.warning(
+                "Failed to parse enrichment JSON for chunk %s: %s", chunk_id, e
+            )
 
         return enrichment
