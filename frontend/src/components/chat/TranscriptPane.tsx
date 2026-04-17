@@ -649,13 +649,25 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
                     }}
                   >
                     {virtualizer.getVirtualItems().map((virtualItem) => {
-                    const message = messages[virtualItem.index];
+                    const rawMessage = messages[virtualItem.index];
+                    // Coerce Symbol/non-string ids to string for React key safety
+                    const messageId = String(rawMessage.id ?? virtualItem.index);
+                    // Coerce Symbol/non-string roles to "user" for rendering safety
+                    const messageRole = String(rawMessage.role ?? 'user');
+                    // Coerce non-string content to string to prevent React child type errors
+                    const messageContent = typeof rawMessage.content === 'string' ? rawMessage.content : String(rawMessage.content ?? '');
+                    const message = {
+                      ...rawMessage,
+                      id: messageId,
+                      role: messageRole as "user" | "assistant",
+                      content: messageContent,
+                    };
                     const isLastMessage = virtualItem.index === messages.length - 1;
                     const isAssistantStreaming = isStreaming && isLastMessage && message.role === "assistant";
 
                     return (
                       <div
-                        key={message.id}
+                        key={messageId}
                         data-index={virtualItem.index}
                         ref={virtualizer.measureElement}
                         style={{
@@ -685,7 +697,7 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
                   })}
                 </div>
                 <AnimatePresence>
-                  {isWaitingForResponse && messages.length > 0 && messages[messages.length - 1].role === "assistant" && !messages[messages.length - 1].content && (
+                  {isWaitingForResponse && messages.length > 0 && messages[messages.length - 1].role === "assistant" && messages[messages.length - 1].content === "" && (
                     <WaitingIndicator />
                   )}
                 </AnimatePresence>

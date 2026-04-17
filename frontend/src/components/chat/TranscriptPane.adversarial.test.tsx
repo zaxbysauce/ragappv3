@@ -42,6 +42,13 @@ vi.mock("./MessageBubble", () => ({
     </div>
   ),
 }));
+vi.mock("./AssistantMessage", () => ({
+  AssistantMessage: ({ message }: { message: { id: string; role: string; content: string } }) => (
+    <div data-testid="message-bubble" data-message-id={message.id}>
+      {message.content}
+    </div>
+  ),
+}));
 vi.mock("framer-motion", () => ({
   motion: {
     div: ({ children, ...props }: { children: React.ReactNode }) => (
@@ -49,10 +56,34 @@ vi.mock("framer-motion", () => ({
     ),
   },
   AnimatePresence: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  useReducedMotion: () => false,
+}));
+
+// Mock @tanstack/react-virtual - without this, real components render
+let _mockMessageCount = 0;
+const _createVirtualItems = () =>
+  Array.from({ length: _mockMessageCount }, (_, i) => ({
+    index: i,
+    start: i * 120,
+    size: 120,
+    key: `mock-msg-${i}`,
+  }));
+
+vi.mock("@tanstack/react-virtual", () => ({
+  useVirtualizer: vi.fn(() => ({
+    getVirtualItems: () => _createVirtualItems(),
+    getTotalSize: () => _mockMessageCount * 120,
+    measureElement: vi.fn((el: HTMLElement) => ({
+      getBoundingClientRect: () => ({ height: 120 }),
+    })),
+    scrollToIndex: vi.fn(),
+    measure: vi.fn(),
+  })),
 }));
 
 import { useSendMessage, MAX_INPUT_LENGTH } from "@/hooks/useSendMessage";
 import { useChatHistory } from "@/hooks/useChatHistory";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 // =============================================================================
 // ADVERSARIAL TEST SUITE
@@ -67,19 +98,23 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    _mockMessageCount = 0;
 
     // Default mock implementations for useChatStore
-    (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-      messages: [],
-      input: "",
-      isStreaming: false,
-      setInput: mockSetInput,
-      setIsStreaming: vi.fn(),
-      setAbortFn: vi.fn(),
-      setInputError: vi.fn(),
-      addMessage: vi.fn(),
-      updateMessage: vi.fn(),
-      inputError: null,
+    (useChatStore as unknown as ReturnType<typeof vi.fn>).mockImplementation((selector) => {
+      const state = {
+        messages: [],
+        input: "",
+        isStreaming: false,
+        setInput: mockSetInput,
+        setIsStreaming: vi.fn(),
+        setAbortFn: vi.fn(),
+        setInputError: vi.fn(),
+        addMessage: vi.fn(),
+        updateMessage: vi.fn(),
+        inputError: null,
+      };
+      return selector ? selector(state) : state;
     });
 
     // Mock useVaultStore with selector support
@@ -107,6 +142,23 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
     mockGetActiveVault.mockReturnValue(undefined);
   });
 
+  // Helper to set chat store messages AND sync virtualizer count
+  const withMessages = (messages: any[]) => {
+    _mockMessageCount = messages.length;
+    (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      messages,
+      input: "",
+      isStreaming: false,
+      setInput: mockSetInput,
+      setIsStreaming: vi.fn(),
+      setAbortFn: vi.fn(),
+      setInputError: vi.fn(),
+      addMessage: vi.fn(),
+      updateMessage: vi.fn(),
+      inputError: null,
+    });
+  };
+
   // ===========================================================================
   // 1. XSS IN MESSAGES - Should render safely without executing scripts
   // ===========================================================================
@@ -127,12 +179,10 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
     ];
 
     it.each(xssPayloads)("should NOT execute XSS payload in message content: %s", async (payload) => {
+      const messages = [{ id: "msg-1", role: "assistant", content: payload }];
+      _mockMessageCount = messages.length;
       (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [{
-          id: "msg-1",
-          role: "assistant",
-          content: payload,
-        }],
+        messages,
         input: "",
         isStreaming: false,
         setInput: mockSetInput,
@@ -155,19 +205,21 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
     });
 
     it("should NOT execute XSS in message sources", async () => {
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [{
-          id: "msg-1",
-          role: "assistant",
-          content: "Here are your results",
-          sources: [{
-            id: 1,
-            filename: 'test.js"><script>alert(1)</script>',
-            score: 0.9,
-            score_type: "distance",
-            snippet: '<img onerror="alert(1)" src=x>',
-          }],
+      const messages = [{
+        id: "msg-1",
+        role: "assistant",
+        content: "Here are your results",
+        sources: [{
+          id: 1,
+          filename: 'test.js"><script>alert(1)</script>',
+          score: 0.9,
+          score_type: "distance",
+          snippet: '<img onerror="alert(1)" src=x>',
         }],
+      }];
+      _mockMessageCount = messages.length;
+      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+        messages,
         input: "",
         isStreaming: false,
         setInput: mockSetInput,
@@ -190,12 +242,14 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
     });
 
     it("should escape HTML in user messages", async () => {
+      const messages = [{
+        id: "msg-1",
+        role: "user",
+        content: '<script>alert("bad")</script>Hello',
+      }];
+      _mockMessageCount = messages.length;
       (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [{
-          id: "msg-1",
-          role: "user",
-          content: '<script>alert("bad")</script>Hello',
-        }],
+        messages,
         input: "",
         isStreaming: false,
         setInput: mockSetInput,
@@ -223,12 +277,14 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
   // ===========================================================================
   describe("Very long message content (10000+ chars)", () => {
     it("should handle 10000 character message without breaking layout", async () => {
+      const messages = [{
+        id: "msg-1",
+        role: "assistant",
+        content: "A".repeat(10000),
+      }];
+      _mockMessageCount = messages.length;
       (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [{
-          id: "msg-1",
-          role: "assistant",
-          content: "A".repeat(10000),
-        }],
+        messages,
         input: "",
         isStreaming: false,
         setInput: mockSetInput,
@@ -273,12 +329,14 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
     });
 
     it("should handle message with no spaces (10000 chars)", async () => {
+      const messages = [{
+        id: "msg-1",
+        role: "assistant",
+        content: "AAAAAAAAAA".repeat(1000),
+      }];
+      _mockMessageCount = messages.length;
       (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [{
-          id: "msg-1",
-          role: "assistant",
-          content: "AAAAAAAAAA".repeat(1000),
-        }],
+        messages,
         input: "",
         isStreaming: false,
         setInput: mockSetInput,
@@ -334,6 +392,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
           content: `Message ${i}`,
         });
       }
+      _mockMessageCount = messages.length;
 
       (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
         messages,
@@ -400,6 +459,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
           content: `Assistant response ${i} with some content`,
         });
       }
+      _mockMessageCount = interleavedMessages.length;
 
       (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
         messages: interleavedMessages,
@@ -1369,10 +1429,12 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
     });
 
     it("should handle message with undefined sources", async () => {
+      const messages = [
+        { id: "1", role: "assistant", content: "test", sources: undefined },
+      ];
+      _mockMessageCount = messages.length;
       (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [
-          { id: "1", role: "assistant", content: "test", sources: undefined },
-        ],
+        messages,
         input: "",
         isStreaming: false,
         setInput: mockSetInput,
@@ -1397,6 +1459,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
         role: i % 2 === 0 ? "user" : "assistant",
         content: `Message ${i}`,
       }));
+      _mockMessageCount = messages.length;
 
       (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
         messages,
@@ -1626,6 +1689,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
   describe("Race conditions", () => {
     it("should handle streaming state flipping during render", async () => {
       let streamingState = false;
+      _mockMessageCount = 1;
 
       (useChatStore as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => {
         return {

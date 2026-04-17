@@ -357,7 +357,7 @@ export default function DocumentsPage() {
       documents
         ?.filter((doc) => !optimisticallyDeletedIds.has(doc.id))
         .filter((doc) =>
-          doc.filename.toLowerCase().includes(debouncedSearchQuery.toLowerCase())
+          (doc.filename ?? '').toLowerCase().includes(debouncedSearchQuery.toLowerCase())
         ) ?? [],
     [documents, debouncedSearchQuery, optimisticallyDeletedIds]
   );
@@ -742,7 +742,7 @@ export default function DocumentsPage() {
                       const isSelected = Boolean(selectedIds.has(docId));
                       return (
                         <tr
-                          key={doc.id}
+                          key={docId}
                           data-index={virtualItem.index}
                           ref={tableVirtualizer.measureElement}
                           style={{
@@ -793,12 +793,13 @@ export default function DocumentsPage() {
 
            {/* Mobile Cards View (hidden on desktop) */}
            <div ref={mobileScrollRef} className="sm:hidden" style={{ maxHeight: '70vh', overflowY: 'auto' }}>
-             <div style={{ height: mobileVirtualizer.getTotalSize(), position: 'relative' }}>
-               {mobileVirtualizer.getVirtualItems().map((virtualItem) => {
-                 const doc = filteredDocuments[virtualItem.index];
-                 return (
-                   <div
-                     key={doc.id}
+              <div style={{ height: mobileVirtualizer.getTotalSize(), position: 'relative' }}>
+                {mobileVirtualizer.getVirtualItems().map((virtualItem) => {
+                  const doc = filteredDocuments[virtualItem.index];
+                  const docId = String(doc.id);
+                  return (
+                    <div
+                      key={docId}
                      data-index={virtualItem.index}
                      ref={mobileVirtualizer.measureElement}
                      style={{

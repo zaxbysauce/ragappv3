@@ -45,7 +45,7 @@ vi.mock("@/lib/api", () => ({
 }));
 
 // Import after mocks
-import { useAuthStore } from "./useAuthStore";
+import { useAuthStore, resetInitState } from "./useAuthStore";
 import { setJwtAccessToken, getJwtAccessToken } from "@/lib/api";
 
 describe("useAuthStore", () => {
@@ -71,11 +71,15 @@ describe("useAuthStore", () => {
     mockEnsureCsrfToken.mockReset();
     mockEnsureCsrfToken.mockResolvedValue("mock-csrf-token");
 
+    // Reset module-level init guard state
+    resetInitState();
+
     // Reset store state
     useAuthStore.setState({
       user: null,
       accessToken: null,
       isAuthenticated: false,
+      isInitialized: false,
       isLoading: false,
       needsSetup: false,
       authMode: "unknown",

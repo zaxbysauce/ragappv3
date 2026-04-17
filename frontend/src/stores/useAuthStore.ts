@@ -64,6 +64,12 @@ const authClient = axios.create({
 let _initAttempted = false;
 let _initPromise: Promise<void> | null = null;
 
+// Reset init guard state (exported for testing)
+export const resetInitState = () => {
+  _initAttempted = false;
+  _initPromise = null;
+};
+
 // Wire up CSRF via centralized api.ts utilities
 attachCsrfInterceptor(authClient);
 

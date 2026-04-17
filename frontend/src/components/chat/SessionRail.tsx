@@ -641,7 +641,8 @@ export function SessionGroup({
 
 // RT-08 fix: Module-level cache to deduplicate session list fetches across
 // multiple SessionRail instances (desktop sidebar + mobile sheet)
-const _sessionCache: { data: ChatSession[] | null; vaultId?: number; ts: number } = {
+// Exported for test reset between test runs — not part of the public API.
+export const _sessionCache: { data: ChatSession[] | null; vaultId?: number; ts: number } = {
   data: null,
   ts: 0,
 };

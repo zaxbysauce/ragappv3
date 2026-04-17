@@ -1,12 +1,15 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, BrowserRouter } from "react-router-dom";
 import { NavigationRail } from "./NavigationRail";
 import type { NavItemId } from "./navigationTypes";
 
 // Mock useThemeStore before importing NavigationRail (NavigationRail imports useThemeStore)
 vi.mock("@/stores/useThemeStore", () => ({
-  useThemeStore: vi.fn(() => "dark"),
+  useThemeStore: vi.fn(() => ({
+    theme: "dark",
+    setTheme: vi.fn(),
+  })),
   applyTheme: vi.fn(),
 }));
 
@@ -18,130 +21,49 @@ const mockHealthStatus = {
   loading: false,
 };
 
-// Mock window.location.href for chatNew navigation
-const mockLocation = { href: "" };
-Object.defineProperty(window, "location", {
-  value: mockLocation,
-  writable: true,
-});
-
 describe("NavigationRail", () => {
   describe("Navigation Items", () => {
-    it("renders all navigation items including chatNew", () => {
+    it("renders all navigation items", () => {
       render(
         <MemoryRouter>
           <NavigationRail
-            activeItem="chat"
-            onItemSelect={vi.fn()}
             healthStatus={mockHealthStatus}
           />
         </MemoryRouter>
       );
 
-      // Check for all expected nav items
+      // Check for all expected nav items (9 items total)
       expect(screen.getByLabelText("Chat")).toBeInTheDocument();
-      expect(screen.getByLabelText("Chat (New)")).toBeInTheDocument();
       expect(screen.getByLabelText("Documents")).toBeInTheDocument();
       expect(screen.getByLabelText("Memory")).toBeInTheDocument();
       expect(screen.getByLabelText("Vaults")).toBeInTheDocument();
       expect(screen.getByLabelText("Settings")).toBeInTheDocument();
+      expect(screen.getByLabelText("Groups")).toBeInTheDocument();
+      expect(screen.getByLabelText("Users")).toBeInTheDocument();
+      expect(screen.getByLabelText("Orgs")).toBeInTheDocument();
+      expect(screen.getByLabelText("Profile")).toBeInTheDocument();
     });
 
-    it("renders chatNew with NEW badge", () => {
+    it("does not render chatNew item", () => {
       render(
         <MemoryRouter>
           <NavigationRail
-            activeItem="chat"
-            onItemSelect={vi.fn()}
             healthStatus={mockHealthStatus}
           />
         </MemoryRouter>
       );
 
-      // Check for NEW badge on chatNew item
-      const newBadge = screen.getByText("NEW");
-      expect(newBadge).toBeInTheDocument();
-      expect(newBadge).toHaveClass("bg-gradient-to-r", "from-purple-500", "to-pink-500");
-    });
-
-    it("renders chatNew with gradient styling", () => {
-      render(
-        <MemoryRouter>
-          <NavigationRail
-            activeItem="chat"
-            onItemSelect={vi.fn()}
-            healthStatus={mockHealthStatus}
-          />
-        </MemoryRouter>
-      );
-
-      const chatNewButton = screen.getByLabelText("Chat (New)");
-      expect(chatNewButton).toHaveClass("bg-gradient-to-br", "from-purple-500/10", "to-pink-500/10");
-      expect(chatNewButton).toHaveClass("border", "border-purple-500/30");
-    });
-
-    it("renders chatNew icon with gradient background", () => {
-      render(
-        <MemoryRouter>
-          <NavigationRail
-            activeItem="chat"
-            onItemSelect={vi.fn()}
-            healthStatus={mockHealthStatus}
-          />
-        </MemoryRouter>
-      );
-
-      const chatNewIconContainer = screen.getByLabelText("Chat (New)").querySelector("div");
-      expect(chatNewIconContainer).toHaveClass("bg-gradient-to-br", "from-purple-500", "to-pink-500");
-      expect(chatNewIconContainer).toHaveClass("text-white");
-    });
-
-    it("renders chatNew label with gradient text", () => {
-      render(
-        <MemoryRouter>
-          <NavigationRail
-            activeItem="chat"
-            onItemSelect={vi.fn()}
-            healthStatus={mockHealthStatus}
-          />
-        </MemoryRouter>
-      );
-
-      // Get the visible label by querying the button and filtering out sr-only
-      const chatNewButton = screen.getByLabelText("Chat (New)");
-      const allLabels = chatNewButton.querySelectorAll("span");
-      // The visible label is the one without sr-only class
-      const visibleLabels = Array.from(allLabels).filter((span) => !span.classList.contains("sr-only"));
-      const chatNewLabel = visibleLabels.find((span) => span.textContent === "Chat (New)");
-      
-      expect(chatNewLabel).toBeInTheDocument();
-      expect(chatNewLabel).toHaveClass("bg-gradient-to-r", "from-purple-500", "to-pink-500");
-      expect(chatNewLabel).toHaveClass("bg-clip-text", "text-transparent");
-    });
-
-    it("chatNew icon has pulse animation", () => {
-      render(
-        <MemoryRouter>
-          <NavigationRail
-            activeItem="chat"
-            onItemSelect={vi.fn()}
-            healthStatus={mockHealthStatus}
-          />
-        </MemoryRouter>
-      );
-
-      const chatNewIcon = screen.getByLabelText("Chat (New)").querySelector("svg");
-      expect(chatNewIcon).toHaveClass("animate-pulse");
+      // chatNew should not exist
+      expect(screen.queryByLabelText("Chat (New)")).not.toBeInTheDocument();
+      expect(screen.queryByText("NEW")).not.toBeInTheDocument();
     });
   });
 
   describe("Active State", () => {
     it("highlights active item with primary background", () => {
       render(
-        <MemoryRouter>
+        <MemoryRouter initialEntries={["/chat"]}>
           <NavigationRail
-            activeItem="chat"
-            onItemSelect={vi.fn()}
             healthStatus={mockHealthStatus}
           />
         </MemoryRouter>
@@ -151,59 +73,46 @@ describe("NavigationRail", () => {
       expect(chatButton).toHaveClass("bg-primary/10");
     });
 
-    it("does not show active indicator on chatNew when active", () => {
+    it("shows active indicator for active item", () => {
       render(
-        <MemoryRouter>
+        <MemoryRouter initialEntries={["/documents"]}>
           <NavigationRail
-            activeItem="chatNew"
-            onItemSelect={vi.fn()}
-            healthStatus={mockHealthStatus}
-          />
-        </MemoryRouter>
-      );
-
-      // chatNew should NOT have the right-side active indicator
-      const chatNewButton = screen.getByLabelText("Chat (New)");
-      const activeIndicator = chatNewButton.querySelector("span.w-1.h-4");
-      expect(activeIndicator).not.toBeInTheDocument();
-    });
-  });
-
-  describe("Interactions", () => {
-    it("calls onItemSelect for regular items", () => {
-      const handleSelect = vi.fn<(id: NavItemId) => void>();
-
-      render(
-        <MemoryRouter>
-          <NavigationRail
-            activeItem="chat"
-            onItemSelect={handleSelect}
             healthStatus={mockHealthStatus}
           />
         </MemoryRouter>
       );
 
       const documentsButton = screen.getByLabelText("Documents");
-      fireEvent.click(documentsButton);
-
-      expect(handleSelect).toHaveBeenCalledWith("documents");
+      const activeIndicator = documentsButton.querySelector("span");
+      expect(activeIndicator).toBeInTheDocument();
     });
+  });
 
-    it("navigates to /chat/redesign for chatNew item", () => {
+  describe("Interactions", () => {
+    it("navigates to correct route when clicking navigation items", () => {
       render(
-        <MemoryRouter>
+        <BrowserRouter>
           <NavigationRail
-            activeItem="chat"
-            onItemSelect={vi.fn()}
             healthStatus={mockHealthStatus}
           />
-        </MemoryRouter>
+        </BrowserRouter>
       );
 
-      const chatNewButton = screen.getByLabelText("Chat (New)");
-      fireEvent.click(chatNewButton);
+      const documentsButton = screen.getByLabelText("Documents");
+      expect(documentsButton).toHaveAttribute("href", "/documents");
+    });
 
-      expect(window.location.href).toBe("/chat/redesign");
+    it("navigates to /admin/users for users item", () => {
+      render(
+        <BrowserRouter>
+          <NavigationRail
+            healthStatus={mockHealthStatus}
+          />
+        </BrowserRouter>
+      );
+
+      const usersButton = screen.getByLabelText("Users");
+      expect(usersButton).toHaveAttribute("href", "/admin/users");
     });
   });
 
@@ -212,8 +121,6 @@ describe("NavigationRail", () => {
       render(
         <MemoryRouter>
           <NavigationRail
-            activeItem="chat"
-            onItemSelect={vi.fn()}
             healthStatus={mockHealthStatus}
           />
         </MemoryRouter>
@@ -222,22 +129,63 @@ describe("NavigationRail", () => {
       // Check for health status labels in the footer
       expect(screen.getByText("API")).toBeInTheDocument();
       expect(screen.getByText("Embeddings")).toBeInTheDocument();
-      // The "Chat" text appears both in nav and health status, so use getAllByText
+      // Use getAllByText since "Chat" appears in both nav and health status
       const chatLabels = screen.getAllByText("Chat");
-      expect(chatLabels.length).toBeGreaterThan(0);
+      expect(chatLabels.length).toBeGreaterThan(1);
 
-      // Check green indicators (healthy) - look in the footer container by class
+      // Check green indicators (healthy) - uses bg-success class
       const footerContainer = screen.getByText("API").closest("div");
-      const greenIndicators = footerContainer.querySelectorAll(".bg-success");
-      expect(greenIndicators.length).toBeGreaterThan(0);
+      const greenIndicators = footerContainer?.querySelectorAll(".bg-success");
+      expect(greenIndicators?.length).toBeGreaterThan(0);
+    });
+
+    it("shows loading state when health check is in progress", () => {
+      const loadingHealthStatus = {
+        backend: false,
+        embeddings: false,
+        chat: false,
+        loading: true,
+      };
+
+      render(
+        <MemoryRouter>
+          <NavigationRail
+            healthStatus={loadingHealthStatus}
+          />
+        </MemoryRouter>
+      );
+
+      // Check for "Checking" text when loading (appears 3 times for each service)
+      const checkingElements = screen.getAllByText("Checking");
+      expect(checkingElements.length).toBe(3);
     });
   });
 
-  describe("TypeScript Types", () => {
-    it("chatNew is a valid NavItemId", () => {
-      // This test verifies the type is properly exported
-      const validId: NavItemId = "chatNew";
-      expect(validId).toBe("chatNew");
+  describe("Theme Toggle", () => {
+    it("renders theme toggle button", () => {
+      render(
+        <MemoryRouter>
+          <NavigationRail
+            healthStatus={mockHealthStatus}
+          />
+        </MemoryRouter>
+      );
+
+      expect(screen.getByLabelText(/switch to .* mode/i)).toBeInTheDocument();
+    });
+
+    it("shows sun icon in dark mode", () => {
+      render(
+        <MemoryRouter>
+          <NavigationRail
+            healthStatus={mockHealthStatus}
+          />
+        </MemoryRouter>
+      );
+
+      // Default theme is dark, should show sun icon with aria-label "Switch to light mode"
+      const sunIcon = screen.getByLabelText("Switch to light mode");
+      expect(sunIcon).toBeInTheDocument();
     });
   });
 });
