@@ -191,6 +191,119 @@ class SpreadsheetParser:
 
         return result
 
+    def _split_row_by_columns(
+        self, col_val_pairs: List[tuple], sheet_name: str, row_idx: int, total_rows: int, total_col_count: int
+    ) -> List[dict]:
+        """
+        Split a single wide row into multiple chunks by column groups.
+        Each chunk includes only columns that fit within MAX_CHUNK_CHARS.
+
+        Args:
+            col_val_pairs: List of (col_name, str_value) tuples for non-empty cells
+            sheet_name: Sheet name for chunk prefix
+            row_idx: 0-based row index (for metadata)
+            total_rows: Total rows in sheet (for metadata)
+            total_col_count: Total columns in sheet (for metadata)
+
+        Returns:
+            List of chunk dicts, one per column group. No data loss unless a single
+            cell value exceeds MAX_CHUNK_CHARS (which then gets truncated).
+        """
+        if not col_val_pairs:
+            return []
+
+        result = []
+        group_pairs = []  # Current column group: list of (col, val) tuples
+
+        for col, val in col_val_pairs:
+            # Test adding this column to current group
+            test_group = group_pairs + [(col, val)]
+            test_chunk_text = self._build_column_group_text(test_group, sheet_name)
+
+            if len(test_chunk_text) > self.MAX_CHUNK_CHARS:
+                if not group_pairs:
+                    # Single column exceeds limit: truncate this cell's value only
+                    header_section = f"Sheet: {sheet_name}\nColumns: {col}\n\n{col}: "
+                    available = self.MAX_CHUNK_CHARS - len(header_section)
+                    truncated_val = val[:max(0, available)]
+                    logger.warning(
+                        "Column '%s' value exceeds max chunk size; truncating from %d to %d chars.",
+                        col,
+                        len(val),
+                        len(truncated_val),
+                    )
+                    result.append(
+                        self._make_column_group_chunk(
+                            [(col, truncated_val)],
+                            sheet_name,
+                            row_idx,
+                            total_rows,
+                            total_col_count,
+                            len(result),
+                        )
+                    )
+                    # group_pairs stays empty, continue to next column
+                else:
+                    # Current group is full; flush it and start new group with this column
+                    result.append(
+                        self._make_column_group_chunk(
+                            group_pairs,
+                            sheet_name,
+                            row_idx,
+                            total_rows,
+                            total_col_count,
+                            len(result),
+                        )
+                    )
+                    group_pairs = [(col, val)]
+            else:
+                # This column fits in current group
+                group_pairs = test_group
+
+        # Flush any remaining columns
+        if group_pairs:
+            result.append(
+                self._make_column_group_chunk(
+                    group_pairs,
+                    sheet_name,
+                    row_idx,
+                    total_rows,
+                    total_col_count,
+                    len(result),
+                )
+            )
+
+        return result
+
+    def _build_column_group_text(self, col_val_pairs: List[tuple], sheet_name: str) -> str:
+        """Build the text for a column group (helper for _split_row_by_columns)."""
+        col_str = " | ".join(col for col, _ in col_val_pairs)
+        row_str = " | ".join(f"{col}: {val}" for col, val in col_val_pairs)
+        return f"Sheet: {sheet_name}\nColumns: {col_str}\n\n{row_str}"
+
+    def _make_column_group_chunk(
+        self,
+        col_val_pairs: List[tuple],
+        sheet_name: str,
+        row_idx: int,
+        total_rows: int,
+        total_col_count: int,
+        group_idx: int,
+    ) -> dict:
+        """Create a chunk dict for a column group (helper for _split_row_by_columns)."""
+        return {
+            "text": self._build_column_group_text(col_val_pairs, sheet_name),
+            "metadata": {
+                "sheet_name": sheet_name,
+                "row_start": row_idx,
+                "row_end": row_idx,
+                "total_rows": total_rows,
+                "column_count": total_col_count,
+                "col_group": group_idx,
+                "source_type": "spreadsheet",
+            },
+        }
+
     def parse(self, file_path: str) -> List[dict]:
         """
         Parse a spreadsheet file and return a list of chunk dicts.
@@ -288,40 +401,24 @@ class SpreadsheetParser:
                     + "\n".join(rows_text_lines)
                 )
 
-                # If chunk exceeds max chars, reduce row count and retry
+                # If chunk exceeds max chars, reduce row count or split by columns
                 if len(chunk_text) > self.MAX_CHUNK_CHARS:
                     if end - start <= 1:
-                        # Single row exceeds limit; truncate the row text directly
-                        header_section = (
-                            f"Sheet: {sheet_name}\n"
-                            f"Columns: {header_str}\n\n"
+                        # Single row exceeds limit; split into column groups
+                        single_row = df.iloc[start]
+                        col_val_pairs = [
+                            (col, str(val))
+                            for col, val in zip(headers, single_row)
+                            if str(val).strip()
+                        ]
+                        col_group_chunks = self._split_row_by_columns(
+                            col_val_pairs, sheet_name, start, total_rows, len(headers)
                         )
-                        available_for_rows = self.MAX_CHUNK_CHARS - len(header_section)
-                        if available_for_rows > 0:
-                            # Truncate row data to fit within limit
-                            row_text = "\n".join(rows_text_lines)
-                            truncated_row = row_text[:available_for_rows]
-                            chunk_text = header_section + truncated_row
-                            logger.warning(
-                                "Spreadsheet chunk from %s rows %d-%d exceeds max size; "
-                                "row text truncated from %d to %d chars.",
-                                sheet_name,
-                                start,
-                                end - 1,
-                                len(row_text),
-                                len(truncated_row),
-                            )
-                        else:
-                            # Can't even fit header; skip this row
-                            logger.warning(
-                                "Spreadsheet row %d-%d exceeds max chunk size even with header only; skipping.",
-                                start,
-                                end - 1,
-                            )
-                            start = end
-                            continue
+                        chunks.extend(col_group_chunks)
+                        start = end
+                        continue
                     else:
-                        # Reduce row count and retry
+                        # Multi-row batch exceeds limit; reduce row count and retry
                         rows_per_chunk = max(1, rows_per_chunk // 2)
                         continue
 

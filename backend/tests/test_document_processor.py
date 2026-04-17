@@ -302,6 +302,106 @@ class TestSpreadsheetAdaptiveChunking(unittest.TestCase):
                 f"Chunk {i} exceeds max size: {chunk_size}",
             )
 
+    def test_single_row_with_long_cell_values_no_data_loss(self):
+        """
+        Test that a single row with extremely long cell values is split
+        into multiple column-group chunks without data loss.
+        """
+        try:
+            import pandas as pd
+        except ImportError:
+            self.skipTest("pandas not available")
+
+        # Create a spreadsheet with 1 row and 10 columns, each with a 1000-char value
+        # Total row would be ~15,000 chars (exceeds 8192)
+        num_cols = 10
+        long_val = "x" * 1000
+        data = {f"col_{i}": [long_val] for i in range(num_cols)}
+        df = pd.DataFrame(data)
+
+        csv_path = os.path.join(self.temp_dir, "long_cells.csv")
+        df.to_csv(csv_path, index=False)
+
+        from app.services.document_processor import SpreadsheetParser
+        parser = SpreadsheetParser()
+        chunks = parser.parse(csv_path)
+
+        # Should produce multiple column-group chunks
+        self.assertGreater(
+            len(chunks),
+            1,
+            "Long cell values should trigger column-group splitting",
+        )
+
+        # Verify all chunks respect max size
+        for i, chunk in enumerate(chunks):
+            chunk_size = len(chunk["text"])
+            self.assertLessEqual(
+                chunk_size,
+                parser.MAX_CHUNK_CHARS,
+                f"Chunk {i} exceeds max size: {chunk_size}",
+            )
+
+        # Verify no data loss: all column names should appear in at least one chunk
+        all_chunk_text = " ".join(chunk["text"] for chunk in chunks)
+        for col_idx in range(num_cols):
+            col_name = f"col_{col_idx}"
+            self.assertIn(
+                col_name,
+                all_chunk_text,
+                f"Column '{col_name}' missing from all chunks",
+            )
+
+        # Verify column-group metadata is present
+        col_group_chunks = [c for c in chunks if "col_group" in c["metadata"]]
+        self.assertGreater(
+            len(col_group_chunks),
+            0,
+            "Expected at least one chunk with col_group metadata",
+        )
+
+    def test_mixed_row_sizes_with_column_splitting(self):
+        """
+        Test a spreadsheet where some rows are normal and one row is very wide,
+        triggering column splitting only for the wide row.
+        """
+        try:
+            import pandas as pd
+        except ImportError:
+            self.skipTest("pandas not available")
+
+        # Create a spreadsheet:
+        # - Row 0: 50 columns with short values (fits in one chunk)
+        # - Row 1: 50 columns with 500-char values each (will trigger column splitting)
+        # - Row 2: 50 columns with short values (fits in one chunk)
+        num_cols = 50
+        short_val = "s"
+        long_val = "x" * 500
+
+        data = {
+            f"col_{i}": [short_val, long_val, short_val] for i in range(num_cols)
+        }
+        df = pd.DataFrame(data)
+
+        csv_path = os.path.join(self.temp_dir, "mixed_rows.csv")
+        df.to_csv(csv_path, index=False)
+
+        from app.services.document_processor import SpreadsheetParser
+        parser = SpreadsheetParser()
+        chunks = parser.parse(csv_path)
+
+        # Should produce multiple chunks due to row 1 column splitting
+        self.assertGreater(len(chunks), 1, "Expected multiple chunks due to column splitting")
+
+        # Verify all chunks respect max size
+        for i, chunk in enumerate(chunks):
+            chunk_size = len(chunk["text"])
+            self.assertLessEqual(
+                chunk_size,
+                parser.MAX_CHUNK_CHARS,
+                f"Chunk {i} exceeds max size: {chunk_size}",
+            )
+
 
 if __name__ == '__main__':
     unittest.main()

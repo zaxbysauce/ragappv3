@@ -134,8 +134,8 @@ class SettingsUpdate(BaseModel):
     @field_validator("embedding_batch_size")
     @classmethod
     def validate_embedding_batch_size(cls, v):
-        if v is not None and (v < 1 or v > 2048):
-            raise ValueError("embedding_batch_size must be between 1 and 2048")
+        if v is not None and (v < 1 or v > 128):
+            raise ValueError("embedding_batch_size must be between 1 and 128 (TEI limit)")
         return v
 
     @field_validator("reranker_top_n")
