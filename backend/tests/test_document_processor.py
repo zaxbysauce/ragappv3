@@ -352,12 +352,12 @@ class TestSpreadsheetAdaptiveChunking(unittest.TestCase):
                 f"Column '{col_name}' missing from all chunks",
             )
 
-        # Verify column-group metadata is present
+        # Verify column-group metadata is present (proves column splitting happened)
         col_group_chunks = [c for c in chunks if "col_group" in c["metadata"]]
-        self.assertGreater(
+        self.assertGreaterEqual(
             len(col_group_chunks),
-            0,
-            "Expected at least one chunk with col_group metadata",
+            1,
+            "Column-group chunks not found; splitting may not have occurred",
         )
 
     def test_mixed_row_sizes_with_column_splitting(self):
