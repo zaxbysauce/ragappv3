@@ -453,8 +453,8 @@ class Settings(BaseSettings):
     @field_validator("embedding_batch_size", mode="after")
     @classmethod
     def validate_embedding_batch_size(cls, v: int) -> int:
-        """Validate embedding batch size is >= 1."""
-        return cls._validate_int_range(v, 1, None, "embedding_batch_size")
+        """Validate embedding batch size is within safe TEI limits (1-128)."""
+        return cls._validate_int_range(v, 1, 128, "embedding_batch_size")
 
     @field_validator("document_parsing_strategy", mode="after")
     @classmethod

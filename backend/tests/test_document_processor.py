@@ -187,5 +187,121 @@ CREATE TABLE posts (
         )
 
 
+class TestSpreadsheetAdaptiveChunking(unittest.TestCase):
+    """Test cases for adaptive spreadsheet chunking."""
+
+    def setUp(self):
+        """Create temporary directory for test files."""
+        self.temp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        """Clean up temp files."""
+        import shutil
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+
+    def test_wide_spreadsheet_chunks_respect_max_size(self):
+        """
+        Test that wide spreadsheets (100+ columns) produce chunks
+        under the 8192 char embedding limit.
+        """
+        try:
+            import pandas as pd
+        except ImportError:
+            self.skipTest("pandas not available")
+
+        # Create a wide spreadsheet: 100 columns × 50 rows
+        # Each cell has ~20 chars, so estimated chunk size would be huge
+        # without adaptive chunking
+        num_cols = 100
+        num_rows = 50
+        data = {
+            f"col_{i}": [f"value_{i}_{j}" for j in range(num_rows)]
+            for i in range(num_cols)
+        }
+        df = pd.DataFrame(data)
+
+        csv_path = os.path.join(self.temp_dir, "wide_sheet.csv")
+        df.to_csv(csv_path, index=False)
+
+        from app.services.document_processor import SpreadsheetParser
+        parser = SpreadsheetParser()
+        chunks = parser.parse(csv_path)
+
+        # Verify chunks were produced
+        self.assertGreater(len(chunks), 0, "Expected at least one chunk")
+
+        # Verify all chunks are under the max size
+        max_chunk_chars = parser.MAX_CHUNK_CHARS
+        for i, chunk in enumerate(chunks):
+            chunk_size = len(chunk["text"])
+            self.assertLessEqual(
+                chunk_size,
+                max_chunk_chars,
+                f"Chunk {i} exceeds max size: {chunk_size} > {max_chunk_chars}",
+            )
+
+        # Verify adaptive chunking reduced row count from 50
+        # (With 100 columns, 50 rows would be ~20000+ chars)
+        # If chunks respect max, row count must have been reduced
+        total_rows = sum(
+            chunk["metadata"]["row_end"] - chunk["metadata"]["row_start"] + 1
+            for chunk in chunks
+        )
+        self.assertEqual(
+            total_rows,
+            num_rows,
+            f"Expected {num_rows} total rows across chunks, got {total_rows}",
+        )
+
+    def test_narrow_spreadsheet_uses_default_rows_per_chunk(self):
+        """
+        Test that narrow spreadsheets (few columns) still use the default
+        ROWS_PER_CHUNK value for efficiency.
+        """
+        try:
+            import pandas as pd
+        except ImportError:
+            self.skipTest("pandas not available")
+
+        # Create a narrow spreadsheet: 5 columns × 100 rows
+        # This should fit many rows per chunk
+        num_cols = 5
+        num_rows = 100
+        data = {
+            f"col_{i}": [f"val_{i}_{j}" for j in range(num_rows)]
+            for i in range(num_cols)
+        }
+        df = pd.DataFrame(data)
+
+        csv_path = os.path.join(self.temp_dir, "narrow_sheet.csv")
+        df.to_csv(csv_path, index=False)
+
+        from app.services.document_processor import SpreadsheetParser
+        parser = SpreadsheetParser()
+        chunks = parser.parse(csv_path)
+
+        # Verify chunks were produced
+        self.assertGreater(len(chunks), 0, "Expected at least one chunk")
+
+        # With narrow columns, should have fewer chunks (more rows per chunk)
+        # 100 rows / 50 rows_per_chunk = 2 chunks (approximately)
+        # Due to header overhead and filtering, might be 2-3 chunks
+        self.assertLessEqual(
+            len(chunks),
+            3,
+            f"Narrow spreadsheet should have ~2 chunks, got {len(chunks)}",
+        )
+
+        # Verify all chunks respect max size
+        for i, chunk in enumerate(chunks):
+            chunk_size = len(chunk["text"])
+            self.assertLessEqual(
+                chunk_size,
+                parser.MAX_CHUNK_CHARS,
+                f"Chunk {i} exceeds max size: {chunk_size}",
+            )
+
+
 if __name__ == '__main__':
     unittest.main()

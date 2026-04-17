@@ -124,10 +124,72 @@ class SpreadsheetParser:
     can orient itself when answering questions about the data.
     """
 
-    # Number of data rows per chunk. Tune lower for wide sheets (many columns),
-    # higher for narrow sheets. 50 rows * ~5 cols * ~15 chars ≈ ~3750 chars,
-    # safely under a 2000-char chunk_size_chars default with header overhead.
+    # Default number of rows to attempt per chunk. Adaptively reduced for wide sheets.
     ROWS_PER_CHUNK: int = 50
+    # Maximum characters per chunk (embedding service limit is 8192)
+    MAX_CHUNK_CHARS: int = 8192
+
+    def _calculate_adaptive_rows_per_chunk(
+        self, sample_df, headers: list, sheet_name: str
+    ) -> int:
+        """
+        Calculate how many rows fit in MAX_CHUNK_CHARS by sampling the data.
+
+        Uses the first few rows to estimate average row size, then calculates
+        how many rows can fit before hitting the MAX_CHUNK_CHARS limit.
+
+        Args:
+            sample_df: DataFrame with first few rows for size estimation
+            headers: Column names
+            sheet_name: Sheet name for logging
+
+        Returns:
+            Estimated number of rows per chunk (minimum 1)
+        """
+        if sample_df.empty:
+            return self.ROWS_PER_CHUNK
+
+        # Estimate header and sheet overhead
+        header_str = " | ".join(str(h) for h in headers)
+        header_overhead = len(f"Sheet: {sheet_name}\nColumns: {header_str}\n\n")
+
+        # Estimate average row size from samples
+        total_row_chars = 0
+        row_count = 0
+
+        for _, row in sample_df.iterrows():
+            row_parts = [
+                f"{col}: {val}"
+                for col, val in zip(headers, row)
+                if str(val).strip()
+            ]
+            if row_parts:
+                row_text = " | ".join(row_parts)
+                total_row_chars += len(row_text) + 1  # +1 for newline
+                row_count += 1
+
+        if row_count == 0:
+            return self.ROWS_PER_CHUNK
+
+        avg_row_chars = total_row_chars / row_count
+        available_chars = self.MAX_CHUNK_CHARS - header_overhead
+
+        if available_chars <= 0:
+            return 1
+
+        # Calculate rows that fit, with safety margin
+        estimated_rows = max(1, int(available_chars / avg_row_chars) - 2)
+        result = min(self.ROWS_PER_CHUNK, estimated_rows)
+
+        logger.debug(
+            "Sheet '%s': avg_row=%d chars, available=%d, estimated rows=%d",
+            sheet_name,
+            int(avg_row_chars),
+            available_chars,
+            result,
+        )
+
+        return result
 
     def parse(self, file_path: str) -> List[dict]:
         """
@@ -192,8 +254,16 @@ class SpreadsheetParser:
             header_str = " | ".join(str(h) for h in headers)
             total_rows = len(df)
 
-            for start in range(0, total_rows, self.ROWS_PER_CHUNK):
-                batch = df.iloc[start : start + self.ROWS_PER_CHUNK]
+            # Calculate adaptive row count for this sheet based on column width
+            rows_per_chunk = self._calculate_adaptive_rows_per_chunk(
+                df.iloc[0:min(5, total_rows)], headers, sheet_name
+            )
+
+            start = 0
+            while start < total_rows:
+                # Try to add rows up to rows_per_chunk, but adjust if needed
+                end = min(start + rows_per_chunk, total_rows)
+                batch = df.iloc[start:end]
                 rows_text_lines = []
 
                 for _, row in batch.iterrows():
@@ -209,6 +279,7 @@ class SpreadsheetParser:
 
                 if not rows_text_lines:
                     # All rows in this batch were entirely empty — skip
+                    start = end
                     continue
 
                 chunk_text = (
@@ -217,19 +288,39 @@ class SpreadsheetParser:
                     + "\n".join(rows_text_lines)
                 )
 
+                # If chunk exceeds max chars, reduce row count and retry
+                if len(chunk_text) > self.MAX_CHUNK_CHARS:
+                    if end - start <= 1:
+                        # Can't reduce further; truncate and log warning
+                        logger.warning(
+                            "Spreadsheet chunk exceeds %d chars (got %d) "
+                            "even with single row. Chunk from %s rows %d-%d will be truncated.",
+                            self.MAX_CHUNK_CHARS,
+                            len(chunk_text),
+                            sheet_name,
+                            start,
+                            end - 1,
+                        )
+                        # Keep as-is and let embedding service handle truncation if needed
+                    else:
+                        # Reduce row count and retry
+                        rows_per_chunk = max(1, rows_per_chunk // 2)
+                        continue
+
                 chunks.append(
                     {
                         "text": chunk_text,
                         "metadata": {
                             "sheet_name": sheet_name,
                             "row_start": start,
-                            "row_end": start + len(batch) - 1,
+                            "row_end": end - 1,
                             "total_rows": total_rows,
                             "column_count": len(headers),
                             "source_type": "spreadsheet",
                         },
                     }
                 )
+                start = end
 
         return chunks
 
@@ -302,6 +393,36 @@ class DocumentProcessor:
         if self._contextual_chunker is None:
             self._contextual_chunker = ContextualChunker(self._llm_client)
         return self._contextual_chunker
+
+    def _validate_chunk_sizes(self, texts: List[str], source_filename: str) -> None:
+        """
+        Validate that chunks don't exceed embedding service's max text length.
+
+        Logs warnings for chunks exceeding the limit.
+
+        Args:
+            texts: List of chunk texts to validate
+            source_filename: Source filename for logging context
+        """
+        if not self.embedding_service:
+            return
+
+        max_len = getattr(self.embedding_service, "MAX_TEXT_LENGTH", 8192)
+        oversized = []
+
+        for i, text in enumerate(texts):
+            if len(text) > max_len:
+                oversized.append((i, len(text)))
+
+        if oversized:
+            logger.warning(
+                "Document '%s' has %d chunk(s) exceeding max embedding length (%d chars): %s. "
+                "Chunks will be truncated by the embedding service.",
+                source_filename,
+                len(oversized),
+                max_len,
+                ", ".join(f"chunk {i} ({size} chars)" for i, size in oversized),
+            )
 
     def _get_chunk_enrichment_service(self) -> Optional[ChunkEnrichmentService]:
         """Lazily create a ChunkEnrichmentService when needed."""
@@ -870,6 +991,9 @@ class DocumentProcessor:
 
                     # Extract texts from chunks
                     texts = [c.text for c in chunks]
+
+                    # Validate chunk sizes before embedding
+                    self._validate_chunk_sizes(texts, source_filename)
 
                     # Generate dense embeddings (Harrier dense-only)
                     embeddings = await self.embedding_service.embed_batch(texts)
