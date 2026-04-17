@@ -402,6 +402,58 @@ class TestSpreadsheetAdaptiveChunking(unittest.TestCase):
                 f"Chunk {i} exceeds max size: {chunk_size}",
             )
 
+    def test_non_uniform_column_sizes_triggers_validation(self):
+        """
+        Test that non-uniform column sizes (some moderate, some huge) correctly
+        trigger the validation check that prevents oversized columns from being
+        flushed as single-column chunks.
+
+        This test specifically catches the bug where a column that fits alone
+        (1035 chars) is followed by one that exceeds alone (8193 chars).
+        """
+        try:
+            import pandas as pd
+        except ImportError:
+            self.skipTest("pandas not available")
+
+        # Create a row with:
+        # - col_0 to col_4: moderate values that fit together
+        # - col_5: huge value that exceeds 8192 when rendered alone
+        data = {
+            "col_0": ["moderate_0" * 50],  # ~500 chars
+            "col_1": ["moderate_1" * 50],  # ~500 chars
+            "col_2": ["moderate_2" * 50],  # ~500 chars
+            "col_3": ["moderate_3" * 50],  # ~500 chars
+            "col_4": ["moderate_4" * 50],  # ~500 chars
+            "col_5": ["huge" * 2500],  # ~10,000 chars (exceeds 8192 alone)
+        }
+        df = pd.DataFrame(data)
+
+        csv_path = os.path.join(self.temp_dir, "non_uniform_cols.csv")
+        df.to_csv(csv_path, index=False)
+
+        from app.services.document_processor import SpreadsheetParser
+        parser = SpreadsheetParser()
+        chunks = parser.parse(csv_path)
+
+        # Should produce multiple chunks (normal cols + split huge col)
+        self.assertGreater(len(chunks), 1, "Expected multiple chunks")
+
+        # Verify ALL chunks respect max size (the critical check)
+        for i, chunk in enumerate(chunks):
+            chunk_size = len(chunk["text"])
+            self.assertLessEqual(
+                chunk_size,
+                parser.MAX_CHUNK_CHARS,
+                f"Chunk {i} EXCEEDS max size: {chunk_size} > {parser.MAX_CHUNK_CHARS}. "
+                f"This indicates the validation check failed.",
+            )
+
+        # Verify column data is present (no complete loss)
+        all_text = " ".join(c["text"] for c in chunks)
+        self.assertIn("col_0", all_text, "col_0 missing")
+        self.assertIn("col_5", all_text, "col_5 missing")
+
 
 if __name__ == '__main__':
     unittest.main()

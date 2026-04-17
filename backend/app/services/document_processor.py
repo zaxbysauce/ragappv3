@@ -255,7 +255,22 @@ class SpreadsheetParser:
                             len(result),
                         )
                     )
-                    group_pairs = [(col, val)]
+                    # Validate that single column fits by itself before starting new group
+                    single_col_text = self._build_column_group_text([(col, val)], sheet_name)
+                    if len(single_col_text) > self.MAX_CHUNK_CHARS:
+                        # Single column exceeds limit; truncate it
+                        header_section = f"Sheet: {sheet_name}\nColumns: {col}\n\n{col}: "
+                        available = self.MAX_CHUNK_CHARS - len(header_section)
+                        truncated_val = val[:max(0, available)]
+                        logger.warning(
+                            "Column '%s' value exceeds max chunk size; truncating from %d to %d chars.",
+                            col,
+                            len(val),
+                            len(truncated_val),
+                        )
+                        group_pairs = [(col, truncated_val)]
+                    else:
+                        group_pairs = [(col, val)]
             else:
                 # This column fits in current group
                 group_pairs = test_group
