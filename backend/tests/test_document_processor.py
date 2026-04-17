@@ -353,7 +353,7 @@ class TestSpreadsheetAdaptiveChunking(unittest.TestCase):
             )
 
         # Verify column-group metadata is present (proves column splitting happened)
-        col_group_chunks = [c for c in chunks if "col_group" in c["metadata"]]
+        col_group_chunks = [c for c in chunks if c["metadata"].get("col_group") is not None]
         self.assertGreaterEqual(
             len(col_group_chunks),
             1,
@@ -453,6 +453,44 @@ class TestSpreadsheetAdaptiveChunking(unittest.TestCase):
         all_text = " ".join(c["text"] for c in chunks)
         self.assertIn("col_0", all_text, "col_0 missing")
         self.assertIn("col_5", all_text, "col_5 missing")
+        self.assertIn("huge", all_text, "col_5 value data missing — may have been dropped instead of truncated")
+
+    def test_single_column_overflow_truncation(self):
+        """
+        Test that a single column with a value exceeding MAX_CHUNK_CHARS is
+        truncated rather than dropped. Exercises lines 224-244 (the truncation
+        path). Requires a value >= 8156 chars to trigger it.
+        """
+        try:
+            import pandas as pd
+        except ImportError:
+            self.skipTest("pandas not available")
+
+        long_val = "overflow" * 1125  # 9000 chars, exceeds 8192 alone
+        data = {"col_overflow": [long_val]}
+        df = pd.DataFrame(data)
+
+        csv_path = os.path.join(self.temp_dir, "single_col_overflow.csv")
+        df.to_csv(csv_path, index=False)
+
+        from app.services.document_processor import SpreadsheetParser
+        parser = SpreadsheetParser()
+        chunks = parser.parse(csv_path)
+
+        self.assertEqual(len(chunks), 1, "Expected exactly 1 chunk for single-column overflow")
+
+        chunk = chunks[0]
+        self.assertLessEqual(
+            len(chunk["text"]),
+            parser.MAX_CHUNK_CHARS,
+            f"Chunk size {len(chunk['text'])} exceeds MAX_CHUNK_CHARS {parser.MAX_CHUNK_CHARS}",
+        )
+        self.assertIn("col_overflow", chunk["text"], "Column name missing from truncated chunk")
+        self.assertIn("overflow", chunk["text"], "Cell data missing — value may have been dropped instead of truncated")
+        self.assertIsNotNone(
+            chunk["metadata"].get("col_group"),
+            "col_group metadata missing — column-split path was not taken",
+        )
 
 
 if __name__ == '__main__':

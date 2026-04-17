@@ -217,10 +217,11 @@ class SpreadsheetParser:
 
         for col, val in col_val_pairs:
             # Test adding this column to current group
-            test_group = group_pairs + [(col, val)]
-            test_chunk_text = self._build_column_group_text(test_group, sheet_name)
+            group_pairs.append((col, val))
+            test_chunk_text = self._build_column_group_text(group_pairs, sheet_name)
 
             if len(test_chunk_text) > self.MAX_CHUNK_CHARS:
+                group_pairs.pop()  # revert the probe append
                 if not group_pairs:
                     # Single column exceeds limit: truncate this cell's value only
                     header_section = f"Sheet: {sheet_name}\nColumns: {col}\n\n{col}: "
@@ -272,8 +273,8 @@ class SpreadsheetParser:
                     else:
                         group_pairs = [(col, val)]
             else:
-                # This column fits in current group
-                group_pairs = test_group
+                # Column fits; already appended above
+                pass
 
         # Flush any remaining columns
         if group_pairs:
@@ -447,6 +448,7 @@ class SpreadsheetParser:
                             "total_rows": total_rows,
                             "column_count": len(headers),
                             "source_type": "spreadsheet",
+                            "col_group": None,
                         },
                     }
                 )
@@ -538,19 +540,22 @@ class DocumentProcessor:
             return
 
         max_len = getattr(self.embedding_service, "MAX_TEXT_LENGTH", 8192)
+        raw_prefix = getattr(self.embedding_service, "embedding_doc_prefix", "") or ""
+        prefix_len = len(raw_prefix)
+        effective_max = max_len - prefix_len
         oversized = []
 
         for i, text in enumerate(texts):
-            if len(text) > max_len:
+            if len(text) > effective_max:
                 oversized.append((i, len(text)))
 
         if oversized:
             logger.warning(
-                "Document '%s' has %d chunk(s) exceeding max embedding length (%d chars): %s. "
-                "Chunks will be truncated by the embedding service.",
+                "Document '%s' has %d chunk(s) exceeding effective embedding length (%d chars after prefix): %s. "
+                "embed_batch() will raise EmbeddingError for these chunks.",
                 source_filename,
                 len(oversized),
-                max_len,
+                effective_max,
                 ", ".join(f"chunk {i} ({size} chars)" for i, size in oversized),
             )
 
