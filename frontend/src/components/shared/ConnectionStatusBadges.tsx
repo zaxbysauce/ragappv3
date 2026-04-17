@@ -5,7 +5,7 @@ import type { HealthStatus } from "@/types/health";
 export function ConnectionStatusBadges({ health }: { health: HealthStatus }) {
   const getBadgeClass = (isUp: boolean) => {
     if (health.loading) return "bg-muted text-muted-foreground";
-    return isUp ? "bg-green-500 hover:bg-green-600" : "bg-red-500 hover:bg-red-600";
+    return isUp ? "bg-success hover:bg-success/80" : "bg-destructive hover:bg-destructive/80";
   };
 
   const getBadgeLabel = (label: string) => {

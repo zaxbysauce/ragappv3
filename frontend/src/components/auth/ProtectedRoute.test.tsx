@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { ProtectedRoute, RoleGuard, AdminGuard, SuperAdminGuard } from "./ProtectedRoute";
+import { ProtectedRoute } from "./ProtectedRoute";
+import { RoleGuard, AdminGuard, SuperAdminGuard } from "./RoleGuard";
 import * as AuthContext from "@/contexts/AuthContext";
 import * as useAuthStoreModule from "@/stores/useAuthStore";
 
@@ -90,6 +91,7 @@ describe("ProtectedRoute", () => {
     vi.mocked(useAuthStoreModule.useAuthStore).mockReturnValue({
       isAuthenticated: false,
       isLoading: false,
+      isInitialized: true,
       needsSetup: false,
     } as any);
 
@@ -107,6 +109,7 @@ describe("ProtectedRoute", () => {
     vi.mocked(useAuthStoreModule.useAuthStore).mockReturnValue({
       isAuthenticated: true,
       isLoading: false,
+      isInitialized: true,
       needsSetup: false,
     } as any);
 

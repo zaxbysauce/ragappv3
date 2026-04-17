@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import axios from "axios";
-import { setJwtAccessToken, getJwtAccessToken } from "@/lib/api";
+import { setJwtAccessToken, getJwtAccessToken, ensureCsrfToken, resetCsrfToken, attachCsrfInterceptor } from "@/lib/api";
 
 interface User {
   id: number;
@@ -51,19 +51,12 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || "/api";
 // Create a separate axios instance for auth calls to avoid interceptor loops
 const authClient = axios.create({
   baseURL: API_BASE_URL,
+  timeout: 30000,
   headers: {
     "Content-Type": "application/json",
   },
   withCredentials: true, // Required for httpOnly refresh cookie
 });
-
-/**
- * Fetch a CSRF token from the backend and attach it to subsequent requests.
- * The backend sets the token as a cookie; we read it and echo it back via
- * the X-CSRF-Token header on every mutating request.
- */
-let csrfToken: string | null = null;
-let csrfFetchPromise: Promise<string> | null = null;
 
 // Guard to prevent concurrent/duplicate init calls.
 // Stores the in-flight promise so additional callers await the same result
@@ -71,46 +64,14 @@ let csrfFetchPromise: Promise<string> | null = null;
 let _initAttempted = false;
 let _initPromise: Promise<void> | null = null;
 
-async function ensureCsrfToken(): Promise<string> {
-  if (csrfToken) return csrfToken;
-  if (!csrfFetchPromise) {
-    csrfFetchPromise = authClient
-      .get<{ csrf_token: string }>("/csrf-token")
-      .then((resp) => {
-        csrfToken = resp.data.csrf_token;
-        return csrfToken;
-      })
-      .finally(() => {
-        csrfFetchPromise = null;
-      });
-  }
-  return csrfFetchPromise;
-}
+// Reset init guard state (exported for testing)
+export const resetInitState = () => {
+  _initAttempted = false;
+  _initPromise = null;
+};
 
-// Attach CSRF token to all mutating requests
-authClient.interceptors.request.use(async (config) => {
-  if (config.method && ["post", "put", "patch", "delete"].includes(config.method.toLowerCase())) {
-    const token = await ensureCsrfToken();
-    config.headers["X-CSRF-Token"] = token;
-  }
-  return config;
-});
-
-// If a 403 CSRF error occurs, clear the stale token and auto-retry once
-authClient.interceptors.response.use(
-  (resp) => resp,
-  async (error) => {
-    if (error.response?.status === 403 && !error.config._csrfRetry) {
-      csrfToken = null; // force refresh on next request
-      error.config._csrfRetry = true;
-      // Re-fetch CSRF token and retry the request
-      const newToken = await ensureCsrfToken();
-      error.config.headers["X-CSRF-Token"] = newToken;
-      return authClient(error.config);
-    }
-    return Promise.reject(error);
-  }
-);
+// Wire up CSRF via centralized api.ts utilities
+attachCsrfInterceptor(authClient);
 
 export const useAuthStore = create<AuthState>()(
   persist(
@@ -200,7 +161,7 @@ export const useAuthStore = create<AuthState>()(
         get()._setLoading(true);
         try {
           // Force a fresh CSRF token before login to avoid 403 on first attempt
-          csrfToken = null;
+          resetCsrfToken();
           await ensureCsrfToken();
 
           const response = await authClient.post<LoginResponse>("/auth/login", {
@@ -254,6 +215,10 @@ export const useAuthStore = create<AuthState>()(
 
           // Sync with apiClient
           setJwtAccessToken(access_token);
+
+          // Reset and re-fetch CSRF token for new session
+          resetCsrfToken();
+          await ensureCsrfToken();
         } finally {
           get()._setLoading(false);
         }
@@ -267,19 +232,19 @@ export const useAuthStore = create<AuthState>()(
         } catch (error) {
           console.error("Logout request failed:", error);
           // Continue with local cleanup even if server logout fails
-	} finally {
-		// Clear all auth state
-		set({
-			user: null,
-			accessToken: null,
-			isAuthenticated: false,
-		});
-		setJwtAccessToken(null);
-		get()._setLoading(false);
-		// Reset init guard so re-login works after logout
-		_initAttempted = false;
-		_initPromise = null;
-	}
+        } finally {
+          // Clear all auth state
+          set({
+            user: null,
+            accessToken: null,
+            isAuthenticated: false,
+          });
+          setJwtAccessToken(null);
+          get()._setLoading(false);
+          // Reset init guard so re-login works after logout
+          _initAttempted = false;
+          _initPromise = null;
+        }
       },
 
       refreshToken: async (): Promise<string | null> => {

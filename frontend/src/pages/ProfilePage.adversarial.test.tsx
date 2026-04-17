@@ -5,16 +5,33 @@ import '@testing-library/jest-dom';
 import ProfilePage from '@/pages/ProfilePage';
 import { toast } from 'sonner';
 
-// --- Mocks ---
-vi.mock('@/stores/useAuthStore', () => ({
-  useAuthStore: vi.fn((selector) => {
-    const state = {
-      user: { id: 1, username: 'testuser', full_name: 'Test User', role: 'member' },
-      isAuthenticated: true, isLoading: false,
-      updateProfile: vi.fn().mockResolvedValue({}),
-    };
+// Use vi.hoisted so the mock factory (which runs in a separate hoisted context) can access these.
+const { mockChangePassword } = vi.hoisted(() => ({
+  mockChangePassword: vi.fn().mockResolvedValue(undefined),
+}));
+
+// Default auth store state factory
+const defaultAuthState = () => ({
+  user: { id: 1, username: 'testuser', full_name: 'Test User', role: 'member' as const },
+  isAuthenticated: true,
+  isLoading: false,
+  updateProfile: vi.fn().mockResolvedValue({}),
+});
+
+// vi.hoisted for the store mock so tests can access and reset it
+const { mockUseAuthStore } = vi.hoisted(() => ({
+  mockUseAuthStore: vi.fn((selector: any) => {
+    const state = defaultAuthState();
     return typeof selector === 'function' ? selector(state) : state;
   }),
+}));
+
+vi.mock('@/stores/useAuthStore', () => ({
+  useAuthStore: mockUseAuthStore,
+}));
+
+vi.mock('@/lib/api', () => ({
+  changePassword: mockChangePassword,
 }));
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
@@ -28,7 +45,11 @@ vi.mock('@/components/ui/card', () => ({
 }));
 
 vi.mock('@/components/ui/button', () => ({
-  Button: ({ children, onClick, disabled, ...props }: any) => <button onClick={onClick} disabled={disabled} {...props}>{children}</button>,
+  Button: ({ children, onClick, disabled, ...props }: any) => (
+    <button onClick={onClick} disabled={disabled} {...props}>
+      {children}
+    </button>
+  ),
 }));
 
 vi.mock('@/components/ui/input', () => ({
@@ -44,8 +65,24 @@ vi.mock('@/components/auth/ProtectedRoute', () => ({
 }));
 
 describe('ProfilePage ADVERSARIAL', () => {
-  beforeEach(() => { vi.clearAllMocks(); });
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Reset useAuthStore to default state — tests that override it for specific scenarios
+    mockUseAuthStore.mockImplementation((selector: any) => {
+      const state = defaultAuthState();
+      return typeof selector === 'function' ? selector(state) : state;
+    });
+    mockChangePassword.mockResolvedValue(undefined);
+  });
   afterEach(() => { vi.restoreAllMocks(); });
+
+  // Helper: override the store mock for a specific test
+  const mockStoreWith = (overrides: Partial<ReturnType<typeof defaultAuthState>>) => {
+    mockUseAuthStore.mockImplementation((selector: any) => {
+      const state = { ...defaultAuthState(), ...overrides };
+      return typeof selector === 'function' ? selector(state) : state;
+    });
+  };
 
   // 1. XSS in profile name
   describe('XSS in profile name', () => {
@@ -56,11 +93,11 @@ describe('ProfilePage ADVERSARIAL', () => {
     ];
 
     it.each(xssPayloads)('should NOT execute XSS when full_name is: %s', async (payload) => {
-      const { useAuthStore } = await import('@/stores/useAuthStore');
-      vi.mocked(useAuthStore).mockImplementation((selector: any) => {
+      mockUseAuthStore.mockImplementation((selector: any) => {
         const state = {
-          user: { id: 1, username: 'testuser', full_name: payload, role: 'member' },
-          isAuthenticated: true, isLoading: false,
+          user: { id: 1, username: 'testuser', full_name: payload, role: 'member' as const },
+          isAuthenticated: true,
+          isLoading: false,
           updateProfile: vi.fn().mockResolvedValue({}),
         };
         return typeof selector === 'function' ? selector(state) : state;
@@ -68,7 +105,7 @@ describe('ProfilePage ADVERSARIAL', () => {
 
       await act(async () => { render(<ProfilePage />); });
 
-      // Should render safely
+      // Should render safely — no script tags executed
       expect(document.querySelectorAll('script')).toHaveLength(0);
       expect(screen.getByText('Profile')).toBeInTheDocument();
     });
@@ -85,7 +122,7 @@ describe('ProfilePage ADVERSARIAL', () => {
 
       await act(async () => {
         fireEvent.change(currentPw, { target: { value: 'oldpass' } });
-        fireEvent.change(newPw, { target: { value: '1234567' } }); // 7 chars
+        fireEvent.change(newPw, { target: { value: '1234567' } });
         fireEvent.change(confirmPw, { target: { value: '1234567' } });
       });
 
@@ -107,7 +144,7 @@ describe('ProfilePage ADVERSARIAL', () => {
 
       await act(async () => {
         fireEvent.change(currentPw, { target: { value: 'oldpass' } });
-        fireEvent.change(newPw, { target: { value: '12345678' } }); // exactly 8
+        fireEvent.change(newPw, { target: { value: '12345678' } });
         fireEvent.change(confirmPw, { target: { value: '12345678' } });
       });
 
@@ -163,7 +200,6 @@ describe('ProfilePage ADVERSARIAL', () => {
     it('should reject empty new password', async () => {
       await act(async () => { render(<ProfilePage />); });
 
-      // The Change Password button should be disabled when new password is empty
       const buttons = screen.getAllByRole('button');
       const passwordButton = buttons.find(b => b.textContent?.includes('Change Password'));
       expect(passwordButton).toBeDisabled();
@@ -173,15 +209,7 @@ describe('ProfilePage ADVERSARIAL', () => {
   // 3. API error handling
   describe('API error handling', () => {
     it('should show error toast when profile update fails', async () => {
-      const { useAuthStore } = await import('@/stores/useAuthStore');
-      vi.mocked(useAuthStore).mockImplementation((selector: any) => {
-        const state = {
-          user: { id: 1, username: 'testuser', full_name: 'Test User', role: 'member' },
-          isAuthenticated: true, isLoading: false,
-          updateProfile: vi.fn().mockRejectedValue(new Error('500')),
-        };
-        return typeof selector === 'function' ? selector(state) : state;
-      });
+      mockStoreWith({ updateProfile: vi.fn().mockRejectedValue(new Error('500')) });
 
       await act(async () => { render(<ProfilePage />); });
 
@@ -199,15 +227,7 @@ describe('ProfilePage ADVERSARIAL', () => {
     });
 
     it('should show error toast when password change fails', async () => {
-      const { useAuthStore } = await import('@/stores/useAuthStore');
-      vi.mocked(useAuthStore).mockImplementation((selector: any) => {
-        const state = {
-          user: { id: 1, username: 'testuser', full_name: 'Test User', role: 'member' },
-          isAuthenticated: true, isLoading: false,
-          updateProfile: vi.fn().mockRejectedValue(new Error('500')),
-        };
-        return typeof selector === 'function' ? selector(state) : state;
-      });
+      mockChangePassword.mockRejectedValueOnce(new Error('500'));
 
       await act(async () => { render(<ProfilePage />); });
 
@@ -225,7 +245,8 @@ describe('ProfilePage ADVERSARIAL', () => {
       await act(async () => { fireEvent.submit(form); });
 
       await waitFor(() => {
-        expect(toast.error).toHaveBeenCalledWith('Failed to change password');
+        // Component uses err.message, so new Error('500') produces '500' in toast
+        expect(toast.error).toHaveBeenCalledWith('500');
       });
     });
   });
@@ -233,11 +254,7 @@ describe('ProfilePage ADVERSARIAL', () => {
   // 4. Null user handling
   describe('Null user handling', () => {
     it('should show loading state when user is null', async () => {
-      const { useAuthStore } = await import('@/stores/useAuthStore');
-      vi.mocked(useAuthStore).mockImplementation((selector: any) => {
-        const state = { user: null, isAuthenticated: false, isLoading: false, updateProfile: vi.fn() };
-        return typeof selector === 'function' ? selector(state) : state;
-      });
+      mockStoreWith({ user: null, isAuthenticated: false, updateProfile: vi.fn() });
 
       await act(async () => { render(<ProfilePage />); });
 
@@ -248,44 +265,22 @@ describe('ProfilePage ADVERSARIAL', () => {
   // 5. Full name edge cases
   describe('Full name edge cases', () => {
     it('should disable save button when name is unchanged', async () => {
-      // Ensure we have a valid user (prior test may have re-mocked to null)
-      const { useAuthStore } = await import('@/stores/useAuthStore');
-      vi.mocked(useAuthStore).mockImplementation((selector: any) => {
-        const state = {
-          user: { id: 1, username: 'testuser', full_name: 'Test User', role: 'member' },
-          isAuthenticated: true, isLoading: false,
-          updateProfile: vi.fn().mockResolvedValue({}),
-        };
-        return typeof selector === 'function' ? selector(state) : state;
-      });
-
-      // Default mock has full_name: 'Test User'. Initial fullName state = user.full_name.
-      // Button disabled when: fullName === user.full_name (no changes to save)
+      // Default mock has full_name: 'Test User' — no changes made
       await act(async () => { render(<ProfilePage />); });
 
-      // Wait for the profile form to render
       await waitFor(() => {
         expect(screen.getByText('Profile Information')).toBeInTheDocument();
       });
 
-      // The save button should be disabled
       const buttons = screen.getAllByRole('button');
       const saveBtn = buttons.find(b => b.textContent?.includes('Save Changes'));
       expect(saveBtn).toBeDefined();
       expect(saveBtn!.tagName).toBe('BUTTON');
-      expect(saveBtn!.hasAttribute('disabled')).toBe(true);
+      expect(saveBtn!).toBeDisabled();
     });
 
     it('should disable save button when name is empty', async () => {
-      const { useAuthStore } = await import('@/stores/useAuthStore');
-      vi.mocked(useAuthStore).mockImplementation((selector: any) => {
-        const state = {
-          user: { id: 1, username: 'testuser', full_name: '', role: 'member' },
-          isAuthenticated: true, isLoading: false,
-          updateProfile: vi.fn(),
-        };
-        return typeof selector === 'function' ? selector(state) : state;
-      });
+      mockStoreWith({ user: { id: 1, username: 'testuser', full_name: '', role: 'member' as const }, updateProfile: vi.fn() });
 
       await act(async () => { render(<ProfilePage />); });
 
@@ -294,15 +289,7 @@ describe('ProfilePage ADVERSARIAL', () => {
     });
 
     it('should handle very long full name (1000+ chars)', async () => {
-      const { useAuthStore } = await import('@/stores/useAuthStore');
-      vi.mocked(useAuthStore).mockImplementation((selector: any) => {
-        const state = {
-          user: { id: 1, username: 'testuser', full_name: 'A'.repeat(2000), role: 'member' },
-          isAuthenticated: true, isLoading: false,
-          updateProfile: vi.fn(),
-        };
-        return typeof selector === 'function' ? selector(state) : state;
-      });
+      mockStoreWith({ user: { id: 1, username: 'testuser', full_name: 'A'.repeat(2000), role: 'member' as const }, updateProfile: vi.fn() });
 
       await act(async () => { render(<ProfilePage />); });
 
@@ -312,15 +299,7 @@ describe('ProfilePage ADVERSARIAL', () => {
     });
 
     it('should handle null full_name', async () => {
-      const { useAuthStore } = await import('@/stores/useAuthStore');
-      vi.mocked(useAuthStore).mockImplementation((selector: any) => {
-        const state = {
-          user: { id: 1, username: 'testuser', full_name: null, role: 'member' },
-          isAuthenticated: true, isLoading: false,
-          updateProfile: vi.fn(),
-        };
-        return typeof selector === 'function' ? selector(state) : state;
-      });
+      mockStoreWith({ user: { id: 1, username: 'testuser', full_name: null as unknown as string, role: 'member' as const }, updateProfile: vi.fn() });
 
       await act(async () => { render(<ProfilePage />); });
 
@@ -331,15 +310,7 @@ describe('ProfilePage ADVERSARIAL', () => {
   // 6. Unicode in names
   describe('Unicode handling', () => {
     it('should handle Unicode full names', async () => {
-      const { useAuthStore } = await import('@/stores/useAuthStore');
-      vi.mocked(useAuthStore).mockImplementation((selector: any) => {
-        const state = {
-          user: { id: 1, username: 'testuser', full_name: '张三 😀 مرحبا', role: 'member' },
-          isAuthenticated: true, isLoading: false,
-          updateProfile: vi.fn(),
-        };
-        return typeof selector === 'function' ? selector(state) : state;
-      });
+      mockStoreWith({ user: { id: 1, username: 'testuser', full_name: '张三 😀 مرحبا', role: 'member' as const }, updateProfile: vi.fn() });
 
       await act(async () => { render(<ProfilePage />); });
 

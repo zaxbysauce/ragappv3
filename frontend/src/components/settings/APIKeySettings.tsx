@@ -39,7 +39,7 @@ export function APIKeySettings({
             Save API Key
           </Button>
           {isSaved && (
-            <span className="text-sm text-green-600 dark:text-green-400">Saved</span>
+            <span className="text-sm text-success">Saved</span>
           )}
         </div>
       </CardContent>

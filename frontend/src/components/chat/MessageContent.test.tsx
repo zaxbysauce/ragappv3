@@ -16,7 +16,7 @@ Object.assign(navigator, {
 
 // Mock the getRelevanceLabel function
 vi.mock("@/lib/relevance", () => ({
-  getRelevanceLabel: vi.fn().mockReturnValue({ text: "Relevant", color: "text-green-600" }),
+  getRelevanceLabel: vi.fn().mockReturnValue({ text: "Relevant", color: "text-success" }),
 }));
 
 // =============================================================================

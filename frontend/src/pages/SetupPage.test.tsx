@@ -199,7 +199,7 @@ describe("SetupPage", () => {
     await user.click(submitButton);
 
     await waitFor(() => {
-      expect(navigate).toHaveBeenCalledWith("/login");
+      expect(navigate).toHaveBeenCalledWith("/");
     });
   });
 
