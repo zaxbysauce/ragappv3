@@ -254,9 +254,9 @@ describe("ADVERSARIAL: WaitingIndicator + scroll-to-bottom (Task 4.1)", () => {
   });
 
   // ===========================================================================
-  // AV2: Null content edge case - content === null (not empty string)
+  // AV2: Null content edge case - content === null or undefined (treated as empty)
   // ===========================================================================
-  describe("AV2: Message content is null (not empty string)", () => {
+  describe("AV2: Message content is null or undefined (treated as empty)", () => {
     it("SHOWS WaitingIndicator when last assistant content is null (AV2-FIXED)", async () => {
       _mockMessageCount = 2;
       (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
@@ -285,7 +285,7 @@ describe("ADVERSARIAL: WaitingIndicator + scroll-to-bottom (Task 4.1)", () => {
         vi.advanceTimersByTime(150);
       });
 
-      // AV2-FIXED: With !content check, null is treated as "no content"
+      // AV2-FIXED: With !content check, null/undefined are correctly treated as "no content"
       // WaitingIndicator SHOULD show when content is null, undefined, or empty string
       expect(screen.getByRole("status", { name: "Waiting for response" })).toBeInTheDocument();
     });

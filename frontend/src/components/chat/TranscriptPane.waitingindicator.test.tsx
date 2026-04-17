@@ -11,15 +11,16 @@ class MockResizeObserver {
 global.ResizeObserver = MockResizeObserver as unknown as typeof ResizeObserver;
 
 // Mock localStorage BEFORE any imports including vi.mock (must be inline since vi.mock is hoisted)
+const mockLocalStorage = {
+  getItem: vi.fn(() => null),
+  setItem: vi.fn(),
+  removeItem: vi.fn(),
+  clear: vi.fn(),
+  length: 0,
+  key: vi.fn(),
+};
 Object.defineProperty(global, 'localStorage', {
-  value: {
-    getItem: vi.fn(() => null),
-    setItem: vi.fn(),
-    removeItem: vi.fn(),
-    clear: vi.fn(),
-    length: 0,
-    key: vi.fn(),
-  },
+  value: mockLocalStorage,
   writable: true,
 });
 
@@ -42,9 +43,23 @@ vi.mock("@/stores/useChatStore", () => ({
     inputError: null,
   })),
 }));
-vi.mock("@/stores/useVaultStore", () => ({
-  useVaultStore: vi.fn(),
-}));
+vi.mock("@/stores/useVaultStore", () => {
+  const mockGetActiveVault = vi.fn(() => ({
+    id: 1,
+    name: "Test Vault",
+    file_count: 5,
+  }));
+  return {
+    useVaultStore: vi.fn((selector) => {
+      const state = {
+        vaults: [{ id: 1, name: "Test Vault", file_count: 5 }],
+        activeVaultId: 1,
+        getActiveVault: mockGetActiveVault,
+      };
+      return selector ? selector(state) : state;
+    }),
+  };
+});
 vi.mock("@/hooks/useSendMessage", () => ({
   useSendMessage: vi.fn(),
   MAX_INPUT_LENGTH: 4000,

@@ -32,6 +32,10 @@ export function resetCsrfToken(): void {
   _csrfFetchPromise = null;
 }
 
+/**
+ * Get the cached CSRF token.
+ * @internal Internal use only - prefer ensureCsrfToken() for actual usage
+ */
 export function getCsrfToken(): string | null {
   return _csrfToken;
 }
@@ -84,9 +88,11 @@ export function attachCsrfInterceptor(instance: ReturnType<typeof axios.create>)
     (resp) => resp,
     async (error) => {
       const config = error.config;
-      const isCsrfError = error.response?.status === 403
-        && (typeof error.response?.data?.detail === 'string'
-            && error.response.data.detail.toLowerCase().includes('csrf'));
+      const detail = error.response?.data?.detail || "";
+      const isCsrfError = error.response?.status === 403 && (
+        error.response?.headers?.["x-csrf-error"] === "true" ||
+        (typeof detail === "string" && detail.toLowerCase().includes("csrf"))
+      );
       if (isCsrfError && config && !config._csrfRetry) {
         resetCsrfToken(); // force refresh on next request
         config._csrfRetry = true;
@@ -1043,44 +1049,7 @@ export async function updateVaultGroups(
 }
 
 // ============================================================================
-// Chat Message Functions (TODO: Not yet implemented in backend)
+// Chat Message Functions (Not yet implemented in backend)
 // ============================================================================
-
-// export interface ChatMessageUpdateRequest {
-//   content: string;
-// }
-
-// TODO: editMessage endpoint not yet implemented in backend
-// export async function editMessage(
-//   sessionId: number,
-//   messageId: number,
-//   content: string
-// ): Promise<ChatSessionMessage> {
-//   const request: ChatMessageUpdateRequest = { content };
-//   const response = await apiClient.patch<ChatSessionMessage>(
-//     `/chat/sessions/${sessionId}/messages/${messageId}`,
-//     request
-//   );
-//   return response.data;
-// }
-
-// TODO: regenerateMessage endpoint not yet implemented in backend
-// export async function regenerateMessage(
-//   sessionId: number,
-//   messageId: number
-// ): Promise<ChatSessionMessage> {
-//   const response = await apiClient.post<ChatSessionMessage>(
-//     `/chat/sessions/${sessionId}/messages/${messageId}/regenerate`
-//   );
-//   return response.data;
-// }
-
-// TODO: exportChatSession endpoint not yet implemented in backend
-// export async function exportChatSession(sessionId: number): Promise<Blob> {
-//   const response = await apiClient.get<Blob>(`/chat/sessions/${sessionId}/export`, {
-//     responseType: "blob",
-//   });
-//   return response.data;
-// }
 
 export default apiClient;
