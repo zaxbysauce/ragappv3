@@ -291,17 +291,35 @@ class SpreadsheetParser:
                 # If chunk exceeds max chars, reduce row count and retry
                 if len(chunk_text) > self.MAX_CHUNK_CHARS:
                     if end - start <= 1:
-                        # Can't reduce further; truncate and log warning
-                        logger.warning(
-                            "Spreadsheet chunk exceeds %d chars (got %d) "
-                            "even with single row. Chunk from %s rows %d-%d will be truncated.",
-                            self.MAX_CHUNK_CHARS,
-                            len(chunk_text),
-                            sheet_name,
-                            start,
-                            end - 1,
+                        # Single row exceeds limit; truncate the row text directly
+                        header_section = (
+                            f"Sheet: {sheet_name}\n"
+                            f"Columns: {header_str}\n\n"
                         )
-                        # Keep as-is and let embedding service handle truncation if needed
+                        available_for_rows = self.MAX_CHUNK_CHARS - len(header_section)
+                        if available_for_rows > 0:
+                            # Truncate row data to fit within limit
+                            row_text = "\n".join(rows_text_lines)
+                            truncated_row = row_text[:available_for_rows]
+                            chunk_text = header_section + truncated_row
+                            logger.warning(
+                                "Spreadsheet chunk from %s rows %d-%d exceeds max size; "
+                                "row text truncated from %d to %d chars.",
+                                sheet_name,
+                                start,
+                                end - 1,
+                                len(row_text),
+                                len(truncated_row),
+                            )
+                        else:
+                            # Can't even fit header; skip this row
+                            logger.warning(
+                                "Spreadsheet row %d-%d exceeds max chunk size even with header only; skipping.",
+                                start,
+                                end - 1,
+                            )
+                            start = end
+                            continue
                     else:
                         # Reduce row count and retry
                         rows_per_chunk = max(1, rows_per_chunk // 2)
