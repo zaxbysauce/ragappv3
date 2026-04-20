@@ -8,7 +8,7 @@ describe("StatusBadge", () => {
       render(<StatusBadge status="pending" />);
       expect(screen.getByText("Pending")).toBeInTheDocument();
       // Clock icon should be rendered for pending status
-      const badge = screen.getByText("Pending").closest("div");
+      const badge = screen.getByText("Pending").closest("span");
       expect(badge?.querySelector("svg")).toBeInTheDocument();
     });
 
@@ -16,7 +16,7 @@ describe("StatusBadge", () => {
       render(<StatusBadge status="processing" />);
       expect(screen.getByText("Processing")).toBeInTheDocument();
       // Loader2 icon should be rendered with animate-spin for processing
-      const badge = screen.getByText("Processing").closest("div");
+      const badge = screen.getByText("Processing").closest("span");
       const icon = badge?.querySelector("svg");
       expect(icon).toBeInTheDocument();
       expect(icon).toHaveClass("animate-spin");
@@ -28,7 +28,7 @@ describe("StatusBadge", () => {
       // Should NOT show "Processed" - the old status label
       expect(screen.queryByText("Processed")).not.toBeInTheDocument();
       // CheckCircle icon should be rendered for indexed status
-      const badge = screen.getByText("Indexed").closest("div");
+      const badge = screen.getByText("Indexed").closest("span");
       expect(badge?.querySelector("svg")).toBeInTheDocument();
     });
 
@@ -36,7 +36,7 @@ describe("StatusBadge", () => {
       render(<StatusBadge status="error" />);
       expect(screen.getByText("Error")).toBeInTheDocument();
       // AlertCircle icon should be rendered for error status
-      const badge = screen.getByText("Error").closest("div");
+      const badge = screen.getByText("Error").closest("span");
       expect(badge?.querySelector("svg")).toBeInTheDocument();
     });
   });
@@ -94,13 +94,13 @@ describe("StatusBadge", () => {
   describe("Badge variants and styling", () => {
     it("pending badge has outline variant with Clock icon", () => {
       render(<StatusBadge status="pending" />);
-      const badge = screen.getByText("Pending").closest("div");
+      const badge = screen.getByText("Pending").closest("span");
       expect(badge).toHaveClass("border"); // outline variant adds border class
     });
 
     it("processing badge has secondary variant with spinning Loader2", () => {
       render(<StatusBadge status="processing" />);
-      const badge = screen.getByText("Processing").closest("div");
+      const badge = screen.getByText("Processing").closest("span");
       expect(badge).toHaveClass("bg-secondary"); // secondary variant
       const icon = badge?.querySelector("svg");
       expect(icon).toHaveClass("animate-spin");
@@ -108,13 +108,13 @@ describe("StatusBadge", () => {
 
     it("indexed badge has green background with CheckCircle icon", () => {
       render(<StatusBadge status="indexed" />);
-      const badge = screen.getByText("Indexed").closest("div");
+      const badge = screen.getByText("Indexed").closest("span");
       expect(badge).toHaveClass("bg-success");
     });
 
     it("error badge has destructive variant with AlertCircle icon", () => {
       render(<StatusBadge status="error" />);
-      const badge = screen.getByText("Error").closest("div");
+      const badge = screen.getByText("Error").closest("span");
       expect(badge).toHaveClass("bg-destructive");
     });
   });
