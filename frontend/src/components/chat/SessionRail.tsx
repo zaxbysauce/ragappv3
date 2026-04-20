@@ -1,7 +1,7 @@
 // frontend/src/components/chat/SessionRail.tsx
 // SessionRail component with full business logic for chat session management
 
-import { useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, forwardRef } from "react";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useNavigate } from "react-router-dom";
 import {
@@ -77,6 +77,9 @@ interface SessionGroupProps {
   onSessionPinToggle: (sessionId: number) => void;
   onSessionDelete: (session: ChatSession) => void;
   isSessionPinned: (sessionId: number) => boolean;
+  focusedIndex: number;
+  onFocusedIndexChange: (index: number) => void;
+  indexOffset: number;
   className?: string;
 }
 
@@ -88,6 +91,8 @@ interface SessionItemProps {
   onRename: (newTitle: string) => void;
   onPinToggle: () => void;
   onDelete: () => void;
+  tabIndex?: number;
+  onKeyDown?: (e: React.KeyboardEvent) => void;
 }
 
 // Time-based group keys
@@ -245,18 +250,23 @@ export function ChatSearchInput({
 // COMPONENT: SessionItem
 // =============================================================================
 
-export function SessionItem({
-  session,
-  isActive,
-  isPinned,
-  onClick,
-  onRename,
-  onPinToggle,
-  onDelete,
-}: SessionItemProps) {
+export const SessionItem = forwardRef<HTMLDivElement, SessionItemProps>(
+  function SessionItem(
+    {
+      session,
+      isActive,
+      isPinned,
+      onClick,
+      onRename,
+      onPinToggle,
+      onDelete,
+      tabIndex,
+      onKeyDown,
+    }: SessionItemProps,
+    ref: React.Ref<HTMLDivElement>
+  ) {
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(session.title || "");
-  const [isHovered, setIsHovered] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -311,18 +321,21 @@ export function SessionItem({
   return (
     <>
       <div
+        ref={ref}
         className={`
           group relative flex items-center gap-2 rounded-md px-2 py-2 text-sm
           cursor-pointer transition-colors
           ${isActive ? "bg-accent/50" : "hover:bg-muted"}
+          focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2
         `}
         onClick={() => !isEditing && onClick()}
-        onMouseEnter={() => setIsHovered(true)}
-        onMouseLeave={() => setIsHovered(false)}
         role={isEditing ? "listitem" : "button"}
-        tabIndex={isEditing ? undefined : 0}
+        tabIndex={isEditing ? undefined : (tabIndex ?? -1)}
         aria-label={isEditing ? undefined : `Chat session: ${displayTitle}`}
         onKeyDown={isEditing ? undefined : (e) => {
+          // First handle the parent's roving tabindex navigation
+          onKeyDown?.(e);
+          // Then handle activation with Enter or Space
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             onClick();
@@ -396,15 +409,17 @@ export function SessionItem({
           )}
         </div>
 
-        {/* Hover Actions */}
+        {/* Hover/Focus Actions */}
         {!isEditing && (
           <TooltipProvider delayDuration={300}>
             <div
               className={`
                 flex items-center gap-0.5
-                ${isHovered ? "opacity-100" : "opacity-0"}
+                opacity-0 group-hover:opacity-100 group-focus-within:opacity-100
                 transition-opacity
               `}
+              role="group"
+              aria-label="Session actions"
             >
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -551,7 +566,7 @@ export function SessionItem({
       </Dialog>
     </>
   );
-}
+});
 
 // =============================================================================
 // COMPONENT: SessionGroup
@@ -576,10 +591,14 @@ export function SessionGroup({
   onSessionPinToggle,
   onSessionDelete,
   isSessionPinned,
+  focusedIndex,
+  onFocusedIndexChange,
+  indexOffset,
   className,
 }: SessionGroupProps) {
   const [internalIsOpen, setInternalIsOpen] = useState(true);
   const isOpen = controlledIsOpen ?? internalIsOpen;
+  const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
 
   const handleToggle = useCallback(() => {
     if (onToggle) {
@@ -588,6 +607,40 @@ export function SessionGroup({
       setInternalIsOpen((prev) => !prev);
     }
   }, [onToggle]);
+
+  // Keyboard navigation handler for roving tabindex
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (sessions.length === 0) return;
+
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        const currentLocalIndex = focusedIndex - indexOffset;
+        const nextLocalIndex = Math.min(currentLocalIndex + 1, sessions.length - 1);
+        onFocusedIndexChange(indexOffset + nextLocalIndex);
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        const currentLocalIndex = focusedIndex - indexOffset;
+        const prevLocalIndex = Math.max(currentLocalIndex - 1, 0);
+        onFocusedIndexChange(indexOffset + prevLocalIndex);
+      } else if (e.key === "Home") {
+        e.preventDefault();
+        onFocusedIndexChange(indexOffset);
+      } else if (e.key === "End") {
+        e.preventDefault();
+        onFocusedIndexChange(indexOffset + sessions.length - 1);
+      }
+    },
+    [focusedIndex, sessions.length, onFocusedIndexChange, indexOffset]
+  );
+
+  // Move DOM focus when focusedIndex changes
+  useLayoutEffect(() => {
+    const localIndex = focusedIndex - indexOffset;
+    if (localIndex >= 0 && localIndex < sessions.length) {
+      itemRefs.current[localIndex]?.focus();
+    }
+  }, [focusedIndex, sessions.length, indexOffset]);
 
   if (sessions.length === 0) {
     return null;
@@ -616,17 +669,36 @@ export function SessionGroup({
       </button>
 
       {isOpen && (
-        <div className="mt-1 space-y-0.5" role="list" aria-label={`${label} sessions`}>
-          {sessions.map((session) => (
+        <div
+          className="mt-1 space-y-0.5"
+          role="list"
+          aria-label={`${label} sessions`}
+          onKeyDown={handleKeyDown}
+        >
+          {sessions.map((session, index) => (
             <SessionItem
               key={session.id}
               session={session}
               isActive={String(session.id) === activeSessionId}
               isPinned={isSessionPinned(session.id)}
-              onClick={() => onSessionClick(session)}
+              onClick={() => {
+                onSessionClick(session);
+                onFocusedIndexChange(indexOffset + index);
+                itemRefs.current[index]?.focus();
+              }}
               onRename={(newTitle) => onSessionRename(session, newTitle)}
               onPinToggle={() => onSessionPinToggle(session.id)}
               onDelete={() => onSessionDelete(session)}
+              tabIndex={index + indexOffset === focusedIndex ? 0 : -1}
+              ref={(el: HTMLDivElement | null) => {
+                itemRefs.current[index] = el;
+              }}
+              onKeyDown={(e: React.KeyboardEvent) => {
+                // Arrow keys are handled by the list container
+                if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+                  e.preventDefault();
+                }
+              }}
             />
           ))}
         </div>
@@ -669,6 +741,7 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
   const [sessionDetails, setSessionDetails] = useState<Map<number, ChatSessionDetail>>(new Map());
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [focusedSessionIndex, setFocusedSessionIndex] = useState(0);
 
   // H-7 fix: Debounce search to avoid firing API calls per keystroke
   const [debouncedSearchQuery] = useDebounce(sessionSearchQuery, 300);
@@ -981,6 +1054,9 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
                 onSessionPinToggle={togglePinSession}
                 onSessionDelete={handleSessionDelete}
                 isSessionPinned={isSessionPinned}
+                focusedIndex={focusedSessionIndex}
+                onFocusedIndexChange={setFocusedSessionIndex}
+                indexOffset={0}
               />
             )}
 
@@ -995,6 +1071,9 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
                 onSessionPinToggle={togglePinSession}
                 onSessionDelete={handleSessionDelete}
                 isSessionPinned={isSessionPinned}
+                focusedIndex={focusedSessionIndex}
+                onFocusedIndexChange={setFocusedSessionIndex}
+                indexOffset={groupedSessions.pinned.length}
               />
             )}
 
@@ -1009,6 +1088,9 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
                 onSessionPinToggle={togglePinSession}
                 onSessionDelete={handleSessionDelete}
                 isSessionPinned={isSessionPinned}
+                focusedIndex={focusedSessionIndex}
+                onFocusedIndexChange={setFocusedSessionIndex}
+                indexOffset={groupedSessions.pinned.length + groupedSessions.today.length}
               />
             )}
 
@@ -1023,6 +1105,9 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
                 onSessionPinToggle={togglePinSession}
                 onSessionDelete={handleSessionDelete}
                 isSessionPinned={isSessionPinned}
+                focusedIndex={focusedSessionIndex}
+                onFocusedIndexChange={setFocusedSessionIndex}
+                indexOffset={groupedSessions.pinned.length + groupedSessions.today.length + groupedSessions.yesterday.length}
               />
             )}
 
@@ -1037,6 +1122,9 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
                 onSessionPinToggle={togglePinSession}
                 onSessionDelete={handleSessionDelete}
                 isSessionPinned={isSessionPinned}
+                focusedIndex={focusedSessionIndex}
+                onFocusedIndexChange={setFocusedSessionIndex}
+                indexOffset={groupedSessions.pinned.length + groupedSessions.today.length + groupedSessions.yesterday.length + groupedSessions.thisWeek.length}
               />
             )}
           </div>

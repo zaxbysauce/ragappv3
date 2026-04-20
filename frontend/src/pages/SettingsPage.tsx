@@ -238,8 +238,9 @@ const handleInputChange = (field: keyof SettingsFormData, value: string | boolea
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Chat Model</label>
+                  <label htmlFor="chat-model" className="text-sm font-medium">Chat Model</label>
                   <Input
+                    id="chat-model"
                     value={settings?.chat_model || "Not configured"}
                     readOnly
                     className="bg-muted"
@@ -249,8 +250,9 @@ const handleInputChange = (field: keyof SettingsFormData, value: string | boolea
                   </p>
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Embedding Model</label>
+                  <label htmlFor="embedding-model" className="text-sm font-medium">Embedding Model</label>
                   <Input
+                    id="embedding-model"
                     value={settings?.embedding_model || "Not configured"}
                     readOnly
                     className="bg-muted"

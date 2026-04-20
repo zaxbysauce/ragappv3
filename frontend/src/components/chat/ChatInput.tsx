@@ -68,6 +68,12 @@ export function ChatInput({ onSend, onStop, isStreaming, className }: ChatInputP
           </Button>
         )}
       </div>
+      <div className={cn(
+        "text-xs text-right mt-1",
+        input.length > MAX_INPUT_LENGTH * 0.8 ? "text-destructive" : "text-muted-foreground"
+      )}>
+        {input.length}/{MAX_INPUT_LENGTH}
+      </div>
     </div>
   );
 }
