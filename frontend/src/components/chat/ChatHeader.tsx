@@ -44,7 +44,7 @@ export function ChatHeader({
               value={chatTitle}
               onChange={(e) => onTitleChange(e.target.value)}
               placeholder="Chat title..."
-              className="text-2xl font-bold bg-transparent border-b border-primary focus:outline-none focus:border-primary-foreground"
+              className="text-2xl font-bold bg-transparent border-b border-primary focus:outline-none focus:border-primary-foreground focus-visible:ring-2 focus-visible:ring-primary"
               onKeyDown={(e) => {
                 if (e.key === "Enter") onSaveTitle();
                 if (e.key === "Escape") onCancelEditTitle();

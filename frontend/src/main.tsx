@@ -12,7 +12,7 @@ const queryClient = new QueryClient()
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <Toaster position="top-right" richColors />
+      <Toaster position="bottom-right" toastOptions={{ className: 'max-w-[90vw] sm:max-w-sm' }} richColors />
       <App />
     </QueryClientProvider>
   </React.StrictMode>,
