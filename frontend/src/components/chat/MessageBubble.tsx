@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { User, Bot } from "lucide-react";
+import { User, Bot, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MessageContent } from "./MessageContent";
 import type { Message } from "@/stores/useChatStore";
@@ -19,13 +19,13 @@ export function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
       transition={{ duration: 0.3 }}
       className={cn(
         "flex gap-3 p-4",
-        isUser ? "bg-primary/5" : "bg-muted/30"
+        isUser ? "bg-primary/10" : "bg-muted/30"
       )}
     >
       <div
         className={cn(
           "flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center",
-          isUser ? "bg-primary text-primary-foreground" : "bg-muted"
+          isUser ? "bg-primary text-primary-foreground" : "bg-primary/10 text-primary"
         )}
       >
         {isUser ? (
@@ -49,12 +49,18 @@ export function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
         />
 
         {message.error && (
-          <div className="mt-2 text-sm text-destructive">{message.error}</div>
+          <div className="mt-3 flex items-start gap-2 rounded-md bg-destructive/10 border border-destructive/30 p-3">
+            <AlertCircle className="h-4 w-4 text-destructive flex-shrink-0 mt-0.5" aria-hidden="true" />
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-destructive">Error</p>
+              <p className="text-xs text-destructive/80 mt-0.5">{message.error}</p>
+            </div>
+          </div>
         )}
 
         {message.stopped && !message.error && (
-          <div className="mt-2 text-sm text-muted-foreground italic">
-            Generation stopped
+          <div className="mt-3 inline-flex items-center gap-2 rounded-md bg-muted border border-border px-3 py-1.5">
+            <span className="text-xs font-medium text-muted-foreground">Stopped</span>
           </div>
         )}
       </div>

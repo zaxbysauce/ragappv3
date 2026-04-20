@@ -198,7 +198,7 @@ function SourceListItem({
         "w-full text-left p-3 rounded-lg border transition-all",
         "hover:bg-accent/50 hover:border-accent",
         isSelected
-          ? "bg-accent border-primary ring-1 ring-primary"
+          ? "bg-primary/10 border-primary ring-2 ring-primary/30"
           : "bg-card border-border"
       )}
     >
