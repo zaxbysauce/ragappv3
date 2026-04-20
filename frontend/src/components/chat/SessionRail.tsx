@@ -837,6 +837,13 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
     });
   }, [sessions, debouncedSearchQuery, sessionDetails]);
 
+  // Reset focused index when filtered list shrinks to prevent out-of-bounds focus
+  useEffect(() => {
+    setFocusedSessionIndex((prev) =>
+      prev >= filteredSessions.length ? Math.max(0, filteredSessions.length - 1) : prev
+    );
+  }, [filteredSessions.length]);
+
   // Group sessions by time
   const groupedSessions = useMemo(
     () => groupSessionsByTime(filteredSessions, pinnedSessionIds),
