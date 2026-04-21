@@ -91,16 +91,20 @@ class ModelChecker:
         if '/v1/models' in url_lower or '/v1/embeddings' in url_lower:
             return 'openai_compatible'
         
-        # Check for port 1234 (LM Studio default) without explicit path
+        # Check for common OpenAI-compatible ports (vLLM 8000, LM Studio 1234, etc.)
+        # without explicit path
+        OPENAI_COMPATIBLE_PORTS = {8000, 1234, 8080, 5000, 5001}
         try:
             from urllib.parse import urlparse
             parsed = urlparse(base_url)
-            if parsed.port == 1234 or parsed.netloc.endswith(':1234'):
+            if parsed.port in OPENAI_COMPATIBLE_PORTS or any(
+                parsed.netloc.endswith(f':{p}') for p in OPENAI_COMPATIBLE_PORTS
+            ):
                 return 'openai_compatible'
             # Also check if path is empty or just /
             if parsed.path in ('', '/') and not parsed.port:
-                # No explicit path and no special port - check if it's localhost:1234 pattern
-                if ':1234' in parsed.netloc:
+                # No explicit path and no special port - check common port patterns
+                if any(f':{p}' in parsed.netloc for p in OPENAI_COMPATIBLE_PORTS):
                     return 'openai_compatible'
         except (ValueError, AttributeError):
             # URL parsing failed, continue with default provider
