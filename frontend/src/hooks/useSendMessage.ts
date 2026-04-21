@@ -155,6 +155,7 @@ export function useSendMessage(
 
   const handleStop = useCallback(() => {
     useChatStore.getState().stopStreaming();
+    sendingRef.current = false;
   }, []);
 
   const handleKeyDown = useCallback(

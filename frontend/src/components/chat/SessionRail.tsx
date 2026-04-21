@@ -46,6 +46,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { toast } from "sonner";
 import {
   listChatSessions,
   deleteChatSession,
@@ -324,8 +325,9 @@ export const SessionItem = forwardRef<HTMLDivElement, SessionItemProps>(
         ref={ref}
         className={`
           group relative flex items-center gap-2 rounded-md px-2 py-2 text-sm
-          cursor-pointer transition-colors
-          ${isActive ? "bg-accent/50" : "hover:bg-muted"}
+          cursor-pointer transition-all duration-150
+          border border-transparent
+          ${isActive ? "bg-accent/50 border-border/30" : "hover:bg-muted hover:border-border/50"}
           focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2
         `}
         onClick={() => !isEditing && onClick()}
@@ -881,8 +883,6 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
       try {
         await updateChatSession(_session.id, newTitle);
       } catch (err) {
-        // Revert on failure — do NOT call setError() here because rename
-        // failure is non-blocking; the reverted title is visible to the user.
         setSessions((prev) =>
           prev.map((s) =>
             s.id === _session.id ? { ...s, title: originalTitle } : s
@@ -890,6 +890,7 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
         );
         const message = err instanceof Error ? err.message : "Failed to rename session";
         console.warn("Rename failed, reverted:", message);
+        toast.error("Failed to rename session. Reverted to original title.");
       }
     },
     []

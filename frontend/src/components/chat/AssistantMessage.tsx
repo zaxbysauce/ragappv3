@@ -3,7 +3,7 @@
 
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { motion } from "framer-motion";
-import { Bot, Copy, Check, RotateCcw, Bug, ChevronRight, FileText, ThumbsUp, ThumbsDown } from "lucide-react";
+import { Bot, Copy, Check, RotateCcw, Bug, ChevronRight, FileText, ThumbsUp, ThumbsDown, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -153,8 +153,8 @@ function CitationChip({ source, index, onClick }: CitationChipProps) {
       onClick={onClick}
       className={cn(
         "inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs",
-        "bg-primary/10 text-primary hover:bg-primary/20 transition-colors",
-        "border border-primary/20"
+        "bg-primary/10 text-primary hover:bg-primary/25 active:scale-95 transition-all duration-150",
+        "border border-primary/20 hover:border-primary/40 hover:shadow-sm"
       )}
       aria-label={`Source ${index + 1}: ${source.filename}`}
     >
@@ -330,7 +330,7 @@ function ActionBar({
   }, [feedback, externalFeedback, onFeedback, saveFeedbackToStorage]);
 
   return (
-    <div className="flex items-center gap-1 mt-3 opacity-0 group-hover:opacity-100 focus-within:opacity-100 sm:max-md:opacity-100 transition-opacity">
+    <div className="flex items-center gap-1 mt-3 opacity-30 group-hover:opacity-100 focus-within:opacity-100 transition-opacity duration-200">
       <TooltipProvider>
         {showCopy && (
           <Tooltip>
@@ -400,7 +400,7 @@ function ActionBar({
                 <Button
                   variant="ghost"
                   size="icon"
-                  className={cn("h-7 w-7", feedback === "up" && "bg-accent text-accent-foreground")}
+                  className={cn("h-7 w-7 transition-all duration-150", feedback === "up" && "bg-accent text-accent-foreground scale-110")}
                   onClick={() => handleFeedback("up")}
                   aria-label="Good response"
                   aria-pressed={feedback === "up"}
@@ -418,7 +418,7 @@ function ActionBar({
                 <Button
                   variant="ghost"
                   size="icon"
-                  className={cn("h-7 w-7", feedback === "down" && "bg-accent text-accent-foreground")}
+                  className={cn("h-7 w-7 transition-all duration-150", feedback === "down" && "bg-accent text-accent-foreground scale-110")}
                   onClick={() => handleFeedback("down")}
                   aria-label="Bad response"
                   aria-pressed={feedback === "down"}
@@ -551,7 +551,7 @@ export function AssistantMessage({
     >
       {/* Avatar */}
       <div
-        className="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center bg-muted"
+        className="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center bg-primary/10 text-primary"
         aria-hidden="true"
       >
         <Bot className="h-4 w-4" />
@@ -563,7 +563,14 @@ export function AssistantMessage({
         <div className="flex items-center gap-2 mb-1">
           <span className="font-semibold text-sm">Assistant</span>
           {isStreaming && (
-            <span className="text-xs text-muted-foreground animate-pulse">thinking...</span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs font-medium text-primary/70">Thinking</span>
+              <span className="flex items-center gap-0.5">
+                <span className="h-1.5 w-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: "0ms" }} aria-hidden="true" />
+                <span className="h-1.5 w-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: "150ms" }} aria-hidden="true" />
+                <span className="h-1.5 w-1.5 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: "300ms" }} aria-hidden="true" />
+              </span>
+            </div>
           )}
         </div>
 
@@ -595,12 +602,20 @@ export function AssistantMessage({
 
         {/* Error State */}
         {message.error && (
-          <div className="mt-2 text-sm text-destructive">{message.error}</div>
+          <div className="mt-3 flex items-start gap-2 rounded-md bg-destructive/10 border border-destructive/30 p-3">
+            <AlertCircle className="h-4 w-4 text-destructive flex-shrink-0 mt-0.5" aria-hidden="true" />
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-destructive">Error</p>
+              <p className="text-xs text-destructive/80 mt-0.5">{message.error}</p>
+            </div>
+          </div>
         )}
 
         {/* Stopped State */}
         {message.stopped && !message.error && (
-          <div className="mt-2 text-sm text-muted-foreground italic">Generation stopped</div>
+          <div className="mt-3 inline-flex items-center gap-2 rounded-md bg-muted border border-border px-3 py-1.5">
+            <span className="text-xs font-medium text-muted-foreground">Stopped</span>
+          </div>
         )}
 
         {/* Action Bar */}

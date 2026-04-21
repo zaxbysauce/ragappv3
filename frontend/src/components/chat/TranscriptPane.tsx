@@ -130,10 +130,10 @@ function EmptyTranscript({
       >
         {/* App branding icon */}
         <div
-          className="mb-6 flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/10"
+          className="mb-6 flex h-20 w-20 items-center justify-center rounded-2xl bg-primary/15 shadow-md shadow-primary/10"
           aria-hidden="true"
         >
-          <Sparkles className="h-8 w-8 text-primary" />
+          <Sparkles className="h-10 w-10 text-primary" />
         </div>
 
         <h2 className="mb-2 text-xl font-semibold text-foreground">
@@ -157,7 +157,7 @@ function EmptyTranscript({
               <button
                 key={index}
                 onClick={() => onPromptClick(prompt)}
-                className="group flex items-start gap-3 rounded-lg border border-border bg-card p-4 text-left transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="group flex items-start gap-3 rounded-lg border border-border bg-card p-4 text-left transition-all duration-200 hover:bg-accent hover:text-accent-foreground hover:border-accent hover:shadow-sm hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 aria-label={`Use prompt: ${prompt}`}
               >
                 <Sparkles
@@ -300,7 +300,6 @@ function Composer({ onSend, onStop, isStreaming, className, inputRef }: Composer
           >
             <Database className="h-3 w-3" aria-hidden="true" />
             {activeVault.name}
-            <ChevronDown className="h-3 w-3 opacity-50" aria-hidden="true" />
           </Badge>
         </div>
       )}
@@ -326,7 +325,7 @@ function Composer({ onSend, onStop, isStreaming, className, inputRef }: Composer
 
         {/* Slash command menu */}
         <AnimatePresence>
-          {showSlashMenu && filteredCommands.length > 0 && (
+          {showSlashMenu && (
             <motion.div
               initial={{ opacity: 0, y: -8 }}
               animate={{ opacity: 1, y: 0 }}
@@ -338,45 +337,51 @@ function Composer({ onSend, onStop, isStreaming, className, inputRef }: Composer
               className="absolute bottom-full left-0 z-50 mb-2 w-72 overflow-hidden rounded-lg border border-border bg-popover shadow-lg"
             >
               <div className="max-h-64 overflow-y-auto py-1">
-                {filteredCommands.map((command, index) => (
-                  <button
-                    key={command.id}
-                    onClick={() => insertCommand(command)}
-                    onMouseEnter={() => setSelectedCommandIndex(index)}
-                    role="option"
-                    aria-selected={index === selectedCommandIndex}
-                    className={cn(
-                      "flex w-full items-center gap-3 px-3 py-2.5 text-left text-sm transition-colors",
-                      index === selectedCommandIndex
-                        ? "bg-accent text-accent-foreground"
-                        : "text-popover-foreground hover:bg-accent/50"
-                    )}
-                  >
-                    <span
+                {filteredCommands.length === 0 ? (
+                  <div className="px-3 py-4 text-center text-sm text-muted-foreground">
+                    No matching commands
+                  </div>
+                ) : (
+                  filteredCommands.map((command, index) => (
+                    <button
+                      key={command.id}
+                      onClick={() => insertCommand(command)}
+                      onMouseEnter={() => setSelectedCommandIndex(index)}
+                      role="option"
+                      aria-selected={index === selectedCommandIndex}
                       className={cn(
-                        "flex h-8 w-8 items-center justify-center rounded-md",
+                        "flex w-full items-center gap-3 px-3 py-2.5 text-left text-sm transition-colors",
                         index === selectedCommandIndex
-                          ? "bg-primary text-primary-foreground"
-                          : "bg-muted text-muted-foreground"
+                          ? "bg-accent text-accent-foreground"
+                          : "text-popover-foreground hover:bg-accent/50"
                       )}
                     >
-                      {command.icon}
-                    </span>
-                    <div className="flex flex-col">
-                      <span className="font-medium">{command.label}</span>
                       <span
                         className={cn(
-                          "text-xs",
+                          "flex h-8 w-8 items-center justify-center rounded-md",
                           index === selectedCommandIndex
-                            ? "text-accent-foreground/70"
-                            : "text-muted-foreground"
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-muted text-muted-foreground"
                         )}
                       >
-                        {command.description}
+                        {command.icon}
                       </span>
-                    </div>
-                  </button>
-                ))}
+                      <div className="flex flex-col">
+                        <span className="font-medium">{command.label}</span>
+                        <span
+                          className={cn(
+                            "text-xs",
+                            index === selectedCommandIndex
+                              ? "text-accent-foreground/70"
+                              : "text-muted-foreground"
+                          )}
+                        >
+                          {command.description}
+                        </span>
+                      </div>
+                    </button>
+                  ))
+                )}
               </div>
             </motion.div>
           )}
@@ -483,7 +488,7 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const navigate = useNavigate();
-  const { messages, isStreaming, setInput, clearMessages } = useChatStore();
+  const { messages, isStreaming, setInput, setMessages } = useChatStore();
   const { getActiveVault } = useVaultStore();
   const activeVault = getActiveVault();
   const vaultId = useVaultStore((state) => state.activeVaultId);
@@ -610,12 +615,13 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
     navigate('/documents');
   };
 
-  // Handle retry - find last user message, clear messages, set input, and send
+  // Handle retry - remove last assistant response and re-send the user message
+  // Preserves activeChatId so retry stays in the same session
   const handleRetry = () => {
-    const lastUserMessage = [...messages].reverse().find((msg) => msg.role === "user");
-    if (lastUserMessage) {
-      clearMessages();
-      setInput(lastUserMessage.content);
+    const lastUserIdx = messages.map((m, i) => ({ m, i })).reverse().find(({ m }) => m.role === "user")?.i;
+    if (lastUserIdx !== undefined) {
+      setMessages(messages.slice(0, lastUserIdx));
+      setInput(messages[lastUserIdx].content);
       handleSend();
     }
   };
