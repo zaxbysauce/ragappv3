@@ -148,7 +148,10 @@ def _load_persisted_settings(sqlite_path: str) -> None:
                     elif expected_type == float:
                         converted = float(raw)
                     else:
-                        converted = raw
+                        try:
+                            converted = json.loads(raw)
+                        except (json.JSONDecodeError, ValueError):
+                            converted = raw
                     if _validate_setting_value(key, converted):
                         setattr(settings, key, converted)
                 except Exception as e:

@@ -54,7 +54,12 @@ export function useSendMessage(
         useChatStore.setState({ activeChatId: newSession.id.toString() });
       } catch (err) {
         console.error("Failed to create chat session:", err);
-        setInputError("Failed to start chat session. Please check your connection.");
+        const status = (err as { response?: { status?: number } })?.response?.status;
+        if (status === 403) {
+          setInputError("You don't have permission to chat in this vault.");
+        } else {
+          setInputError("Failed to start chat session. Please check your connection.");
+        }
         sendingRef.current = false;
         return;
       }

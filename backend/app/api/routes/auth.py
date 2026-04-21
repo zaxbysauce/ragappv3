@@ -95,6 +95,13 @@ async def register(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to create user: {str(e)}")
 
+    # Grant write access to the default vault so new users can chat immediately
+    db.execute(
+        "INSERT OR IGNORE INTO vault_members (vault_id, user_id, permission) VALUES (1, ?, 'write')",
+        (user_id,),
+    )
+    db.commit()
+
     # Create tokens for auto-login
     access_token = create_access_token(user_id, body.username, role)
     refresh_token_raw, refresh_token_hash = create_refresh_token()

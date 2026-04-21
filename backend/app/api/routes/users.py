@@ -124,6 +124,13 @@ async def create_user(
         conn.commit()
         user_id = cursor.lastrowid
 
+        # Grant write access to the default vault so the user can chat immediately
+        conn.execute(
+            "INSERT OR IGNORE INTO vault_members (vault_id, user_id, permission) VALUES (1, ?, 'write')",
+            (user_id,),
+        )
+        conn.commit()
+
         # Fetch the created user
         cursor = conn.execute(
             "SELECT id, username, full_name, role, is_active, created_at FROM users WHERE id = ?",
