@@ -167,6 +167,20 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   initializeForm: (settings) => {
+    // Unwrap JSON-encoded strings that may have been persisted with json.dumps()
+    // e.g. '"cosine"' → 'cosine', '""' → ''
+    const decodeStr = (v: string | null | undefined, fallback: string): string => {
+      if (v == null) return fallback;
+      if (v.length >= 2 && v.startsWith('"') && v.endsWith('"')) {
+        try {
+          const parsed = JSON.parse(v);
+          if (typeof parsed === "string") return parsed;
+        } catch {}
+      }
+      return v;
+    };
+    const validMetrics = ["cosine", "euclidean", "dot_product"];
+    const rawMetric = decodeStr(settings.vector_metric, "cosine");
     set({
       formData: {
         chunk_size_chars: settings.chunk_size_chars ?? 2000,
@@ -176,22 +190,22 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         auto_scan_interval_minutes: settings.auto_scan_interval_minutes ?? 60,
         max_distance_threshold: settings.max_distance_threshold ?? 0.7,
         retrieval_window: settings.retrieval_window ?? 1,
-        vector_metric: settings.vector_metric ?? "cosine",
-        embedding_doc_prefix: settings.embedding_doc_prefix ?? "Passage: ",
-        embedding_query_prefix: settings.embedding_query_prefix ?? "Query: ",
+        vector_metric: validMetrics.includes(rawMetric) ? rawMetric : "cosine",
+        embedding_doc_prefix: decodeStr(settings.embedding_doc_prefix, ""),
+        embedding_query_prefix: decodeStr(settings.embedding_query_prefix, ""),
         embedding_batch_size: settings.embedding_batch_size ?? 32,
         reranking_enabled: settings.reranking_enabled ?? false,
-        reranker_url: settings.reranker_url ?? "",
-        reranker_model: settings.reranker_model ?? "",
+        reranker_url: decodeStr(settings.reranker_url, ""),
+        reranker_model: decodeStr(settings.reranker_model, ""),
         initial_retrieval_top_k: settings.initial_retrieval_top_k ?? 20,
         reranker_top_n: settings.reranker_top_n ?? 5,
         hybrid_search_enabled: settings.hybrid_search_enabled ?? false,
         hybrid_alpha: settings.hybrid_alpha ?? 0.5,
         // Model connection settings
-        ollama_embedding_url: settings.ollama_embedding_url ?? "",
-        ollama_chat_url: settings.ollama_chat_url ?? "",
-        embedding_model: settings.embedding_model ?? "",
-        chat_model: settings.chat_model ?? "",
+        ollama_embedding_url: decodeStr(settings.ollama_embedding_url, ""),
+        ollama_chat_url: decodeStr(settings.ollama_chat_url, ""),
+        embedding_model: decodeStr(settings.embedding_model, ""),
+        chat_model: decodeStr(settings.chat_model, ""),
       },
       loading: false,
       error: null,

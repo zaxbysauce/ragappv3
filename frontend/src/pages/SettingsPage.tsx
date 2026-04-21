@@ -121,6 +121,7 @@ const handleInputChange = (field: keyof SettingsFormData, value: string | boolea
 
   const handleSave = async () => {
     if (!validateForm()) {
+      toast.error("Please fix the highlighted errors before saving.");
       return;
     }
 
