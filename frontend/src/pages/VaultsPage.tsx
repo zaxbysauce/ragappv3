@@ -133,6 +133,13 @@ export default function VaultsPage() {
       </div>
 
       {/* Vault Cards Grid */}
+      {vaults.length === 0 && (
+        <div className="flex flex-col items-center justify-center py-16 text-center text-muted-foreground">
+          <Database className="h-12 w-12 mb-4 opacity-30" />
+          <p className="text-lg font-medium">No vaults yet</p>
+          <p className="text-sm mt-1">Create a vault to organize your documents into separate knowledge bases.</p>
+        </div>
+      )}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {vaults.map(vault => (
           <Card key={vault.id}>
