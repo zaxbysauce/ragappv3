@@ -50,6 +50,10 @@ class ChatResponse(BaseModel):
     content: str
     sources: List[Dict[str, Any]] = Field(default_factory=list)
     memories_used: List[str] = Field(default_factory=list)
+    # "distance" | "rerank" | "rrf" — tells the client how to interpret `score`
+    # values in each source (polarity + thresholds). Default "distance" keeps
+    # older clients on the safe path if the engine omits it.
+    score_type: str = "distance"
 
 
 class ChatMessage(BaseModel):
@@ -117,6 +121,10 @@ def stream_chat_response(
         collected_content = []
         sources = []
         memories_used = []
+        # Default to "distance" so the frontend always has a well-defined
+        # score polarity to interpret `score` values against, even if the
+        # engine never emits a done event (e.g. early error).
+        score_type = "distance"
 
         try:
             async for chunk in rag_engine.query(
@@ -130,7 +138,7 @@ def stream_chat_response(
                     yield f"data: {json.dumps({'type': 'content', 'content': content})}\n\n"
                 elif chunk_type == "error":
                     yield f"data: {json.dumps({'type': 'error', 'message': chunk.get('message', 'Chat stream failed'), 'code': chunk.get('code', 'UNKNOWN_ERROR')})}\n\n"
-                    yield f"data: {json.dumps({'type': 'done', 'sources': [], 'memories_used': []})}\n\n"
+                    yield f"data: {json.dumps({'type': 'done', 'sources': [], 'memories_used': [], 'score_type': score_type})}\n\n"
                     return
                 elif chunk_type == "fallback":
                     content = chunk.get("content", "")
@@ -140,6 +148,7 @@ def stream_chat_response(
                 elif chunk_type == "done":
                     sources = chunk.get("sources", [])
                     memories_used = chunk.get("memories_used", [])
+                    score_type = chunk.get("score_type", score_type)
         except Exception as e:
             logger.error(
                 "Chat stream failed: message_len=%d, history_len=%d, exception=%s, error=%s",
@@ -154,8 +163,11 @@ def stream_chat_response(
             yield f"data: {json.dumps({'type': 'error', 'message': error_msg, 'code': 'INTERNAL_ERROR'})}\n\n"
             return
 
-        # Yield final done event with sources and memories
-        yield f"data: {json.dumps({'type': 'done', 'sources': sources, 'memories_used': memories_used})}\n\n"
+        # Yield final done event with sources, memories, and score_type so the
+        # frontend can correctly map `score` to relevance labels. Omitting
+        # `score_type` forces the client to guess and historically caused every
+        # source to render as "Tangential" via the distance-mode fallback.
+        yield f"data: {json.dumps({'type': 'done', 'sources': sources, 'memories_used': memories_used, 'score_type': score_type})}\n\n"
 
     return StreamingResponse(
         event_generator(),
@@ -186,6 +198,7 @@ async def non_stream_chat_response(
     collected_content = []
     sources = []
     memories_used = []
+    score_type = "distance"
 
     try:
         async for chunk in rag_engine.query(
@@ -201,6 +214,7 @@ async def non_stream_chat_response(
             elif chunk_type == "done":
                 sources = chunk.get("sources", [])
                 memories_used = chunk.get("memories_used", [])
+                score_type = chunk.get("score_type", score_type)
     except RAGEngineError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
 
@@ -216,6 +230,7 @@ async def non_stream_chat_response(
         content=full_content,
         sources=sources,
         memories_used=memories_used,
+        score_type=score_type,
     )
 
 

@@ -3,11 +3,16 @@ import { render, screen } from "@testing-library/react";
 import { BrowserRouter } from "react-router-dom";
 import ChatShell from "./ChatShell";
 
-// Mock matchMedia for useIsMobile hook
+// Mock matchMedia for useIsMobile hook. Tests can flip `matchMediaMatches` to
+// simulate viewports below a given breakpoint (mobile/tablet). Default is
+// desktop (no media query matches).
+let matchMediaMatches = false;
 Object.defineProperty(window, "matchMedia", {
   writable: true,
   value: vi.fn().mockImplementation((query: string) => ({
-    matches: false,
+    get matches() {
+      return matchMediaMatches;
+    },
     media: query,
     onchange: null,
     addListener: vi.fn(),
@@ -103,6 +108,8 @@ describe("ChatShell Mobile Layout", () => {
       isSessionPinned: vi.fn(),
       setSelectedEvidenceSource: vi.fn(),
     };
+    // Default: desktop viewport (no media queries match => isMobile/isBelowLg=false)
+    matchMediaMatches = false;
     vi.clearAllMocks();
   });
 
@@ -159,9 +166,11 @@ describe("ChatShell Mobile Layout", () => {
   });
 
   describe("test_right_pane_sheet_renders_75vh", () => {
-    it("right pane Sheet renders at 75vh when rightPaneOpen and activeRightTab !== workspace", () => {
+    it("right pane Sheet renders at 75vh on below-lg viewports when rightPaneOpen and activeRightTab !== workspace", () => {
       mockStoreState.rightPaneOpen = true;
       mockStoreState.activeRightTab = "evidence";
+      // Simulate below-lg viewport (tablet/mobile)
+      matchMediaMatches = true;
 
       render(
         <BrowserRouter>
@@ -178,9 +187,11 @@ describe("ChatShell Mobile Layout", () => {
   });
 
   describe("test_right_pane_sheet_renders_95vh_for_workspace", () => {
-    it("right pane Sheet renders at 95vh when activeRightTab === workspace and rightPaneOpen", () => {
+    it("right pane Sheet renders at 95vh on below-lg viewports when activeRightTab === workspace and rightPaneOpen", () => {
       mockStoreState.rightPaneOpen = true;
       mockStoreState.activeRightTab = "workspace";
+      // Simulate below-lg viewport (tablet/mobile)
+      matchMediaMatches = true;
 
       render(
         <BrowserRouter>
@@ -193,6 +204,42 @@ describe("ChatShell Mobile Layout", () => {
       const bottomSheets = Array.from(sheetContents).filter((el) => el.getAttribute("data-side") === "bottom");
       const has95vh = bottomSheets.some((el) => el.className.includes("h-[95vh]"));
       expect(has95vh).toBe(true);
+    });
+  });
+
+  describe("test_right_pane_sheet_not_mounted_on_desktop", () => {
+    it("right pane Sheet (side=bottom) is NOT mounted on desktop (lg+) so the Radix SheetPortal overlay does not dim the viewport", () => {
+      mockStoreState.rightPaneOpen = true;
+      mockStoreState.activeRightTab = "evidence";
+      // Default matchMediaMatches=false simulates desktop (>= lg)
+
+      render(
+        <BrowserRouter>
+          <ChatShell />
+        </BrowserRouter>
+      );
+
+      // On desktop, the bottom-sheet right pane MUST NOT be rendered —
+      // otherwise the portaled SheetOverlay would dim the entire page.
+      const sheetContents = document.querySelectorAll('[data-testid="sheet-content"]');
+      const bottomSheets = Array.from(sheetContents).filter((el) => el.getAttribute("data-side") === "bottom");
+      expect(bottomSheets.length).toBe(0);
+    });
+
+    it("workspace full-screen Sheet is NOT mounted on desktop (lg+)", () => {
+      mockStoreState.rightPaneOpen = true;
+      mockStoreState.activeRightTab = "workspace";
+      // Default matchMediaMatches=false simulates desktop
+
+      render(
+        <BrowserRouter>
+          <ChatShell />
+        </BrowserRouter>
+      );
+
+      const sheetContents = document.querySelectorAll('[data-testid="sheet-content"]');
+      const bottomSheets = Array.from(sheetContents).filter((el) => el.getAttribute("data-side") === "bottom");
+      expect(bottomSheets.length).toBe(0);
     });
   });
 

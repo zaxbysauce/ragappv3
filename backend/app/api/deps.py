@@ -29,6 +29,7 @@ class UserRole(IntEnum):
         except (KeyError, AttributeError):
             return 0
 from app.models.database import SQLiteConnectionPool, get_pool  # noqa: E402
+from app.security import get_csrf_manager  # noqa: E402, F401  # re-exported for app.api.routes.settings
 from app.services.auth_service import decode_access_token  # noqa: E402
 
 # Lazy imports — services are only loaded when their getter is actually called.

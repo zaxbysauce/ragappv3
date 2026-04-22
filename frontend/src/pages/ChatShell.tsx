@@ -52,6 +52,11 @@ export default function ChatShell() {
   } = useChatShellStore();
 
   const isMobile = useIsMobile();
+  // Gate right-pane bottom Sheets on sub-lg viewports. Radix's SheetPortal mounts
+  // its overlay to document.body, so the `lg:hidden` on SheetContent alone does
+  // NOT suppress the fixed inset-0 bg-black/40 overlay — it would dim the whole
+  // desktop layout whenever rightPaneOpen flips true on lg+ widths.
+  const isBelowLg = useIsMobile(1024);
   const messages = useChatStore((s) => s.messages);
   const { open: shortcutsOpen, setOpen: setShortcutsOpen } = useKeyboardShortcuts();
   // Mobile Sheet uses its own state, toggled by the same button
@@ -223,7 +228,7 @@ export default function ChatShell() {
       </aside>
 
       {/* MOBILE: Right Pane Sheet (slides from bottom, 75vh) */}
-      {!isWorkspaceFullScreen && (
+      {!isWorkspaceFullScreen && isBelowLg && (
         <Sheet open={rightPaneOpen} onOpenChange={(open) => !open && closeRightPane()}>
           <SheetContent side="bottom" className="h-[75vh] rounded-t-xl p-0 lg:hidden" aria-describedby="evidence-sources-desc">
             <SheetHeader className="sr-only">
@@ -245,7 +250,7 @@ export default function ChatShell() {
       )}
 
       {/* MOBILE: Workspace Full-Screen Sheet */}
-      {isWorkspaceFullScreen && (
+      {isWorkspaceFullScreen && isBelowLg && (
         <Sheet open={rightPaneOpen} onOpenChange={(open) => !open && closeRightPane()}>
           <SheetContent side="bottom" className="h-[95vh] rounded-t-xl p-0 lg:hidden" aria-describedby="workspace-desc">
             <SheetHeader className="sr-only">

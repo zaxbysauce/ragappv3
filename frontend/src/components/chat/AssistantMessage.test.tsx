@@ -328,9 +328,32 @@ describe("AssistantMessage - Citations and Sources", () => {
     });
     render(<AssistantMessage message={message} />);
 
-    // Should have at least one citation chip - use getAllByLabelText since there may be duplicates
+    // Inline + strip variants share aria-label so assistive tech announces the
+    // filename either way, but only one carries the full filename as text.
     const citationChips = screen.getAllByLabelText("Source 1: report.pdf");
-    expect(citationChips.length).toBeGreaterThanOrEqual(1);
+    expect(citationChips.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("should render inline citation as a compact number-only pill while the evidence strip keeps the full filename", () => {
+    const sources = [
+      createSource({ id: "src-1", filename: "report.pdf", source_label: "S1" }),
+    ];
+    const message = createMessage({
+      content: "According to [S1], the data shows...",
+      sources,
+    });
+    render(<AssistantMessage message={message} />);
+
+    const chips = screen.getAllByLabelText("Source 1: report.pdf");
+    // Both variants render: one inline pill (text="1") and one strip chip
+    // (text contains the filename). This keeps per-sentence attribution
+    // without duplicating the heavy filename chip inside prose.
+    expect(chips.length).toBe(2);
+
+    const inlinePill = chips.find((el) => el.textContent?.trim() === "1");
+    const stripChip = chips.find((el) => el.textContent?.includes("report.pdf"));
+    expect(inlinePill).toBeDefined();
+    expect(stripChip).toBeDefined();
   });
 
   it("should open right pane when citation chip is clicked", () => {

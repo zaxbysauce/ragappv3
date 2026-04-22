@@ -52,6 +52,15 @@ interface CitationChipProps {
   index: number;
   /** Click handler */
   onClick: () => void;
+  /**
+   * Visual variant:
+   * - "strip" (default): full chip with FileText icon and truncated filename.
+   *   Used in the EvidenceStrip below the message.
+   * - "inline": compact number-only pill that fits inline in prose without
+   *   breaking reading flow. The aria-label still exposes the full filename
+   *   to assistive tech.
+   */
+  variant?: "strip" | "inline";
 }
 
 interface EvidenceStripProps {
@@ -147,18 +156,53 @@ export function parseCitations(content: string, sources: Source[] | undefined): 
 // =============================================================================
 
 /**
- * CitationChip - Clickable chip showing a cited source
+ * CitationChip - Clickable chip showing a cited source.
+ *
+ * The "inline" variant renders a compact number-only pill sized to flow
+ * naturally in prose. The "strip" variant (default) renders the full
+ * FileText-icon + filename chip used in the EvidenceStrip below the message.
+ * Using a variant lets us surface per-sentence attribution inline without
+ * duplicating the heavy filename chip in both positions.
  */
-function CitationChip({ source, index, onClick }: CitationChipProps) {
+function CitationChip({ source, index, onClick, variant = "strip" }: CitationChipProps) {
+  const label = `Source ${index + 1}: ${source.filename}`;
+
+  if (variant === "inline") {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className={cn(
+          "inline-flex items-center justify-center align-middle mx-0.5",
+          // Baseline compact look for sighted users...
+          "min-w-[22px] h-[22px] px-1.5 rounded",
+          "text-[11px] font-medium leading-none",
+          "bg-primary/10 text-primary hover:bg-primary/20 active:scale-95",
+          "border border-primary/15 hover:border-primary/30 transition-colors duration-150",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
+          // ...with a 24x24 touch target on coarse pointers (mobile/tablet)
+          // to clear WCAG-AA's minimum target size without enlarging the
+          // visible pill in prose.
+          "[@media(pointer:coarse)]:min-w-[28px] [@media(pointer:coarse)]:h-[28px]"
+        )}
+        aria-label={label}
+        title={source.filename}
+      >
+        {index + 1}
+      </button>
+    );
+  }
+
   return (
     <button
+      type="button"
       onClick={onClick}
       className={cn(
         "inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs",
         "bg-primary/10 text-primary hover:bg-primary/25 active:scale-95 transition-all duration-150",
         "border border-primary/20 hover:border-primary/40 hover:shadow-sm"
       )}
-      aria-label={`Source ${index + 1}: ${source.filename}`}
+      aria-label={label}
     >
       <FileText className="h-3 w-3" />
       <span className="truncate max-w-[120px]">{source.filename}</span>
@@ -548,9 +592,11 @@ export function AssistantMessage({
             return undefined;
           })();
         if (source) {
-          // Find the chip index by looking up the source in citedSources to handle duplicates correctly
+          // Index numbering matches the evidence strip / right pane, so the
+          // inline pill's number points the reader to the same ordinal in
+          // both detail views. Resolve via citedSources so duplicates reuse
+          // the first occurrence's index.
           const sourceIndex = citedSources.findIndex((s) => s.id === source.id);
-          // Use sourceIndex + 1 for display (sourceIndex is -1 if not found)
           const displayIndex = sourceIndex >= 0 ? sourceIndex : index;
           return (
             <CitationChip
@@ -558,6 +604,7 @@ export function AssistantMessage({
               source={source}
               index={displayIndex}
               onClick={() => handleSourceClick(source)}
+              variant="inline"
             />
           );
         }

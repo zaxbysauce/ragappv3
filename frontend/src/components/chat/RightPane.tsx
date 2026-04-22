@@ -193,6 +193,7 @@ function SourceListItem({
 
   return (
     <button
+      id={`evidence-source-${source.id}`}
       onClick={onClick}
       className={cn(
         "w-full text-left p-3 rounded-lg border transition-all",
@@ -363,6 +364,31 @@ export function RightPane() {
     overscan: 5,
     measureElement: (el) => el?.getBoundingClientRect().height ?? 0,
   });
+
+  // Scroll the selected source into view when it changes. This makes the
+  // inline citation pill (in the chat transcript) jump the user directly to
+  // the matching source card here in the right pane.
+  // - For the non-virtualized path (<=20 sources) every card is in the DOM,
+  //   so `scrollIntoView` works directly.
+  // - For the virtualized path (>20 sources) the target row may not be
+  //   rendered yet, so tell the virtualizer to scroll to its index first.
+  //   The virtualizer will then mount the row, at which point a second
+  //   `scrollIntoView` fine-tunes the final position.
+  useEffect(() => {
+    if (!selectedEvidenceSource) return;
+    const idx = sources.findIndex((s) => s.id === selectedEvidenceSource.id);
+    const scrollToElement = () => {
+      const el = document.getElementById(`evidence-source-${selectedEvidenceSource.id}`);
+      if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    };
+    if (shouldVirtualizeSources && idx >= 0) {
+      sourcesVirtualizer.scrollToIndex(idx, { align: "center" });
+      const raf = requestAnimationFrame(scrollToElement);
+      return () => cancelAnimationFrame(raf);
+    }
+    const timeout = setTimeout(scrollToElement, 0);
+    return () => clearTimeout(timeout);
+  }, [selectedEvidenceSource, sources, shouldVirtualizeSources, sourcesVirtualizer]);
 
   const handleSourceClick = useCallback((source: Source) => {
     setSelectedSource(source);
