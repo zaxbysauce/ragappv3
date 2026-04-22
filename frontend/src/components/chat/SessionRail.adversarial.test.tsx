@@ -16,7 +16,7 @@ const TEST_TIMEOUT = 10000;
 
 // Mock ResizeObserver for Radix UI components
 beforeAll(() => {
-  // @ts-ignore
+  // @ts-expect-error - ResizeObserver not in jsdom
   global.ResizeObserver = class ResizeObserver {
     observe() {}
     unobserve() {}

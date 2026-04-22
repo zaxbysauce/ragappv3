@@ -214,6 +214,7 @@ function Composer({ onSend, onStop, isStreaming, className, inputRef }: Composer
       const newHeight = Math.min(textarea.scrollHeight, 200); // ~8 lines max
       textarea.style.height = `${Math.max(44, newHeight)}px`;
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {

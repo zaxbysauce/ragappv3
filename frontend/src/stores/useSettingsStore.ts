@@ -175,7 +175,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         try {
           const parsed = JSON.parse(v);
           if (typeof parsed === "string") return parsed;
-        } catch {}
+        } catch {} // eslint-disable-line no-empty
       }
       return v;
     };

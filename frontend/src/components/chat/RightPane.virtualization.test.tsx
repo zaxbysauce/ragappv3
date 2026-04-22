@@ -475,7 +475,7 @@ describe("RightPane virtualization", () => {
     it("should handle sources with undefined/null values filtered out", () => {
       const sources = [
         createMockSource({ id: "src-1" }),
-        // @ts-ignore - simulating filtered null
+        // @ts-expect-error - simulating filtered null
         null,
         createMockSource({ id: "src-3" }),
       ];
