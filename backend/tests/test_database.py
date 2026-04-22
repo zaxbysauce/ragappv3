@@ -2,10 +2,10 @@
 
 import os
 import sqlite3
+import sys
 import tempfile
 import unittest
 
-import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from app.models.database import init_db
@@ -32,7 +32,7 @@ class TestDatabaseSchema(unittest.TestCase):
         # Connect and query sqlite_master for tables
         conn = sqlite3.connect(self.temp_db_path)
         cursor = conn.cursor()
-        
+
         # Get all tables and virtual tables
         cursor.execute(
             "SELECT name, type FROM sqlite_master WHERE type IN ('table', 'virtual table')"
@@ -51,7 +51,7 @@ class TestDatabaseSchema(unittest.TestCase):
             'chat_sessions',
             'chat_messages'
         }
-        
+
         for table in required_tables:
             self.assertIn(
                 table,

@@ -17,18 +17,15 @@ import asyncio
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
-import numpy as np
 
 # Add backend to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "backend"))
 
 from app.services.circuit_breaker import (
     AsyncCircuitBreaker,
-    CircuitBreakerError,
     CircuitBreakerState,
     circuit_breaker,
 )
@@ -37,7 +34,6 @@ from app.services.embeddings import (
     EmbeddingService,
     LRUCache,
 )
-
 
 # =============================================================================
 # CIRCUIT BREAKER ADVERSARIAL TESTS
@@ -98,17 +94,17 @@ class TestCircuitBreakerAdversarial:
     async def test_concurrent_state_manipulation(self):
         """Attack: Rapid concurrent state changes."""
         cb = AsyncCircuitBreaker(fail_max=3, reset_timeout=1, name="concurrent_test")
-        
+
         async def record_failures():
             for _ in range(10):
                 cb.record_failure()
                 await asyncio.sleep(0.001)
-        
+
         async def record_successes():
             for _ in range(10):
                 cb.record_success()
                 await asyncio.sleep(0.001)
-        
+
         # Run both simultaneously
         await asyncio.gather(record_failures(), record_successes())
         # Should not crash, state should be consistent
@@ -118,15 +114,15 @@ class TestCircuitBreakerAdversarial:
     async def test_rapid_timeout_check(self):
         """Attack: Rapid timeout checks with zero/negative timeout."""
         cb = AsyncCircuitBreaker(fail_max=1, reset_timeout=0.001, name="rapid_test")
-        
+
         # Force open
         cb._transition_to_open()
         assert cb.current_state == CircuitBreakerState.OPEN
-        
+
         # Rapid checks
         for _ in range(100):
             cb._check_timeout()
-        
+
         # Should eventually transition or stay consistent
         assert cb.current_state in [CircuitBreakerState.OPEN, CircuitBreakerState.HALF_OPEN]
 
@@ -134,19 +130,19 @@ class TestCircuitBreakerAdversarial:
     async def test_call_with_exception_raising_func(self):
         """Attack: Function that raises various exception types."""
         cb = AsyncCircuitBreaker(fail_max=2, reset_timeout=60, name="exception_test")
-        
+
         class CustomException(Exception):
             pass
-        
+
         async def raise_custom():
             raise CustomException("Custom error")
-        
+
         async def raise_system_exit():
             raise SystemExit("System exit")
-        
+
         async def raise_keyboard_interrupt():
             raise KeyboardInterrupt("Keyboard interrupt")
-        
+
         # These should all be caught and recorded as failures
         for func in [raise_custom, raise_system_exit, raise_keyboard_interrupt]:
             cb._fail_counter = 0
@@ -162,15 +158,15 @@ class TestCircuitBreakerAdversarial:
     async def test_decorator_with_malicious_function(self):
         """Attack: Decorator with function that modifies circuit breaker."""
         cb = AsyncCircuitBreaker(fail_max=5, reset_timeout=60, name="decorator_test")
-        
+
         @circuit_breaker(cb)
         async def malicious_func():
             # Try to manipulate the circuit breaker from within
             cb._fail_counter = -999
             cb._state = CircuitBreakerState.CLOSED
             return "hacked"
-        
-        result = await malicious_func()
+
+        await malicious_func()
         # The function was able to modify the circuit breaker state
         # This is a potential security issue
         assert cb._fail_counter == -999  # Demonstrates the vulnerability
@@ -234,7 +230,7 @@ class TestEmbeddingsAdversarial:
         mock_settings.ollama_embedding_url = "http://localhost:11434\x00/api/embeddings"
         # Should handle gracefully
         try:
-            service = EmbeddingService()
+            EmbeddingService()
         except (EmbeddingError, ValueError):
             pass  # Expected
 
@@ -242,15 +238,15 @@ class TestEmbeddingsAdversarial:
     async def test_embed_single_with_sql_injection(self, mock_settings):
         """Attack: SQL injection in text input."""
         service = EmbeddingService()
-        
+
         sql_injection_text = "'; DROP TABLE users; --"
         # Should not execute SQL, should treat as plain text
         with patch.object(service._client, 'post', new_callable=AsyncMock) as mock_post:
             mock_post.return_value.status_code = 200
             mock_post.return_value.json.return_value = {"embedding": [0.1, 0.2, 0.3]}
-            
+
             try:
-                result = await service.embed_single(sql_injection_text)
+                await service.embed_single(sql_injection_text)
                 # The SQL should be treated as text, not executed
                 mock_post.assert_called_once()
                 call_args = mock_post.call_args
@@ -264,13 +260,13 @@ class TestEmbeddingsAdversarial:
     async def test_embed_single_with_xss_payload(self, mock_settings):
         """Attack: XSS payload in text input."""
         service = EmbeddingService()
-        
+
         xss_text = "<script>alert('xss')</script>"
         with patch.object(service._client, 'post', new_callable=AsyncMock) as mock_post:
             mock_post.return_value.status_code = 200
             mock_post.return_value.json.return_value = {"embedding": [0.1, 0.2, 0.3]}
-            
-            result = await service.embed_single(xss_text)
+
+            await service.embed_single(xss_text)
             # XSS should be preserved as text, not executed
             mock_post.assert_called_once()
 
@@ -278,7 +274,7 @@ class TestEmbeddingsAdversarial:
     async def test_embed_single_with_oversized_text(self, mock_settings):
         """Attack: Text exceeding MAX_TEXT_LENGTH."""
         service = EmbeddingService()
-        
+
         oversized_text = "x" * (service.MAX_TEXT_LENGTH + 1000)
         with pytest.raises(EmbeddingError, match="exceeds maximum length"):
             await service.embed_batch([oversized_text])
@@ -287,7 +283,7 @@ class TestEmbeddingsAdversarial:
     async def test_embed_single_with_extreme_oversized_text(self, mock_settings):
         """Attack: Extremely large text (memory exhaustion attempt)."""
         service = EmbeddingService()
-        
+
         # Create a very large string that could cause memory issues
         huge_text = "x" * 100_000_000  # 100MB string
         with pytest.raises(EmbeddingError, match="exceeds maximum length"):
@@ -297,7 +293,7 @@ class TestEmbeddingsAdversarial:
     async def test_embed_batch_with_oversized_batch(self, mock_settings):
         """Attack: Batch size exceeding MAX_BATCH_SIZE."""
         service = EmbeddingService()
-        
+
         # Create batch larger than MAX_BATCH_SIZE
         texts = ["test"] * (service.MAX_BATCH_SIZE + 100)
         with patch.object(service._client, 'post', new_callable=AsyncMock) as mock_post:
@@ -305,9 +301,9 @@ class TestEmbeddingsAdversarial:
             mock_post.return_value.json.return_value = {
                 "data": [{"embedding": [0.1, 0.2]}] * len(texts)
             }
-            
+
             # Should process in chunks, not fail
-            result = await service.embed_batch(texts)
+            await service.embed_batch(texts)
             # Verify multiple calls were made due to batch size limit
             assert mock_post.call_count > 1
 
@@ -315,7 +311,7 @@ class TestEmbeddingsAdversarial:
     async def test_embed_batch_with_negative_batch_size(self, mock_settings):
         """Attack: Negative batch size parameter."""
         service = EmbeddingService()
-        
+
         texts = ["test1", "test2"]
         # Negative batch_size should be clamped to valid range
         with patch.object(service._client, 'post', new_callable=AsyncMock) as mock_post:
@@ -323,7 +319,7 @@ class TestEmbeddingsAdversarial:
             mock_post.return_value.json.return_value = {
                 "data": [{"embedding": [0.1, 0.2]}, {"embedding": [0.3, 0.4]}]
             }
-            
+
             result = await service.embed_batch(texts, batch_size=-10)
             # Should handle gracefully (clamped to 1)
             assert len(result) == 2
@@ -332,7 +328,7 @@ class TestEmbeddingsAdversarial:
     async def test_embed_batch_with_zero_batch_size(self, mock_settings):
         """Attack: Zero batch size parameter."""
         service = EmbeddingService()
-        
+
         texts = ["test1", "test2"]
         # Zero batch_size should be clamped to valid range
         with patch.object(service._client, 'post', new_callable=AsyncMock) as mock_post:
@@ -340,7 +336,7 @@ class TestEmbeddingsAdversarial:
             mock_post.return_value.json.return_value = {
                 "data": [{"embedding": [0.1, 0.2]}, {"embedding": [0.3, 0.4]}]
             }
-            
+
             result = await service.embed_batch(texts, batch_size=0)
             # Should handle gracefully (clamped to 1)
             assert len(result) == 2
@@ -349,12 +345,12 @@ class TestEmbeddingsAdversarial:
     async def test_embed_batch_with_malicious_response(self, mock_settings):
         """Attack: Malformed API response."""
         service = EmbeddingService()
-        
+
         with patch.object(service._client, 'post', new_callable=AsyncMock) as mock_post:
             # Response with missing embedding field
             mock_post.return_value.status_code = 200
             mock_post.return_value.json.return_value = {"data": [{"invalid": "response"}]}
-            
+
             with pytest.raises(EmbeddingError):
                 await service.embed_single("test")
 
@@ -362,12 +358,12 @@ class TestEmbeddingsAdversarial:
     async def test_embed_batch_with_html_response(self, mock_settings):
         """Attack: HTML response instead of JSON (potential proxy/WAF block)."""
         service = EmbeddingService()
-        
+
         with patch.object(service._client, 'post', new_callable=AsyncMock) as mock_post:
             mock_post.return_value.status_code = 200
             mock_post.return_value.json.side_effect = json.JSONDecodeError("test", "", 0)
             mock_post.return_value.text = "<html><body>Access Denied</body></html>"
-            
+
             with pytest.raises(EmbeddingError, match="Invalid response"):
                 await service.embed_single("test")
 
@@ -375,7 +371,7 @@ class TestEmbeddingsAdversarial:
     async def test_embed_batch_with_recursive_embedding(self, mock_settings):
         """Attack: Response with recursive/circular structure."""
         service = EmbeddingService()
-        
+
         with patch.object(service._client, 'post', new_callable=AsyncMock) as mock_post:
             mock_post.return_value.status_code = 200
             # Create a deeply nested structure
@@ -383,7 +379,7 @@ class TestEmbeddingsAdversarial:
             for _ in range(1000):
                 nested = {"embedding": nested}
             mock_post.return_value.json.return_value = {"data": [nested]}
-            
+
             with pytest.raises(EmbeddingError):
                 await service.embed_single("test")
 
@@ -393,7 +389,7 @@ class TestEmbeddingsAdversarial:
         # Should handle gracefully
         cache.set("key", [0.1, 0.2])
         # With negative maxsize, cache might not store anything
-        result = cache.get("key")
+        cache.get("key")
         # Behavior depends on implementation
 
     def test_lru_cache_with_zero_maxsize(self):
@@ -413,7 +409,7 @@ class TestEmbeddingsAdversarial:
     def test_lru_cache_with_malicious_key(self):
         """Attack: Cache key with special characters."""
         cache = LRUCache(maxsize=100)
-        
+
         malicious_keys = [
             "'; DROP TABLE users; --",
             "<script>alert('xss')</script>",
@@ -421,7 +417,7 @@ class TestEmbeddingsAdversarial:
             "\x00\x01\x02\x03",
             "a" * 10000,  # Very long key
         ]
-        
+
         for key in malicious_keys:
             cache.set(key, [0.1, 0.2])
             result = cache.get(key)
@@ -431,7 +427,7 @@ class TestEmbeddingsAdversarial:
     async def test_validate_embedding_dimension_with_negative(self, mock_settings):
         """Attack: Negative expected dimension."""
         service = EmbeddingService()
-        
+
         with pytest.raises(EmbeddingError, match="positive integer"):
             await service.validate_embedding_dimension(-10)
 
@@ -439,7 +435,7 @@ class TestEmbeddingsAdversarial:
     async def test_validate_embedding_dimension_with_zero(self, mock_settings):
         """Attack: Zero expected dimension."""
         service = EmbeddingService()
-        
+
         with pytest.raises(EmbeddingError, match="positive integer"):
             await service.validate_embedding_dimension(0)
 
@@ -447,10 +443,10 @@ class TestEmbeddingsAdversarial:
     async def test_validate_embedding_dimension_with_extreme(self, mock_settings):
         """Attack: Extremely large expected dimension."""
         service = EmbeddingService()
-        
+
         with patch.object(service, 'embed_single', new_callable=AsyncMock) as mock_embed:
             mock_embed.return_value = [0.1] * 1000
-            
+
             with pytest.raises(EmbeddingError, match="dimension mismatch"):
                 await service.validate_embedding_dimension(1000000)
 
@@ -458,7 +454,7 @@ class TestEmbeddingsAdversarial:
     async def test_split_text_at_midpoint_with_null_bytes(self, mock_settings):
         """Attack: Text with null bytes."""
         service = EmbeddingService()
-        
+
         text_with_null = "hello\x00world"
         left, right = service._split_text_at_midpoint(text_with_null)
         # Should handle gracefully
@@ -468,7 +464,7 @@ class TestEmbeddingsAdversarial:
     async def test_split_text_at_midpoint_with_control_chars(self, mock_settings):
         """Attack: Text with control characters."""
         service = EmbeddingService()
-        
+
         text_with_control = "hello\x01\x02\x03world"
         left, right = service._split_text_at_midpoint(text_with_control)
         assert isinstance(left, str) and isinstance(right, str)
@@ -476,31 +472,31 @@ class TestEmbeddingsAdversarial:
     def test_mean_pool_embeddings_with_mismatched_dims(self, mock_settings):
         """Attack: Embeddings with different dimensions."""
         service = EmbeddingService()
-        
+
         emb1 = [0.1, 0.2, 0.3]
         emb2 = [0.4, 0.5]
-        
+
         with pytest.raises(EmbeddingError, match="different dimensions"):
             service._mean_pool_embeddings(emb1, emb2)
 
     def test_mean_pool_embeddings_with_empty(self, mock_settings):
         """Attack: Empty embeddings."""
         service = EmbeddingService()
-        
+
         with pytest.raises(EmbeddingError, match="different dimensions"):
             service._mean_pool_embeddings([], [0.1])
 
     def test_is_token_overflow_error_with_unicode(self):
         """Attack: Unicode error messages."""
         service = EmbeddingService()
-        
+
         unicode_errors = [
             "输入（1000个标记）太大",  # Chinese
             "入力（1000トークン）が大きすぎます",  # Japanese
             "\x00\x01\x02",  # Binary
             "input (\u202e1000\u202c tokens) is too large",  # RTL override
         ]
-        
+
         for error in unicode_errors:
             result = service._is_token_overflow_error(error)
             # Should not crash
@@ -528,7 +524,7 @@ class TestVectorStoreAdversarial:
     async def mock_vector_store(self, mock_settings):
         """Create a mock vector store for testing."""
         from app.services.vector_store import VectorStore
-        
+
         store = VectorStore(db_path=Path("/tmp/test_lancedb"))
         # Mock the database connection
         store.db = AsyncMock()
@@ -539,12 +535,12 @@ class TestVectorStoreAdversarial:
     @pytest.mark.asyncio
     async def test_add_chunks_with_sql_injection_file_id(self, mock_settings):
         """Attack: SQL injection in file_id field."""
-        from app.services.vector_store import VectorStore, VectorStoreValidationError
-        
+        from app.services.vector_store import VectorStore
+
         store = VectorStore(db_path=Path("/tmp/test_lancedb"))
         store.table = AsyncMock()
         store._embedding_dim = 384
-        
+
         sql_injection_records = [{
             "id": "test_1",
             "text": "test text",
@@ -552,7 +548,7 @@ class TestVectorStoreAdversarial:
             "chunk_index": 0,
             "embedding": [0.1] * 384,
         }]
-        
+
         # The SQL injection should be treated as a string value, not executed
         await store.add_chunks(sql_injection_records)
         store.table.add.assert_called_once()
@@ -561,11 +557,11 @@ class TestVectorStoreAdversarial:
     async def test_add_chunks_with_path_traversal_id(self, mock_settings):
         """Attack: Path traversal in ID field."""
         from app.services.vector_store import VectorStore
-        
+
         store = VectorStore(db_path=Path("/tmp/test_lancedb"))
         store.table = AsyncMock()
         store._embedding_dim = 384
-        
+
         path_traversal_records = [{
             "id": "../../../etc/passwd",
             "text": "test text",
@@ -573,7 +569,7 @@ class TestVectorStoreAdversarial:
             "chunk_index": 0,
             "embedding": [0.1] * 384,
         }]
-        
+
         await store.add_chunks(path_traversal_records)
         store.table.add.assert_called_once()
 
@@ -581,11 +577,11 @@ class TestVectorStoreAdversarial:
     async def test_add_chunks_with_malformed_embedding(self, mock_settings):
         """Attack: Malformed embedding data."""
         from app.services.vector_store import VectorStore, VectorStoreValidationError
-        
+
         store = VectorStore(db_path=Path("/tmp/test_lancedb"))
         store.table = AsyncMock()
         store._embedding_dim = 384
-        
+
         malformed_records = [{
             "id": "test_1",
             "text": "test text",
@@ -593,7 +589,7 @@ class TestVectorStoreAdversarial:
             "chunk_index": 0,
             "embedding": "not_a_list",  # String instead of list
         }]
-        
+
         with pytest.raises(VectorStoreValidationError, match="must be a list"):
             await store.add_chunks(malformed_records)
 
@@ -601,11 +597,11 @@ class TestVectorStoreAdversarial:
     async def test_add_chunks_with_wrong_embedding_dimension(self, mock_settings):
         """Attack: Embedding with wrong dimension."""
         from app.services.vector_store import VectorStore, VectorStoreValidationError
-        
+
         store = VectorStore(db_path=Path("/tmp/test_lancedb"))
         store.table = AsyncMock()
         store._embedding_dim = 384
-        
+
         wrong_dim_records = [{
             "id": "test_1",
             "text": "test text",
@@ -613,7 +609,7 @@ class TestVectorStoreAdversarial:
             "chunk_index": 0,
             "embedding": [0.1] * 100,  # Wrong dimension
         }]
-        
+
         with pytest.raises(VectorStoreValidationError, match="dimension mismatch"):
             await store.add_chunks(wrong_dim_records)
 
@@ -621,11 +617,11 @@ class TestVectorStoreAdversarial:
     async def test_add_chunks_with_extreme_dimension(self, mock_settings):
         """Attack: Embedding with extreme dimension (memory exhaustion)."""
         from app.services.vector_store import VectorStore
-        
+
         store = VectorStore(db_path=Path("/tmp/test_lancedb"))
         store.table = AsyncMock()
         store._embedding_dim = None  # No dimension check
-        
+
         extreme_dim_records = [{
             "id": "test_1",
             "text": "test text",
@@ -633,7 +629,7 @@ class TestVectorStoreAdversarial:
             "chunk_index": 0,
             "embedding": [0.1] * 1_000_000,  # 1M dimensions
         }]
-        
+
         # Should handle without crashing
         await store.add_chunks(extreme_dim_records)
 
@@ -641,11 +637,11 @@ class TestVectorStoreAdversarial:
     async def test_add_chunks_with_malformed_sparse_embedding(self, mock_settings):
         """Attack: Malformed sparse_embedding JSON."""
         from app.services.vector_store import VectorStore, VectorStoreValidationError
-        
+
         store = VectorStore(db_path=Path("/tmp/test_lancedb"))
         store.table = AsyncMock()
         store._embedding_dim = 384
-        
+
         malformed_sparse_records = [{
             "id": "test_1",
             "text": "test text",
@@ -654,7 +650,7 @@ class TestVectorStoreAdversarial:
             "embedding": [0.1] * 384,
             "sparse_embedding": "not valid json {{",
         }]
-        
+
         with pytest.raises(VectorStoreValidationError, match="valid JSON"):
             await store.add_chunks(malformed_sparse_records)
 
@@ -662,11 +658,11 @@ class TestVectorStoreAdversarial:
     async def test_add_chunks_with_xss_in_text(self, mock_settings):
         """Attack: XSS payload in text field."""
         from app.services.vector_store import VectorStore
-        
+
         store = VectorStore(db_path=Path("/tmp/test_lancedb"))
         store.table = AsyncMock()
         store._embedding_dim = 384
-        
+
         xss_records = [{
             "id": "test_1",
             "text": "<script>alert('xss')</script>",
@@ -674,7 +670,7 @@ class TestVectorStoreAdversarial:
             "chunk_index": 0,
             "embedding": [0.1] * 384,
         }]
-        
+
         await store.add_chunks(xss_records)
         store.table.add.assert_called_once()
 
@@ -682,26 +678,26 @@ class TestVectorStoreAdversarial:
     async def test_search_with_sql_injection_filter(self, mock_settings):
         """Attack: SQL injection in filter expression."""
         from app.services.vector_store import VectorStore
-        
+
         store = VectorStore(db_path=Path("/tmp/test_lancedb"))
         store.db = AsyncMock()
         store.table = MagicMock()
-        
+
         # Mock table.search to return a mock query object
         mock_query = MagicMock()
         mock_query.where.return_value = mock_query
         mock_query.limit.return_value = mock_query
         mock_query.to_list = Mock(return_value=[])
         store.table.search.return_value = mock_query
-        
+
         sql_filter = "file_id = 'test' OR '1'='1'"
-        
+
         # The filter should be escaped or parameterized
         await store.search(
             embedding=[0.1] * 384,
             filter_expr=sql_filter,
         )
-        
+
         # Verify where was called
         mock_query.where.assert_called()
 
@@ -709,24 +705,24 @@ class TestVectorStoreAdversarial:
     async def test_search_with_path_traversal_vault_id(self, mock_settings):
         """Attack: Path traversal in vault_id."""
         from app.services.vector_store import VectorStore
-        
+
         store = VectorStore(db_path=Path("/tmp/test_lancedb"))
         store.db = AsyncMock()
         store.table = MagicMock()
-        
+
         mock_query = MagicMock()
         mock_query.where.return_value = mock_query
         mock_query.limit.return_value = mock_query
         mock_query.to_list = Mock(return_value=[])
         store.table.search.return_value = mock_query
-        
+
         path_traversal_vault = "../../../etc/passwd"
-        
+
         await store.search(
             embedding=[0.1] * 384,
             vault_id=path_traversal_vault,
         )
-        
+
         # Should handle gracefully
         mock_query.where.assert_called()
 
@@ -734,25 +730,25 @@ class TestVectorStoreAdversarial:
     async def test_search_with_unicode_injection(self, mock_settings):
         """Attack: Unicode injection in query text."""
         from app.services.vector_store import VectorStore
-        
+
         store = VectorStore(db_path=Path("/tmp/test_lancedb"))
         store.db = AsyncMock()
         store.table = MagicMock()
-        
+
         mock_query = MagicMock()
         mock_query.where.return_value = mock_query
         mock_query.limit.return_value = mock_query
         mock_query.to_list = Mock(return_value=[])
         store.table.search.return_value = mock_query
-        
+
         unicode_query = "test\u202e\u202d\u202c\u202e"  # Bidirectional override chars
-        
+
         await store.search(
             embedding=[0.1] * 384,
             query_text=unicode_query,
             hybrid=True,
         )
-        
+
         # Should handle gracefully
         store.table.search.assert_called()
 
@@ -760,16 +756,16 @@ class TestVectorStoreAdversarial:
     async def test_delete_by_file_with_sql_injection(self, mock_settings):
         """Attack: SQL injection in file_id for delete."""
         from app.services.vector_store import VectorStore
-        
+
         store = VectorStore(db_path=Path("/tmp/test_lancedb"))
         store.db = AsyncMock()
         store.table = AsyncMock()
         store.table.count_rows.return_value = 0
-        
+
         sql_injection_file_id = "'; DROP TABLE chunks; --"
-        
+
         await store.delete_by_file(sql_injection_file_id)
-        
+
         # Verify delete was called - the SQL should be escaped
         store.table.delete.assert_called_once()
         call_args = store.table.delete.call_args[0][0]
@@ -780,19 +776,19 @@ class TestVectorStoreAdversarial:
     async def test_delete_by_vault_with_special_chars(self, mock_settings):
         """Attack: Special characters in vault_id for delete."""
         from app.services.vector_store import VectorStore
-        
+
         store = VectorStore(db_path=Path("/tmp/test_lancedb"))
         store.db = AsyncMock()
         store.table = AsyncMock()
         store.table.count_rows.return_value = 0
-        
+
         special_vault_ids = [
             "vault' OR '1'='1",
             "vault\"; DROP TABLE",
             "vault\x00\x01\x02",
             "vault/../../../etc",
         ]
-        
+
         for vault_id in special_vault_ids:
             store.table.delete.reset_mock()
             await store.delete_by_vault(vault_id)
@@ -802,25 +798,25 @@ class TestVectorStoreAdversarial:
     async def test_get_chunks_by_uid_with_sql_injection(self, mock_settings):
         """Attack: SQL injection in chunk_uids."""
         from app.services.vector_store import VectorStore
-        
+
         store = VectorStore(db_path=Path("/tmp/test_lancedb"))
         store.table = MagicMock()
-        
+
         mock_search = AsyncMock()
         mock_where = MagicMock()
         mock_where.where.return_value = mock_where
         mock_where.to_list = AsyncMock(return_value=[])
         mock_search.where.return_value = mock_where
         store.table.search.return_value = mock_search
-        
+
         malicious_uids = [
             "file_1'; DROP TABLE chunks; --",
             "file_1' OR '1'='1",
             "file_1\"; DELETE FROM chunks; --",
         ]
-        
+
         await store.get_chunks_by_uid(malicious_uids)
-        
+
         # Verify the query was constructed
         store.table.search.assert_called()
 
@@ -828,15 +824,15 @@ class TestVectorStoreAdversarial:
     async def test_init_table_with_negative_dimension(self, mock_settings):
         """Attack: Negative embedding dimension."""
         from app.services.vector_store import VectorStore
-        
+
         store = VectorStore(db_path=Path("/tmp/test_lancedb"))
         store.db = AsyncMock()
-        
+
         # Negative dimension should be handled gracefully
         # PyArrow might reject this
         try:
             await store.init_table(embedding_dim=-10)
-        except (ValueError, OSError) as e:
+        except (ValueError, OSError):
             # Expected - negative dimension is invalid
             pass
 
@@ -844,14 +840,14 @@ class TestVectorStoreAdversarial:
     async def test_init_table_with_extreme_dimension(self, mock_settings):
         """Attack: Extreme embedding dimension."""
         from app.services.vector_store import VectorStore
-        
+
         store = VectorStore(db_path=Path("/tmp/test_lancedb"))
         store.db = AsyncMock()
-        
+
         # Very large dimension
         try:
             await store.init_table(embedding_dim=1_000_000)
-        except (ValueError, OSError, MemoryError) as e:
+        except (ValueError, OSError, MemoryError):
             # Might fail due to memory constraints
             pass
 
@@ -868,7 +864,7 @@ class TestIntegrationAttacks:
         """Attack: Chain embedding output to vector store input."""
         from app.services.embeddings import EmbeddingService
         from app.services.vector_store import VectorStore
-        
+
         with patch('app.services.embeddings.settings') as mock_emb_settings:
             mock_emb_settings.ollama_embedding_url = "http://localhost:11434"
             mock_emb_settings.embedding_model = "test-model"
@@ -879,22 +875,22 @@ class TestIntegrationAttacks:
             mock_emb_settings.embedding_batch_size = 512
             mock_emb_settings.embedding_batch_max_retries = 3
             mock_emb_settings.embedding_batch_min_sub_size = 1
-            
-            emb_service = EmbeddingService()
-            
+
+            EmbeddingService()
+
             with patch('app.services.vector_store.settings') as mock_vs_settings:
                 mock_vs_settings.lancedb_path = Path("/tmp/test_lancedb")
                 mock_vs_settings.vector_metric = "cosine"
                 mock_vs_settings.multi_scale_indexing_enabled = False
                 mock_vs_settings.multi_scale_chunk_sizes = ""
-                
+
                 store = VectorStore()
                 store.table = AsyncMock()
                 store._embedding_dim = 384
-                
+
                 # Simulate embedding output being used as vector store input
                 mock_embedding = [float('nan')] * 384  # NaN values
-                
+
                 record = {
                     "id": "test_1",
                     "text": "test",
@@ -902,16 +898,16 @@ class TestIntegrationAttacks:
                     "chunk_index": 0,
                     "embedding": mock_embedding,
                 }
-                
+
                 # Should handle NaN values gracefully
                 await store.add_chunks([record])
 
     @pytest.mark.asyncio
     async def test_circuit_breaker_with_embedding_service(self):
         """Attack: Circuit breaker state manipulation via embedding failures."""
-        from app.services.circuit_breaker import AsyncCircuitBreaker, embeddings_cb
+        from app.services.circuit_breaker import AsyncCircuitBreaker
         from app.services.embeddings import EmbeddingService
-        
+
         with patch('app.services.embeddings.settings') as mock_settings:
             mock_settings.ollama_embedding_url = "http://localhost:11434"
             mock_settings.embedding_model = "test-model"
@@ -922,22 +918,22 @@ class TestIntegrationAttacks:
             mock_settings.embedding_batch_size = 512
             mock_settings.embedding_batch_max_retries = 3
             mock_settings.embedding_batch_min_sub_size = 1
-            
+
             service = EmbeddingService()
-            
+
             # Rapid failures should trip circuit breaker
             cb = AsyncCircuitBreaker(fail_max=3, reset_timeout=60, name="test")
-            
+
             with patch.object(service._client, 'post', new_callable=AsyncMock) as mock_post:
                 mock_post.side_effect = Exception("Connection refused")
-                
+
                 # Trigger multiple failures
                 for _ in range(5):
                     try:
                         await cb.call(service._client.post, "http://test", json={})
                     except Exception:
                         pass
-                
+
                 # Circuit should be open
                 assert cb.current_state == CircuitBreakerState.OPEN
 

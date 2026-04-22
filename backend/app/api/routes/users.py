@@ -4,17 +4,17 @@ import asyncio
 import sqlite3
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.api.deps import (
-    require_role,
-    require_admin_role,
     get_db,
+    require_admin_role,
+    require_role,
 )
-from app.security import csrf_protect
 from app.config import settings
 from app.models.database import get_pool
+from app.security import csrf_protect
 from app.services.auth_service import hash_password, password_strength_check
 
 router = APIRouter(prefix="/users", tags=["users"])

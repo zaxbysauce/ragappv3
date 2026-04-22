@@ -22,13 +22,14 @@ Tests cover:
 """
 
 import os
-import sys
 import sqlite3
+import sys
 import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
+
 from starlette.requests import Request
 
 # Set up test environment BEFORE importing app modules
@@ -364,6 +365,7 @@ class TestCreateUserEndpoint(unittest.TestCase):
 
         # Import after environment setup
         from fastapi import FastAPI
+
         from app.api.routes.users import router as users_router
         from app.models.database import SQLiteConnectionPool
         from app.services.auth_service import hash_password
@@ -419,8 +421,8 @@ class TestCreateUserEndpoint(unittest.TestCase):
 
     def tearDown(self):
         """Clean up after tests."""
-        from app.models.database import _pool_cache
         from app.api.routes import users
+        from app.models.database import _pool_cache
 
         self.client.close()
         users.get_pool = self.original_get_pool

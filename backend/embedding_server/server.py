@@ -6,8 +6,8 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import torch
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
 from FlagEmbedding import BGEM3FlagModel
+from pydantic import BaseModel
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -110,20 +110,20 @@ def _parse_lexical_weights(weights) -> Dict[str, float]:
     """Parse lexical_weights from various possible formats."""
     if weights is None:
         return {}
-    
+
     # If it's already a dict, validate and normalize it
     if isinstance(weights, dict):
         try:
             return {str(k): float(v) for k, v in weights.items()}
         except (TypeError, ValueError):
             return {}
-    
+
     # If it's a list of dicts, take the first one
     if isinstance(weights, list):
         if not weights:
             return {}
         return _parse_lexical_weights(weights[0])
-    
+
     # Unexpected type
     return {}
 
@@ -133,18 +133,18 @@ def _extract_dense_vector(outputs: Dict[str, Any], index: int) -> List[float]:
     if not isinstance(outputs, dict):
         logger.warning(f"outputs is not a dict: {type(outputs)}")
         return []
-    
+
     dense_vecs = outputs.get('dense_vecs')
     if dense_vecs is None:
         logger.warning("dense_vecs key missing from outputs")
         return []
-    
+
     try:
         vec = dense_vecs[index]
     except (IndexError, TypeError) as e:
         logger.warning(f"Failed to access dense_vecs[{index}]: {e}")
         return []
-    
+
     return _safe_to_list(vec)
 
 
@@ -153,18 +153,18 @@ def _extract_sparse_vector(outputs: Dict[str, Any], index: int) -> Dict[str, flo
     if not isinstance(outputs, dict):
         logger.warning(f"outputs is not a dict: {type(outputs)}")
         return {}
-    
+
     lexical_weights = outputs.get('lexical_weights')
     if lexical_weights is None:
         logger.warning("lexical_weights key missing from outputs")
         return {}
-    
+
     try:
         weights = lexical_weights[index]
     except (IndexError, TypeError) as e:
         logger.warning(f"Failed to access lexical_weights[{index}]: {e}")
         return {}
-    
+
     return _parse_lexical_weights(weights)
 
 
@@ -214,23 +214,23 @@ async def embed_tri_vector(request: EmbedRequest):
             return_sparse=True,
             return_colbert=False  # Deferred to Phase 7
         )
-        
+
         results = []
         for i, text in enumerate(texts):
             # Extract dense vector with defensive parsing
             dense = _extract_dense_vector(outputs, i)
-            
+
             # Extract sparse vector with defensive parsing
             sparse = _extract_sparse_vector(outputs, i)
-            
+
             results.append(TriVectorResponse(
                 dense=dense,
                 sparse=sparse,
                 colbert=None  # Deferred to Phase 7
             ))
-        
+
         return results
-        
+
     except HTTPException:
         # Re-raise HTTPException (validation errors) as-is
         raise
@@ -273,7 +273,7 @@ async def openai_compatible_embeddings(request: EmbedRequest):
                     status_code=400,
                     detail=f"Invalid request: 'input' at index {i} cannot be empty or whitespace"
                 )
-        
+
         outputs = model.encode(
             texts,
             batch_size=32,
@@ -282,7 +282,7 @@ async def openai_compatible_embeddings(request: EmbedRequest):
             return_sparse=False,
             return_colbert=False
         )
-        
+
         data = []
         for i, text in enumerate(texts):
             # Extract dense vector with defensive parsing
@@ -292,7 +292,7 @@ async def openai_compatible_embeddings(request: EmbedRequest):
                 "embedding": dense,
                 "index": i
             })
-        
+
         return EmbedResponse(
             data=data,
             model="BAAI/bge-m3",
@@ -301,7 +301,7 @@ async def openai_compatible_embeddings(request: EmbedRequest):
                 "total_tokens": sum(len(t.split()) for t in texts)
             }
         )
-        
+
     except HTTPException:
         # Re-raise HTTPException (validation errors) as-is
         raise

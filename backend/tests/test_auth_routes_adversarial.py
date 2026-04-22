@@ -66,7 +66,7 @@ except ImportError:
 from fastapi.testclient import TestClient
 
 from app.config import settings
-from app.models.database import init_db, run_migrations, SQLiteConnectionPool
+from app.models.database import SQLiteConnectionPool, init_db, run_migrations
 
 
 class TestAuthRoutesAdversarial(unittest.TestCase):
@@ -94,8 +94,8 @@ class TestAuthRoutesAdversarial(unittest.TestCase):
         self.test_pool = SQLiteConnectionPool(self.db_path, max_size=5)
 
         # Create FastAPI app and configure dependency overrides
-        from app.main import app as main_app
         from app.api.deps import get_db
+        from app.main import app as main_app
 
         # Override the get_db dependency to use our test pool
         def get_test_db():
@@ -118,7 +118,6 @@ class TestAuthRoutesAdversarial(unittest.TestCase):
         settings.users_enabled = self._original_users_enabled
 
         # Clear dependency overrides
-        from app.api.deps import get_db
 
         self.app.dependency_overrides.clear()
 

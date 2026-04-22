@@ -8,9 +8,9 @@ from typing import TYPE_CHECKING, List, Optional
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from app.services.rag_engine import RAGSource
     from app.services.embeddings import EmbeddingService
     from app.services.llm_client import LLMClient
+    from app.services.rag_engine import RAGSource
 
 _SYNTHESIS_PROMPT_SYSTEM = (
     "You are a precise document analyst. Given a user query and retrieved document "

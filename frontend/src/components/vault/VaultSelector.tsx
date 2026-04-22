@@ -24,6 +24,7 @@ export function VaultSelector({ className }: VaultSelectorProps) {
     if (!vaults || vaults.length === 0) {
       fetchVaults();
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vaults?.length, fetchVaults]);
 
   return (

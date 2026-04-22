@@ -13,9 +13,6 @@ These tests verify:
 import os
 import sqlite3
 import tempfile
-from pathlib import Path
-from typing import Generator
-from contextlib import contextmanager
 
 import pytest
 from fastapi import FastAPI
@@ -117,14 +114,13 @@ class TestUserRoutes:
 
         # Create app with users router
         from app.api.routes.users import router as users_router
-        from app.models.database import get_pool
 
         app = FastAPI()
         app.include_router(users_router)
 
         # Override the get_db dependency to use our test database
         from app.api import deps
-        from app.models.database import get_pool, SQLiteConnectionPool
+        from app.models.database import SQLiteConnectionPool
 
         # Create a test pool
         test_pool = SQLiteConnectionPool(self.db_path, max_size=3)

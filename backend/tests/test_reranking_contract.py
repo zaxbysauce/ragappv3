@@ -12,12 +12,12 @@ Tests cover:
 8. _rerank_via_endpoint and _rerank_local both use unconditional _safe_sigmoid
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.services.reranking import RerankingService
-from app.services.document_retrieval import DocumentRetrievalService, RAGSource
+import pytest
 
+from app.services.document_retrieval import DocumentRetrievalService, RAGSource
+from app.services.reranking import RerankingService
 
 # ---------------------------------------------------------------------------
 # Fixtures

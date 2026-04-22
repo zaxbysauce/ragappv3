@@ -8,12 +8,11 @@ while tracking processing status in SQLite and handling file deduplication.
 import asyncio
 import json
 import logging
-import os
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import List, Any, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 import pandas as pd
 
@@ -21,8 +20,8 @@ from ..config import settings
 from ..models.database import SQLiteConnectionPool, get_pool
 from ..utils.file_utils import compute_file_hash
 from ..utils.retry import with_retry
-from .chunking import SemanticChunker, ProcessedChunk, compute_parent_windows
 from .chunk_enrichment import ChunkEnrichmentService
+from .chunking import ProcessedChunk, SemanticChunker, compute_parent_windows
 from .contextual_chunking import ContextualChunker
 from .embeddings import EmbeddingService
 from .llm_client import LLMClient
@@ -719,7 +718,7 @@ class DocumentProcessor:
             conn.rollback()
             if "file_hash" in str(e).lower() or "unique" in str(e).lower():
                 raise DuplicateFileError(
-                    f"A file with the same content already exists in this vault"
+                    "A file with the same content already exists in this vault"
                 ) from e
             raise DocumentProcessingError(f"Database integrity error: {e}") from e
         except sqlite3.Error as e:

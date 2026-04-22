@@ -3,7 +3,6 @@
 from typing import Callable, Optional
 
 from fastapi import FastAPI, Request, Response
-
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
 from app.services.maintenance import MaintenanceService
@@ -33,7 +32,7 @@ class MaintenanceMiddleware(BaseHTTPMiddleware):
         # If service is not available yet, allow the request (fail open)
         if service is None:
             return await call_next(request)
-        
+
         flag = service.get_flag()
         if flag.enabled and request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}:
             return Response(

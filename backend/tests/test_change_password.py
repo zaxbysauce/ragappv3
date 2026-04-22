@@ -66,7 +66,7 @@ except ImportError:
 from fastapi.testclient import TestClient
 
 from app.config import settings
-from app.models.database import init_db, run_migrations, SQLiteConnectionPool
+from app.models.database import SQLiteConnectionPool, init_db, run_migrations
 
 
 class TestChangePassword(unittest.TestCase):
@@ -94,8 +94,8 @@ class TestChangePassword(unittest.TestCase):
         self.test_pool = SQLiteConnectionPool(self.db_path, max_size=5)
 
         # Create FastAPI app and configure dependency overrides
-        from app.main import app as main_app
         from app.api.deps import get_db
+        from app.main import app as main_app
 
         # Override the get_db dependency to use our test pool
         def get_test_db():
@@ -362,7 +362,7 @@ class TestChangePassword(unittest.TestCase):
         access_token = login_response.json()["access_token"]
         old_refresh_token = login_response.cookies.get("refresh_token")
 
-        user_id = self._get_user_id("newsession")
+        self._get_user_id("newsession")
 
         # Change password
         change_response = self.client.post(

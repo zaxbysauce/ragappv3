@@ -394,7 +394,7 @@ export const SessionItem = forwardRef<HTMLDivElement, SessionItemProps>(
             <div className="flex items-center gap-2">
               <span className="truncate font-medium">{truncatedTitle}</span>
               {session.forked_from_session_id != null && (
-                <GitBranch className="h-3 w-3 text-muted-foreground flex-shrink-0" aria-hidden="true" title="Branched conversation" />
+                <GitBranch className="h-3 w-3 text-muted-foreground flex-shrink-0" aria-hidden="true" />
               )}
               {isPinned && (
                 <Pin className="h-3 w-3 text-muted-foreground flex-shrink-0" aria-hidden="true" />
@@ -823,6 +823,7 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
     };
 
     fetchSessionDetails();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedSearchQuery, sessions]);
 
   // Filter sessions based on search query (title + first message content)

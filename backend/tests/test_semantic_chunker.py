@@ -11,16 +11,15 @@ Tests cover:
 - Edge cases: empty text, single sentence, min/max chunk size constraints
 """
 
-import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
 import math
+import unittest
 import warnings
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.services.chunking import (
     EmbeddingSemanticChunker,
-    ThresholdType,
     ProcessedChunk,
-    SemanticChunker,
+    ThresholdType,
 )
 
 

@@ -2,11 +2,11 @@
 
 import os
 import sys
-import asyncio
 import unittest
-from unittest.mock import patch
-import pytest
 from typing import Dict, List, Optional, cast
+from unittest.mock import patch
+
+import pytest
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -49,7 +49,7 @@ except ImportError:
 from app.services.embeddings import EmbeddingService
 from app.services.llm_client import LLMClient
 from app.services.memory_store import MemoryRecord, MemoryStore
-from app.services.rag_engine import RAGEngine, RAGEngineError, EmbeddingError
+from app.services.rag_engine import EmbeddingError, RAGEngine, RAGEngineError
 from app.services.vector_store import VectorStore
 
 
@@ -252,7 +252,7 @@ class RAGEngineTests(unittest.IsolatedAsyncioTestCase):
         engine.vector_store = cast(VectorStore, FakeVectorStore(vector_results))
         engine.memory_store = cast(MemoryStore, FakeMemoryStore())
         engine.llm_client = cast(LLMClient, FakeLLMClient(response="answer"))
-        
+
         results = [msg async for msg in engine.query("query", [], stream=False)]
         done = results[-1]
         self.assertEqual("done", done["type"])
@@ -290,14 +290,14 @@ class TestVariantFailureHandling:
                 raise EmbeddingError("Original query embed failed")
             async def embed_passage(self, text):
                 return [0.1]  # Should not be called for original
-        
+
         class FailingVectorStore:
             def __init__(self):
                 self.call_count = 0
             def search(self, embedding, limit=10, **kwargs):
                 self.call_count += 1
                 return [{"id": "chunk1", "text": "test", "score": 0.9, "metadata": {}}]
-        
+
         engine = RAGEngine(
             embedding_service=FailingEmbeddingService(),
             vector_store=FailingVectorStore(),
@@ -305,7 +305,7 @@ class TestVariantFailureHandling:
             llm_client=None,
             reranking_service=None,
         )
-        
+
         # Patch settings to enable transformation
         with patch("app.services.rag_engine.settings") as mock_settings:
             mock_settings.query_transformation_enabled = True
@@ -313,17 +313,17 @@ class TestVariantFailureHandling:
             mock_settings.stepback_enabled = False
             mock_settings.context_distillation_enabled = False
             mock_settings.context_max_tokens = 6000
-            
+
             # The query should fail because original embedding fails
             with pytest.raises(RAGEngineError) as exc_info:
                 async def run():
                     async for _ in engine.query("test query", [], vault_id=1):
                         pass
                 await run()
-            
+
             assert "Original query embedding failed" in str(exc_info.value)
 
-    @pytest.mark.asyncio  
+    @pytest.mark.asyncio
     async def test_hyde_failure_adds_to_variants_dropped(self):
         """When HyDE embedding fails, variants_dropped should include 'hyde'."""
         class PartialFailingEmbeddingService:
@@ -342,7 +342,7 @@ class TestVariantFailureHandling:
             @property
             def embeddings_url(self):
                 return "http://test"
-        
+
         class MockVectorStore:
             def __init__(self):
                 self.search_results = [{"id": "chunk1", "text": "test", "score": 0.9, "metadata": {"processed_at": "2024-01-01"}}]
@@ -350,7 +350,7 @@ class TestVariantFailureHandling:
                 return self.search_results
             def get_fts_exceptions(self):
                 return 0
-        
+
         # LLM that generates valid responses (> 20 chars)
         class MockLLMClient:
             def __init__(self):
@@ -359,14 +359,14 @@ class TestVariantFailureHandling:
                 return "A longer response for the LLM query."
             async def chat_completion_stream(self, messages, **kwargs):
                 yield "test"
-        
+
         engine = RAGEngine(
             embedding_service=PartialFailingEmbeddingService(),
             vector_store=MockVectorStore(),
             memory_store=FakeMemoryStore(),
             llm_client=MockLLMClient(),
         )
-        
+
         # Patch settings to enable transformation with hyde
         with patch("app.services.rag_engine.settings") as mock_settings:
             mock_settings.query_transformation_enabled = True
@@ -389,7 +389,7 @@ class TestVariantFailureHandling:
             mock_settings.vector_top_k = None
             mock_settings.maintenance_mode = False
             mock_settings.retrieval_recency_weight = 0.0
-            
+
             # Patch the QueryTransformer to return specific variants without LLM
             async def mock_transform(query):
                 return [
@@ -397,13 +397,13 @@ class TestVariantFailureHandling:
                     ('step_back', 'broader version of test query'),
                     ('hyde', 'hyde passage text that answers the question')
                 ]
-            
+
             with patch("app.services.rag_engine.QueryTransformer") as MockQueryTransformer:
                 instance = MockQueryTransformer.return_value
                 instance.transform = mock_transform
-                
+
                 results = [msg async for msg in engine.query("test query", [], stream=False, vault_id=1)]
-        
+
         # Verify the query succeeded (no exception raised)
         done = [r for r in results if r.get("type") == "done"]
         assert len(done) == 1

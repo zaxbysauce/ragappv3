@@ -2,8 +2,8 @@
 Test script to verify the singleton BackgroundProcessor works correctly.
 """
 import asyncio
-import tempfile
 import os
+import tempfile
 from pathlib import Path
 
 # Set up test environment
@@ -14,8 +14,11 @@ os.environ["VECTOR_DB_DIR"] = os.path.join(temp_dir, "lancedb")
 os.makedirs(os.path.join(temp_dir, "uploads"), exist_ok=True)
 os.makedirs(os.path.join(temp_dir, "lancedb"), exist_ok=True)
 
-from app.services.background_tasks import get_background_processor, reset_background_processor
 from app.config import settings
+from app.services.background_tasks import (
+    get_background_processor,
+    reset_background_processor,
+)
 
 
 def test_singleton_pattern():

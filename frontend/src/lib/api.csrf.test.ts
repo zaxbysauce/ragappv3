@@ -684,10 +684,10 @@ describe("CSRF Exports from @/lib/api", () => {
   });
 
   // =============================================================================
-  // H3 — Request interceptor guards config.headers (review council fix)
+  // H3 — Request interceptor sets X-CSRF-Token on existing headers object
   // =============================================================================
-  describe("H3 — Request interceptor headers guard", () => {
-    it("should create headers object and set X-CSRF-Token when config.headers is undefined", async () => {
+  describe("H3 — Request interceptor CSRF header injection", () => {
+    it("should set X-CSRF-Token on config.headers for mutating requests", async () => {
       mockCookies = "X-CSRF-Token=test-token";
       const { attachCsrfInterceptor } = await import("@/lib/api");
 
@@ -707,11 +707,10 @@ describe("CSRF Exports from @/lib/api", () => {
       const requestUse = mockInstance.interceptors.request.use as ReturnType<typeof vi.fn>;
       const interceptorFn = (requestUse as any).mock.calls[0][0];
 
-      // H3 fix: config.headers is undefined - interceptor should create it
-      const config = { method: "post" }; // no headers property
+      // Axios v1 always provides a headers object on InternalAxiosRequestConfig
+      const config = { method: "post", headers: {} };
       const capturedConfig = await interceptorFn(config);
 
-      expect(capturedConfig.headers).toBeDefined();
       expect(capturedConfig.headers["X-CSRF-Token"]).toBe("test-token");
     });
   });

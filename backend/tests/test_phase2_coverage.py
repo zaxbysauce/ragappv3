@@ -6,8 +6,9 @@ This module contains mandatory tests to fill coverage gaps identified during Pha
 3. hybrid_alpha clamping logic at extremes
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from app.services.document_retrieval import DocumentRetrievalService, RAGSource
 

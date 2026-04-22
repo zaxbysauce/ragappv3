@@ -8,14 +8,9 @@ Verifies:
 - get_fts_exceptions() returns and resets the counter
 """
 
-import asyncio
-import json
 import unittest
-from pathlib import Path
-from typing import Any, Dict, List
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
-import numpy as np
 import pytest
 
 from app.services.vector_store import VectorStore

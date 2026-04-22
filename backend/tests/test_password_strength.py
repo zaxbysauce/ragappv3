@@ -4,15 +4,14 @@ import os
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch, MagicMock
 
 import pytest
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.services.auth_service import password_strength_check
 from app.config import settings
+from app.services.auth_service import password_strength_check
 
 
 class TestPasswordStrengthCheck:
@@ -262,8 +261,8 @@ class TestPasswordStrengthAuthRouteIntegration(unittest.TestCase):
         self.test_pool = SQLiteConnectionPool(self.db_path, max_size=5)
 
         # Create FastAPI app and configure dependency overrides
-        from app.main import app as main_app
         from app.api.deps import get_db
+        from app.main import app as main_app
 
         def get_test_db():
             conn = self.test_pool.get_connection()

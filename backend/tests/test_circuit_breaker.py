@@ -3,29 +3,29 @@
 Verifies circuit breaker functionality - that it opens after failures
 and closes after reset timeout.
 """
-import sys
-import os
 import asyncio
-import time
+import os
+import sys
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock, call
 
 from app.services.circuit_breaker import (
+    AsyncCircuitBreaker,
     CircuitBreakerError,
     CircuitBreakerState,
-    AsyncCircuitBreaker,
+    _on_circuit_close,
+    _on_circuit_open,
+    _on_half_open,
     circuit_breaker,
     embeddings_cb,
     llm_cb,
-    reranking_cb,
     model_checker_cb,
-    _on_circuit_open,
-    _on_circuit_close,
-    _on_half_open,
+    reranking_cb,
 )
 
 
@@ -36,7 +36,7 @@ class TestCircuitBreakerError:
         """Test CircuitBreakerError with original error."""
         original = ValueError("Original error")
         error = CircuitBreakerError("Circuit is open", original_error=original)
-        
+
         assert error.message == "Circuit is open"
         assert error.original_error == original
         assert "Circuit is open" in str(error)
@@ -45,7 +45,7 @@ class TestCircuitBreakerError:
     def test_error_without_original_error(self):
         """Test CircuitBreakerError without original error."""
         error = CircuitBreakerError("Circuit is open")
-        
+
         assert error.message == "Circuit is open"
         assert error.original_error is None
         assert str(error) == "Circuit is open"
@@ -88,9 +88,9 @@ class TestCircuitBreakerCallbacks:
         mock_cb = MagicMock()
         mock_cb.name = "test_breaker"
         mock_cb.fail_max = 5
-        
+
         _on_circuit_open(mock_cb)
-        
+
         mock_logger.warning.assert_called_once_with(
             "Circuit breaker '%s' opened after %d consecutive failures",
             "test_breaker",
@@ -102,9 +102,9 @@ class TestCircuitBreakerCallbacks:
         """Test that _on_circuit_close logs info."""
         mock_cb = MagicMock()
         mock_cb.name = "test_breaker"
-        
+
         _on_circuit_close(mock_cb)
-        
+
         mock_logger.info.assert_called_once_with(
             "Circuit breaker '%s' closed - service recovered",
             "test_breaker",
@@ -115,9 +115,9 @@ class TestCircuitBreakerCallbacks:
         """Test that _on_half_open logs info."""
         mock_cb = MagicMock()
         mock_cb.name = "test_breaker"
-        
+
         _on_half_open(mock_cb)
-        
+
         mock_logger.info.assert_called_once_with(
             "Circuit breaker '%s' entering half-open state - testing service",
             "test_breaker",
@@ -135,11 +135,11 @@ class TestCircuitBreakerDecorator:
             reset_timeout=1,
             name="test_success",
         )
-        
+
         @circuit_breaker(test_cb)
         async def successful_function():
             return "success"
-        
+
         result = await successful_function()
         assert result == "success"
 
@@ -150,16 +150,16 @@ class TestCircuitBreakerDecorator:
             reset_timeout=1,
             name="test_failures",
         )
-        
+
         @circuit_breaker(test_cb)
         async def failing_function():
             raise ValueError("Test error")
-        
+
         # First two failures should raise ValueError, not CircuitBreakerError
         for _ in range(2):
             with pytest.raises(ValueError):
                 await failing_function()
-        
+
         # Circuit should still be closed
         assert test_cb.current_state == CircuitBreakerState.CLOSED
         assert test_cb.fail_counter == 2
@@ -171,23 +171,23 @@ class TestCircuitBreakerDecorator:
             reset_timeout=1,
             name="test_open",
         )
-        
+
         @circuit_breaker(test_cb)
         async def failing_function():
             raise ValueError("Test error")
-        
+
         # Trigger 3 failures - first 2 raise ValueError, 3rd opens circuit
         for _ in range(2):
             with pytest.raises(ValueError):
                 await failing_function()
-        
+
         # Circuit should still be closed
         assert test_cb.current_state == CircuitBreakerState.CLOSED
-        
+
         # 3rd failure opens the circuit
         with pytest.raises(ValueError):
             await failing_function()
-        
+
         # Circuit should now be open
         assert test_cb.current_state == CircuitBreakerState.OPEN
 
@@ -198,33 +198,33 @@ class TestCircuitBreakerDecorator:
             reset_timeout=60,  # Long timeout to prevent auto-reset
             name="test_immediate_open",
         )
-        
+
         call_count = 0
-        
+
         @circuit_breaker(test_cb)
         async def tracked_failing_function():
             nonlocal call_count
             call_count += 1
             raise ValueError(f"Error #{call_count}")
-        
+
         # First failure raises ValueError
         with pytest.raises(ValueError):
             await tracked_failing_function()
-        
+
         assert call_count == 1
         assert test_cb.current_state == CircuitBreakerState.CLOSED
-        
+
         # Second failure opens the circuit
         with pytest.raises(ValueError):
             await tracked_failing_function()
-        
+
         assert call_count == 2
         assert test_cb.current_state == CircuitBreakerState.OPEN
-        
+
         # Third call should raise CircuitBreakerError immediately without executing
         with pytest.raises(CircuitBreakerError) as exc_info:
             await tracked_failing_function()
-        
+
         # Function should not have been called again
         assert call_count == 2
         assert "is open" in str(exc_info.value)
@@ -236,25 +236,25 @@ class TestCircuitBreakerDecorator:
             reset_timeout=0.1,  # Short timeout for testing
             name="test_reset",
         )
-        
+
         @circuit_breaker(test_cb)
         async def failing_function():
             raise ValueError("Test error")
-        
+
         @circuit_breaker(test_cb)
         async def success_function():
             return "recovered"
-        
+
         # Open the circuit
         for _ in range(2):
             with pytest.raises(ValueError):
                 await failing_function()
-        
+
         assert test_cb.current_state == CircuitBreakerState.OPEN
-        
+
         # Wait for reset timeout
         await asyncio.sleep(0.15)
-        
+
         # Circuit should transition to half-open on next call
         # and then close if successful
         result = await success_function()
@@ -268,26 +268,26 @@ class TestCircuitBreakerDecorator:
             reset_timeout=0.1,
             name="test_half_open",
         )
-        
+
         @circuit_breaker(test_cb)
         async def failing_function():
             raise ValueError("Test error")
-        
+
         # Open the circuit
         for _ in range(2):
             with pytest.raises(ValueError):
                 await failing_function()
-        
+
         assert test_cb.current_state == CircuitBreakerState.OPEN
-        
+
         # Wait for reset timeout
         await asyncio.sleep(0.15)
-        
+
         # The circuit should be in half-open state now
         # The next call will check the timeout and transition
         with pytest.raises(ValueError):
             await failing_function()
-        
+
         # Circuit should be open again after failure in half-open state
         assert test_cb.current_state == CircuitBreakerState.OPEN
 
@@ -298,12 +298,12 @@ class TestCircuitBreakerDecorator:
             reset_timeout=1,
             name="test_metadata",
         )
-        
+
         @circuit_breaker(test_cb)
         async def my_function():
             """My docstring."""
             return "result"
-        
+
         assert my_function.__name__ == "my_function"
         assert my_function.__doc__ == "My docstring."
 
@@ -314,13 +314,13 @@ class TestCircuitBreakerDecorator:
             reset_timeout=1,
             name="test_args",
         )
-        
+
         @circuit_breaker(test_cb)
         async def function_with_args(a, b, c=None, **kwargs):
             return {"a": a, "b": b, "c": c, "kwargs": kwargs}
-        
+
         result = await function_with_args(1, 2, c=3, extra="value")
-        
+
         assert result["a"] == 1
         assert result["b"] == 2
         assert result["c"] == 3
@@ -333,22 +333,22 @@ class TestCircuitBreakerDecorator:
             reset_timeout=1,
             name="test_exceptions",
         )
-        
+
         @circuit_breaker(test_cb)
         async def value_error_function():
             raise ValueError("Value error")
-        
+
         @circuit_breaker(test_cb)
         async def type_error_function():
             raise TypeError("Type error")
-        
+
         # Both exception types should count toward the threshold
         with pytest.raises(ValueError):
             await value_error_function()
-        
+
         with pytest.raises(TypeError):
             await type_error_function()
-        
+
         assert test_cb.current_state == CircuitBreakerState.OPEN
 
     async def test_successful_call_resets_failure_count(self):
@@ -358,10 +358,10 @@ class TestCircuitBreakerDecorator:
             reset_timeout=1,
             name="test_reset_count",
         )
-        
+
         call_count = 0
         fail_pattern = [True, True, False]  # 2 fails then 1 success
-        
+
         @circuit_breaker(test_cb)
         async def conditional_function():
             nonlocal call_count
@@ -370,29 +370,29 @@ class TestCircuitBreakerDecorator:
             if should_fail:
                 raise ValueError("Error")
             return "success"
-        
+
         # Two failures
         for _ in range(2):
             with pytest.raises(ValueError):
                 await conditional_function()
-        
+
         # Circuit should still be closed
         assert test_cb.current_state == CircuitBreakerState.CLOSED
         assert test_cb.fail_counter == 2
-        
+
         # Make it succeed
         result = await conditional_function()
-        
+
         assert result == "success"
         assert test_cb.current_state == CircuitBreakerState.CLOSED
         assert test_cb.fail_counter == 0  # Reset after success
-        
+
         # Make it fail again - should need 3 more failures to open
         fail_pattern = [True, True]  # 2 more fails
         for _ in range(2):
             with pytest.raises(ValueError):
                 await conditional_function()
-        
+
         # Circuit should still be closed after 2 more failures
         # (because the success reset the count)
         assert test_cb.current_state == CircuitBreakerState.CLOSED
@@ -409,16 +409,16 @@ class TestCircuitBreakerIntegration:
             reset_timeout=1,
             name="test_multiple_success",
         )
-        
+
         @circuit_breaker(test_cb)
         async def reliable_function():
             return "always works"
-        
+
         # Many successful calls
         for _ in range(10):
             result = await reliable_function()
             assert result == "always works"
-        
+
         assert test_cb.current_state == CircuitBreakerState.CLOSED
         assert test_cb.fail_counter == 0
 
@@ -429,10 +429,10 @@ class TestCircuitBreakerIntegration:
             reset_timeout=1,
             name="test_mixed",
         )
-        
+
         call_count = 0
         fail_pattern = [False, True, False, True, False]  # Mixed pattern
-        
+
         @circuit_breaker(test_cb)
         async def mixed_function():
             nonlocal call_count
@@ -441,7 +441,7 @@ class TestCircuitBreakerIntegration:
             if should_fail:
                 raise ValueError("Error")
             return "success"
-        
+
         # Run multiple times with mixed pattern
         results = []
         errors = []
@@ -451,7 +451,7 @@ class TestCircuitBreakerIntegration:
                 results.append(result)
             except ValueError:
                 errors.append("error")
-        
+
         # Should have some successes and some failures
         # But circuit should never open because we never get 5 consecutive failures
         assert len(results) > 0
@@ -469,27 +469,27 @@ class TestCircuitBreakerIntegration:
             reset_timeout=1,
             name="cb2",
         )
-        
+
         @circuit_breaker(cb1)
         async def function1():
             raise ValueError("Error 1")
-        
+
         @circuit_breaker(cb2)
         async def function2():
             raise ValueError("Error 2")
-        
+
         # Open cb1
         for _ in range(2):
             with pytest.raises(ValueError):
                 await function1()
-        
+
         assert cb1.current_state == CircuitBreakerState.OPEN
         assert cb2.current_state == CircuitBreakerState.CLOSED
-        
+
         # cb2 should still work (or fail normally, not with circuit open)
         with pytest.raises(ValueError):
             await function2()
-        
+
         # cb2 should still be closed after one failure
         assert cb2.current_state == CircuitBreakerState.CLOSED
 
@@ -505,19 +505,19 @@ class TestCircuitBreakerStateTransitions:
             reset_timeout=60,
             name="test_closed_to_open",
         )
-        
+
         # Initial state should be CLOSED
         assert test_cb.current_state == CircuitBreakerState.CLOSED
-        
+
         @circuit_breaker(test_cb)
         async def failing_function():
             raise ValueError("Error")
-        
+
         # Trigger failures to open circuit
         for _ in range(3):
             with pytest.raises(ValueError):
                 await failing_function()
-        
+
         # State should now be OPEN
         assert test_cb.current_state == CircuitBreakerState.OPEN
 
@@ -528,21 +528,21 @@ class TestCircuitBreakerStateTransitions:
             reset_timeout=0.1,  # Short timeout for testing
             name="test_open_to_half_open",
         )
-        
+
         @circuit_breaker(test_cb)
         async def failing_function():
             raise ValueError("Error")
-        
+
         # Open the circuit
         for _ in range(2):
             with pytest.raises(ValueError):
                 await failing_function()
-        
+
         assert test_cb.current_state == CircuitBreakerState.OPEN
-        
+
         # Wait for reset timeout
         await asyncio.sleep(0.15)
-        
+
         # The next call will trigger transition to HALF_OPEN
         # Since the function fails, it goes back to OPEN
         with pytest.raises(ValueError):
@@ -556,9 +556,9 @@ class TestCircuitBreakerStateTransitions:
             success_threshold=1,
             name="test_half_open_to_closed",
         )
-        
+
         call_count = 0
-        
+
         @circuit_breaker(test_cb)
         async def recovery_function():
             nonlocal call_count
@@ -566,17 +566,17 @@ class TestCircuitBreakerStateTransitions:
             if call_count <= 2:
                 raise ValueError("Error")
             return "recovered"
-        
+
         # Open the circuit
         for _ in range(2):
             with pytest.raises(ValueError):
                 await recovery_function()
-        
+
         assert test_cb.current_state == CircuitBreakerState.OPEN
-        
+
         # Wait for reset timeout
         await asyncio.sleep(0.15)
-        
+
         # Success in half-open should close the circuit
         result = await recovery_function()
         assert result == "recovered"
@@ -590,10 +590,10 @@ class TestAsyncCircuitBreakerDirect:
     async def test_direct_call_success(self):
         """Test direct call method with success."""
         cb = AsyncCircuitBreaker(fail_max=3, reset_timeout=1, name="direct_test")
-        
+
         async def success_func():
             return "success"
-        
+
         result = await cb.call(success_func)
         assert result == "success"
         assert cb.fail_counter == 0
@@ -601,32 +601,32 @@ class TestAsyncCircuitBreakerDirect:
     async def test_direct_call_failure(self):
         """Test direct call method with failure."""
         cb = AsyncCircuitBreaker(fail_max=3, reset_timeout=1, name="direct_test")
-        
+
         async def fail_func():
             raise ValueError("error")
-        
+
         with pytest.raises(ValueError):
             await cb.call(fail_func)
-        
+
         assert cb.fail_counter == 1
 
     async def test_direct_call_opens_circuit(self):
         """Test that direct call opens circuit after max failures."""
         cb = AsyncCircuitBreaker(fail_max=2, reset_timeout=60, name="direct_test")
-        
+
         async def fail_func():
             raise ValueError("error")
-        
+
         # First failure
         with pytest.raises(ValueError):
             await cb.call(fail_func)
         assert cb.current_state == CircuitBreakerState.CLOSED
-        
+
         # Second failure opens circuit
         with pytest.raises(ValueError):
             await cb.call(fail_func)
         assert cb.current_state == CircuitBreakerState.OPEN
-        
+
         # Third call raises CircuitBreakerError
         with pytest.raises(CircuitBreakerError):
             await cb.call(fail_func)
@@ -639,18 +639,18 @@ class TestAsyncCircuitBreakerDirect:
             success_threshold=1,
             name="half_open_test"
         )
-        
+
         # Open the circuit
         cb._transition_to_open()
         assert cb.current_state == CircuitBreakerState.OPEN
-        
+
         # Wait for timeout
         await asyncio.sleep(0.15)
-        
+
         # Check timeout transitions to half-open
         cb._check_timeout()
         assert cb.current_state == CircuitBreakerState.HALF_OPEN
-        
+
         # Record success should close circuit
         cb.record_success()
         assert cb.current_state == CircuitBreakerState.CLOSED
@@ -662,16 +662,16 @@ class TestAsyncCircuitBreakerDirect:
             reset_timeout=0.1,
             name="half_open_test"
         )
-        
+
         # Open the circuit
         cb._transition_to_open()
         assert cb.current_state == CircuitBreakerState.OPEN
-        
+
         # Wait for timeout and transition to half-open
         await asyncio.sleep(0.15)
         cb._check_timeout()
         assert cb.current_state == CircuitBreakerState.HALF_OPEN
-        
+
         # Record failure should open circuit again
         cb.record_failure()
         assert cb.current_state == CircuitBreakerState.OPEN
@@ -679,10 +679,10 @@ class TestAsyncCircuitBreakerDirect:
     async def test_callable_wrapper_pattern(self):
         """Test using circuit breaker as a callable wrapper (e.g., cb(func)(args))."""
         cb = AsyncCircuitBreaker(fail_max=2, reset_timeout=60, name="callable_test")
-        
+
         async def test_func(arg1, arg2):
             return f"result: {arg1}, {arg2}"
-        
+
         # Use the circuit breaker as a callable wrapper
         wrapped = cb(test_func)
         result = await wrapped("a", "b")
@@ -692,23 +692,23 @@ class TestAsyncCircuitBreakerDirect:
     async def test_callable_wrapper_with_failure(self):
         """Test callable wrapper pattern with failures."""
         cb = AsyncCircuitBreaker(fail_max=2, reset_timeout=60, name="callable_fail_test")
-        
+
         async def failing_func():
             raise ValueError("error")
-        
+
         # Use the circuit breaker as a callable wrapper
         wrapped = cb(failing_func)
-        
+
         # First failure
         with pytest.raises(ValueError):
             await wrapped()
         assert cb.fail_counter == 1
-        
+
         # Second failure opens circuit
         with pytest.raises(ValueError):
             await wrapped()
         assert cb.current_state == CircuitBreakerState.OPEN
-        
+
         # Third call raises CircuitBreakerError
         with pytest.raises(CircuitBreakerError):
             await wrapped()

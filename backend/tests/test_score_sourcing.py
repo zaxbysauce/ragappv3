@@ -9,7 +9,7 @@ Tests cover _rerank_score validation when reranked=True:
 
 import os
 import sys
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -58,8 +58,7 @@ except ImportError:
     sys.modules["unstructured.documents"] = _unstructured.documents
     sys.modules["unstructured.documents.elements"] = _unstructured.documents.elements
 
-from app.services.document_retrieval import DocumentRetrievalService, RAGSource
-
+from app.services.document_retrieval import DocumentRetrievalService
 
 # ---------------------------------------------------------------------------
 # Fixtures

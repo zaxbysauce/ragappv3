@@ -7,9 +7,9 @@ Validates that:
 """
 
 import unittest
-from unittest.mock import patch, MagicMock
 from dataclasses import dataclass, field
 from typing import Any, Dict
+from unittest.mock import patch
 
 
 @dataclass

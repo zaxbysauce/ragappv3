@@ -47,7 +47,7 @@ export async function ensureCsrfToken(): Promise<string> {
   const cookieToken = getCsrfCookie();
   if (cookieToken) {
     _csrfToken = cookieToken;
-    return _csrfToken;
+    return cookieToken;
   }
 
   if (!_csrfFetchPromise) {
@@ -59,7 +59,7 @@ export async function ensureCsrfToken(): Promise<string> {
           throw new Error("CSRF token missing from response");
         }
         _csrfToken = data.csrf_token;
-        return _csrfToken;
+        return data.csrf_token;
       })
       .finally(() => {
         _csrfFetchPromise = null;
@@ -74,9 +74,6 @@ export function attachCsrfInterceptor(instance: ReturnType<typeof axios.create>)
     if (config.method && ["post", "put", "patch", "delete"].includes(config.method.toLowerCase())) {
       const token = await ensureCsrfToken();
       if (token) {
-        if (!config.headers) {
-          config.headers = {};
-        }
         config.headers["X-CSRF-Token"] = token;
       }
     }

@@ -4,11 +4,11 @@ Preserves tables and code blocks while creating semantically meaningful chunks.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import List, Any, Optional, TYPE_CHECKING
-import math
-import logging
 import enum
+import logging
+import math
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, List, Optional
 
 if TYPE_CHECKING:
     from unstructured.documents.elements import Element
@@ -598,7 +598,7 @@ class EmbeddingSemanticChunker:
             List of ProcessedChunk objects (requires await to populate)
         """
         # Combine all element text
-        all_text = "\n\n".join(str(el) for el in elements if str(el).strip())
+        "\n\n".join(str(el) for el in elements if str(el).strip())
 
         # This is a sync method, so we can't await chunk_text
         # Return empty list to indicate this needs async handling

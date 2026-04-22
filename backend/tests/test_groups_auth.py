@@ -8,10 +8,9 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.routes.groups import router as groups_router
 from app.api.routes.auth import router as auth_router
+from app.api.routes.groups import router as groups_router
 from app.services.auth_service import create_access_token, hash_password
-
 
 # Valid SQLite schema matching production structure
 TEST_SCHEMA = """

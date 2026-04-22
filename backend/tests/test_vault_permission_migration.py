@@ -7,15 +7,14 @@ owner_id, org_id, and visibility columns to the vaults table.
 """
 
 import sqlite3
-import tempfile
 from pathlib import Path
 
 import pytest
 
 from app.models.database import (
+    SCHEMA,
     migrate_add_vault_permission_columns,
     run_migrations,
-    SCHEMA,
 )
 
 
@@ -312,7 +311,7 @@ class TestVaultMembersPermissionCheck:
 
         # Get a vault for testing
         cursor = conn.execute("SELECT id FROM vaults LIMIT 1")
-        vault_id = cursor.fetchone()[0]
+        cursor.fetchone()[0]
 
         # Create a test user first (needed for FK constraint)
         conn.execute(

@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Set
 # Matches the 8-hex-char hash produced by reupload_safe_order ID scheme
 _RE_HASH8 = re.compile(r"^[0-9a-f]{8}$")
 
-from app.config import settings
+from app.config import settings  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -435,7 +435,6 @@ class DocumentRetrievalService:
                 if chunk_uid in adjacent_lookup:
                     chunk = adjacent_lookup[chunk_uid]
 
-                    has_distance = "_distance" in chunk
                     distance = chunk.get("_distance")
                     if distance is None:
                         score = chunk.get("score")

@@ -3,23 +3,20 @@
 Tests attack vectors: malformed inputs, injection attempts, auth bypass, boundary violations.
 """
 
-import os
 import sqlite3
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import patch
 
 import jwt
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.routes.vault_members import router as vault_members_router
-from app.api.routes.organizations import router as organizations_router
 from app.api.routes.auth import router as auth_router
+from app.api.routes.organizations import router as organizations_router
+from app.api.routes.vault_members import router as vault_members_router
 from app.services.auth_service import create_access_token, hash_password
-
 
 # Valid SQLite schema (avoiding UNIQUE NOCASE syntax issue in source)
 TEST_SCHEMA = """
@@ -309,7 +306,6 @@ def auth_headers(token_fn):
 @pytest.fixture
 def client():
     """Create test client with routers."""
-    from app.config import settings
 
     app = FastAPI()
     app.include_router(auth_router, prefix="/api")

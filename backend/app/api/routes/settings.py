@@ -1,13 +1,14 @@
-import httpx
 import json
 import sqlite3
+from typing import Optional
+
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, field_validator, model_validator
-from typing import Optional
+
+from app.api.deps import get_csrf_manager, get_current_active_user, get_db
 from app.config import settings
-from app.api.deps import get_csrf_manager, get_db
 from app.security import CSRFManager, issue_csrf_token
-from app.api.deps import get_current_active_user
 
 router = APIRouter()
 

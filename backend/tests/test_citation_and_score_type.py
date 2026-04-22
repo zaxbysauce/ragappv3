@@ -7,7 +7,6 @@ This test module verifies:
 4. _build_done_message includes score_type field with correct values
 """
 
-import pytest
 
 # =============================================================================
 # Tests for prompt_builder.py - CITATION_INSTRUCTION
@@ -230,8 +229,8 @@ class TestScoreTypeEdgeCases:
 
     def test_done_message_with_actual_sources(self):
         """Verify _build_done_message works with actual source data."""
-        from app.services.rag_engine import RAGEngine
         from app.services.document_retrieval import RAGSource
+        from app.services.rag_engine import RAGEngine
 
         engine = RAGEngine()
         engine.reranking_enabled = False

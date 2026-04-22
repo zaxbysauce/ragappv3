@@ -6,13 +6,13 @@ from datetime import datetime
 from typing import Any, AsyncIterator, Dict, List, Optional, Set, Tuple
 
 from app.config import settings
+from app.services.context_distiller import ContextDistiller
 from app.services.document_retrieval import DocumentRetrievalService, RAGSource
-from app.services.embeddings import EmbeddingService, EmbeddingError
+from app.services.embeddings import EmbeddingError, EmbeddingService
 from app.services.llm_client import LLMClient, LLMError
 from app.services.memory_store import MemoryStore
 from app.services.prompt_builder import PromptBuilderService, calculate_primary_count
 from app.services.query_transformer import QueryTransformer
-from app.services.context_distiller import ContextDistiller
 from app.services.retrieval_evaluator import RetrievalEvaluator
 from app.services.vector_store import VectorStore
 from app.utils.fusion import rrf_fuse

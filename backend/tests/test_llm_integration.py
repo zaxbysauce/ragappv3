@@ -8,16 +8,16 @@ import asyncio
 import os
 import sys
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from app.services.embeddings import EmbeddingService, EmbeddingError
-from app.services.model_checker import ModelChecker
+from app.services.embeddings import EmbeddingError, EmbeddingService
 from app.services.llm_client import LLMClient, LLMError
+from app.services.model_checker import ModelChecker
 
 
 class TestEmbeddingService(unittest.TestCase):

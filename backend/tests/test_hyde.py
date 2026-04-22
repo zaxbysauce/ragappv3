@@ -1,9 +1,11 @@
 """Tests for HyDE query transformation in query_transformer.py."""
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
-from app.services.query_transformer import QueryTransformer, _is_exact_or_document_query
+
 from app.services.llm_client import LLMClient
+from app.services.query_transformer import QueryTransformer, _is_exact_or_document_query
 
 
 class TestHyDE:
@@ -145,7 +147,7 @@ class TestHyDE:
             mock_settings.redis_url = None
             mock_settings.chat_model = "test-model"
             transformer = QueryTransformer(mock_llm_client)
-            result = await transformer.transform("What is gradient descent?")
+            await transformer.transform("What is gradient descent?")
 
         # Only one call should have been made (step-back only)
         assert mock_llm_client.chat_completion.call_count == 1
@@ -166,7 +168,7 @@ class TestHyDE:
         mock_llm_client.chat_completion = AsyncMock(
             return_value="What are the general concepts in machine learning?"
         )
-        
+
         with patch("app.services.query_transformer.settings") as mock_settings:
             mock_settings.hyde_enabled = True
             mock_settings.stepback_enabled = True
@@ -175,13 +177,13 @@ class TestHyDE:
             mock_settings.chat_model = "test-model"
             mock_settings.hyde_enabled = False
             transformer = QueryTransformer(mock_llm_client)
-            
+
             # Call transform 5 times
             results = []
             for _ in range(5):
                 result = await transformer.transform("What is gradient descent?")
                 results.append(result)
-            
+
             # All results should be identical
             for r in results:
                 assert r == results[0], "Transform should be deterministic with temperature=0"
@@ -223,11 +225,11 @@ class TestHyDE:
             mock_settings.chat_model = "test-model"
             mock_settings.hyde_enabled = False
             transformer = QueryTransformer(mock_llm_client)
-            
+
             # First call - should hit LLM
             result1 = await transformer.transform("What is gradient descent?")
             assert mock_llm_client.chat_completion.call_count == 1
-            
+
             # Second call with same query - should hit cache
             result2 = await transformer.transform("What is gradient descent?")
             # LLM should NOT have been called again
@@ -249,15 +251,15 @@ class TestHyDE:
             mock_settings.chat_model = "test-model"
             mock_settings.hyde_enabled = False
             transformer = QueryTransformer(mock_llm_client)
-            
+
             # First query - should hit LLM
             result1 = await transformer.transform("What is gradient descent?")
             assert mock_llm_client.chat_completion.call_count == 1
-            
+
             # Different query - should NOT use cache, should call LLM again
             result2 = await transformer.transform("What is backpropagation?")
             assert mock_llm_client.chat_completion.call_count == 2
-            
+
             # Results should be different (different queries)
             assert result1 != result2
 
@@ -275,23 +277,23 @@ class TestHyDE:
         # Create two different LLM clients (simulating different models)
         mock_llm_client1 = MagicMock(spec=LLMClient)
         mock_llm_client1.chat_completion = AsyncMock(return_value="Response from model 1")
-        
+
         mock_llm_client2 = MagicMock(spec=LLMClient)
         mock_llm_client2.chat_completion = AsyncMock(return_value="Response from model 2")
 
         with patch("app.services.query_transformer.settings", mock_settings):
             transformer1 = QueryTransformer(mock_llm_client1)
             transformer2 = QueryTransformer(mock_llm_client2)
-            
+
             # Same query on transformer1 - should call LLM
-            result1 = await transformer1.transform("What is gradient descent?")
+            await transformer1.transform("What is gradient descent?")
             assert mock_llm_client1.chat_completion.call_count == 1
-            
+
             # Same query on transformer2 (different model) - should call its own LLM
             # Note: Each transformer has its own cache, so transformer2 won't use transformer1's cache
-            result2 = await transformer2.transform("What is gradient descent?")
+            await transformer2.transform("What is gradient descent?")
             assert mock_llm_client2.chat_completion.call_count == 1
-            
+
             # Results could be the same or different depending on LLM responses
             # But the important thing is each transformer called its own LLM
 

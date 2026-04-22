@@ -3,9 +3,7 @@ Unit test for BackgroundProcessor singleton pattern and worker loop.
 Tests the core logic without requiring full dependencies.
 """
 import asyncio
-import tempfile
-import os
-from pathlib import Path
+
 
 # Create a minimal mock implementation for testing
 class MockTask:

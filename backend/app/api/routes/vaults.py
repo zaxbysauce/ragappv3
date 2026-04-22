@@ -16,14 +16,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.api.deps import (
     get_current_active_user,
+    get_db,
     get_evaluate_policy,
     get_user_accessible_vault_ids,
-    require_vault_permission,
-    get_db,
     get_vector_store,
+    require_vault_permission,
 )
 from app.services.vector_store import VectorStore
-
 
 logger = logging.getLogger(__name__)
 

@@ -4,13 +4,14 @@ This module tests the UID normalization function that strips scale suffixes
 from multi-scale chunk UIDs for deduplication purposes.
 """
 
+from unittest.mock import MagicMock
+
 import pytest
-from unittest.mock import MagicMock, patch
 
 from app.services.document_retrieval import (
-    _normalize_uid_for_dedup,
     DocumentRetrievalService,
     RAGSource,
+    _normalize_uid_for_dedup,
 )
 
 
@@ -57,7 +58,7 @@ class TestNormalizeUidForDedupUnit:
         first_default = _normalize_uid_for_dedup(default_uid)
         second_default = _normalize_uid_for_dedup(first_default)
         assert second_default == first_default == default_uid, (
-            f"Idempotency violation for default UID"
+            "Idempotency violation for default UID"
         )
 
     def test_empty_string(self):

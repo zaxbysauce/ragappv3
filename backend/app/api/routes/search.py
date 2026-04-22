@@ -10,16 +10,15 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from app.services.embeddings import EmbeddingService, EmbeddingError
-from app.services.vector_store import VectorStore, VectorStoreError
 from app.api.deps import (
+    evaluate_policy,
+    get_current_active_user,
+    get_db,
     get_embedding_service,
     get_vector_store,
-    get_current_active_user,
-    evaluate_policy,
-    get_db,
 )
-
+from app.services.embeddings import EmbeddingError, EmbeddingService
+from app.services.vector_store import VectorStore, VectorStoreError
 
 router = APIRouter()
 

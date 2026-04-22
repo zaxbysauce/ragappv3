@@ -1,13 +1,11 @@
 """Tests for parent-document retrieval: schema migration, ingestion, dedup, and prompt expansion (Issue #12)."""
 
-import json
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from dataclasses import asdict
+
+import pytest
 
 from app.services.chunking import ProcessedChunk, compute_parent_windows
 from app.services.document_retrieval import RAGSource, _group_aware_dedup
-
 
 # ---------------------------------------------------------------------------
 # compute_parent_windows tests
@@ -293,10 +291,9 @@ class TestMigrateAddParentWindow:
     def _make_store_with_all_columns_no_nulls(self) -> "VectorStore":
         """Return a mocked VectorStore where all parent_window columns exist and
         parent_doc_id has no nulls — migration should be a no-op."""
-        import pyarrow as pa
-        from unittest.mock import AsyncMock, MagicMock
-        from app.services.vector_store import VectorStore
         from pathlib import Path
+
+        from app.services.vector_store import VectorStore
 
         store = VectorStore(db_path=Path("/tmp/mig_test"))
 
@@ -376,9 +373,9 @@ class TestMigrateAddParentWindow:
     @pytest.mark.asyncio
     async def test_returns_zero_when_no_table_exists(self):
         """If 'chunks' table doesn't exist, migration returns 0 (nothing to migrate)."""
-        from unittest.mock import AsyncMock, MagicMock
-        from app.services.vector_store import VectorStore
         from pathlib import Path
+
+        from app.services.vector_store import VectorStore
 
         store = VectorStore(db_path=Path("/tmp/mig_test"))
         mock_db = MagicMock()

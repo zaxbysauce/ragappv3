@@ -42,7 +42,7 @@ class CircuitBreakerError(Exception):
 
 class AsyncCircuitBreaker:
     """Async-aware circuit breaker implementation.
-    
+
     The circuit breaker has three states:
     - CLOSED: Normal operation, requests pass through
     - OPEN: Circuit is tripped, requests fail immediately
@@ -97,7 +97,6 @@ class AsyncCircuitBreaker:
 
     def _transition_to_open(self) -> None:
         """Transition the circuit to OPEN state."""
-        old_state = self._state
         self._state = CircuitBreakerState.OPEN
         self._last_failure_time = time.time()
         logger.warning(
@@ -108,7 +107,6 @@ class AsyncCircuitBreaker:
 
     def _transition_to_half_open(self) -> None:
         """Transition the circuit to HALF_OPEN state."""
-        old_state = self._state
         self._state = CircuitBreakerState.HALF_OPEN
         self._success_counter = 0
         logger.info(
@@ -118,7 +116,6 @@ class AsyncCircuitBreaker:
 
     def _transition_to_closed(self) -> None:
         """Transition the circuit to CLOSED state."""
-        old_state = self._state
         self._state = CircuitBreakerState.CLOSED
         self._fail_counter = 0
         self._success_counter = 0
@@ -176,15 +173,15 @@ class AsyncCircuitBreaker:
 
     async def call(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         """Call a function with circuit breaker protection.
-        
+
         Args:
             func: The async function to call
             *args: Positional arguments for the function
             **kwargs: Keyword arguments for the function
-            
+
         Returns:
             The result of the function call
-            
+
         Raises:
             CircuitBreakerError: If the circuit is open
             Exception: Any exception raised by the function
@@ -196,16 +193,16 @@ class AsyncCircuitBreaker:
                 raise CircuitBreakerError(
                     f"Circuit breaker '{self.name}' is open"
                 )
-        
+
         # Execute function without holding lock
         try:
             result = await func(*args, **kwargs)
-        except Exception as e:
+        except Exception:
             # Record failure under lock
             async with self._lock:
                 self.record_failure()
             raise
-        
+
         # Record success under lock
         async with self._lock:
             self.record_success()

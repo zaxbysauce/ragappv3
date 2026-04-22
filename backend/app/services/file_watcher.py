@@ -15,7 +15,6 @@ from ..models.database import SQLiteConnectionPool
 from .background_tasks import BackgroundProcessor
 from .upload_path import UploadPathProvider
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -107,7 +106,7 @@ class FileWatcher:
         """
         enqueued_count = 0
         # Scan vault-specific upload directories + library
-        provider = UploadPathProvider()
+        UploadPathProvider()
         dir_vault_map: Dict[Path, int] = {settings.library_dir: 1}
 
         # Add each vault's upload directory

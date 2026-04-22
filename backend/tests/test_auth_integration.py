@@ -14,7 +14,6 @@ import sqlite3
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -66,7 +65,7 @@ except ImportError:
 from fastapi.testclient import TestClient
 
 from app.config import settings
-from app.models.database import init_db, run_migrations, SQLiteConnectionPool
+from app.models.database import SQLiteConnectionPool, init_db, run_migrations
 from app.services.auth_service import create_access_token
 
 
@@ -116,8 +115,8 @@ class TestAuthIntegration(unittest.TestCase):
         self.test_pool = SQLiteConnectionPool(self.db_path, max_size=5)
 
         # Import app and configure dependency overrides
-        from app.main import app as main_app
         from app.api.deps import get_db
+        from app.main import app as main_app
 
         # Override the get_db dependency to use our test pool
         def get_test_db():
@@ -140,7 +139,6 @@ class TestAuthIntegration(unittest.TestCase):
         settings.users_enabled = self._original_users_enabled
 
         # Clear dependency overrides
-        from app.api.deps import get_db
 
         self.app.dependency_overrides.clear()
 
@@ -182,8 +180,9 @@ class TestAuthIntegration(unittest.TestCase):
 
     def test_expired_jwt_token_rejected_with_403(self):
         """Test that expired JWT token returns 403."""
-        import jwt
         from datetime import datetime, timedelta, timezone
+
+        import jwt
 
         # Create an expired token manually
         secret = settings.jwt_secret_key
@@ -304,8 +303,8 @@ class TestAuthEdgeCases(unittest.TestCase):
         self.test_pool = SQLiteConnectionPool(self.db_path, max_size=5)
 
         # Import app and configure dependency overrides
-        from app.main import app as main_app
         from app.api.deps import get_db
+        from app.main import app as main_app
 
         # Override the get_db dependency to use our test pool
         def get_test_db():
@@ -328,7 +327,6 @@ class TestAuthEdgeCases(unittest.TestCase):
         settings.users_enabled = self._original_users_enabled
 
         # Clear dependency overrides
-        from app.api.deps import get_db
 
         self.app.dependency_overrides.clear()
 

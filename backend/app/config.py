@@ -5,6 +5,7 @@ Application configuration using Pydantic Settings.
 import logging
 import warnings
 from pathlib import Path
+
 from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
