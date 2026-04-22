@@ -2,10 +2,10 @@
 
 import os
 import sys
-import asyncio
-import pytest
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 from unittest.mock import patch
-from typing import Any, Dict, List, Optional, Tuple, AsyncIterator
+
+import pytest
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -49,8 +49,7 @@ except ImportError:
     sys.modules['unstructured.documents'] = _unstructured.documents
     sys.modules['unstructured.documents.elements'] = _unstructured.documents.elements
 
-from app.services.rag_engine import RAGEngine, RAGSource
-from app.services.reranking import RerankingService
+from app.services.rag_engine import RAGEngine
 
 
 class FakeEmbeddingService:
@@ -95,7 +94,7 @@ class FakeVectorStore:
             dense_results = self._results[:limit]
             # Add some FTS-style results with 'score' field and _fts_status
             fts_results = [
-                {**r, "score": 0.7 + (i * 0.05), "_fts_status": "ok"} 
+                {**r, "score": 0.7 + (i * 0.05), "_fts_status": "ok"}
                 for i, r in enumerate(dense_results[:len(dense_results)//2])
             ]
             # Combine dense and FTS results with RRF
@@ -177,11 +176,11 @@ class FakeRerankingService:
     ) -> Tuple[List[Dict[str, Any]], bool]:
         if not self.success:
             raise Exception("Reranking failed")
-        
+
         # If custom results provided, return them
         if self.results is not None:
             return self.results, True
-        
+
         # Default: return chunks with _rerank_score
         result = []
         for i, chunk in enumerate(chunks[:top_n]):
@@ -203,7 +202,7 @@ class TestRAGEngineScoreTracking:
         fake_embedding = FakeEmbeddingService()
         fake_memory = FakeMemoryStore()
         fake_llm = FakeLLMClient(response="Answer.")
-        
+
         return RAGEngine(
             embedding_service=fake_embedding,
             vector_store=fake_vector,
@@ -218,35 +217,35 @@ class TestRAGEngineScoreTracking:
         engine = self._create_engine(reranking_service=rerank_service)
         engine.reranking_enabled = True
         engine.hybrid_search_enabled = False
-        
+
         # Initial results with _distance
         initial_results = [
             {"id": "chunk1", "text": "Relevant chunk 1", "file_id": "doc1", "_distance": 0.2},
             {"id": "chunk2", "text": "Relevant chunk 2", "file_id": "doc2", "_distance": 0.4},
             {"id": "chunk3", "text": "Relevant chunk 3", "file_id": "doc3", "_distance": 0.6},
         ]
-        
+
         engine.vector_store = FakeVectorStore(results=initial_results)
-        
+
         results = []
         async for msg in engine.query("test query", []):
             results.append(msg)
-        
+
         # Find done message
         done_msg = None
         for msg in results:
             if msg.get("type") == "done":
                 done_msg = msg
                 break
-        
+
         assert done_msg is not None, "No done message found"
         assert done_msg.get("score_type") == "rerank", f"Expected score_type='rerank', got '{done_msg.get('score_type')}'"
-        
+
         # Check all chunk scores are in [0, 1]
         for source in done_msg.get("sources", []):
             score = source.get("score", 0)
             assert 0 <= score <= 1, f"Score {score} not in [0, 1]"
-        
+
         print("✓ test_reranking_enabled_and_success passed")
 
     async def test_reranking_fallback_on_exception(self):
@@ -255,33 +254,33 @@ class TestRAGEngineScoreTracking:
         engine = self._create_engine(reranking_service=rerank_service)
         engine.reranking_enabled = True
         engine.hybrid_search_enabled = False
-        
+
         initial_results = [
             {"id": "chunk1", "text": "Relevant chunk 1", "file_id": "doc1", "_distance": 0.1},
             {"id": "chunk2", "text": "Relevant chunk 2", "file_id": "doc2", "_distance": 0.3},
         ]
-        
+
         engine.vector_store = FakeVectorStore(results=initial_results)
-        
+
         results = []
         async for msg in engine.query("test query", []):
             results.append(msg)
-        
+
         done_msg = None
         for msg in results:
             if msg.get("type") == "done":
                 done_msg = msg
                 break
-        
+
         assert done_msg is not None, "No done message found"
         assert done_msg.get("score_type") == "distance", f"Expected score_type='distance', got '{done_msg.get('score_type')}'"
-        
+
         # Check all chunk scores are _distance values
         for source in done_msg.get("sources", []):
             score = source.get("score", 0)
             # With fallback, scores should match original _distance
             assert isinstance(score, (int, float)), f"Score {score} is not numeric"
-        
+
         print("✓ test_reranking_fallback_on_exception passed")
 
     async def test_reranking_disabled(self):
@@ -289,26 +288,26 @@ class TestRAGEngineScoreTracking:
         engine = self._create_engine(reranking_service=None)
         engine.reranking_enabled = False
         engine.hybrid_search_enabled = False
-        
+
         initial_results = [
             {"id": "chunk1", "text": "Relevant chunk 1", "file_id": "doc1", "_distance": 0.2},
         ]
-        
+
         engine.vector_store = FakeVectorStore(results=initial_results)
-        
+
         results = []
         async for msg in engine.query("test query", []):
             results.append(msg)
-        
+
         done_msg = None
         for msg in results:
             if msg.get("type") == "done":
                 done_msg = msg
                 break
-        
+
         assert done_msg is not None, "No done message found"
         assert done_msg.get("score_type") == "distance", f"Expected score_type='distance', got '{done_msg.get('score_type')}'"
-        
+
         print("✓ test_reranking_disabled passed")
 
     async def test_rerank_status_ok(self):
@@ -317,27 +316,27 @@ class TestRAGEngineScoreTracking:
         engine = self._create_engine(reranking_service=rerank_service)
         engine.reranking_enabled = True
         engine.hybrid_search_enabled = False
-        
+
         initial_results = [
             {"id": "chunk1", "text": "Relevant chunk 1", "file_id": "doc1", "_distance": 0.2},
         ]
-        
+
         engine.vector_store = FakeVectorStore(results=initial_results)
-        
+
         results = []
         async for msg in engine.query("test query", []):
             results.append(msg)
-        
+
         done_msg = None
         for msg in results:
             if msg.get("type") == "done":
                 done_msg = msg
                 break
-        
+
         assert done_msg is not None, "No done message found"
         assert done_msg["retrieval_debug"]["rerank_status"] == "ok", \
             f"Expected rerank_status='ok', got '{done_msg['retrieval_debug'].get('rerank_status')}'"
-        
+
         print("✓ test_rerank_status_ok passed")
 
     async def test_rerank_status_fallback(self):
@@ -347,33 +346,33 @@ class TestRAGEngineScoreTracking:
         engine = self._create_engine(reranking_service=rerank_service)
         engine.reranking_enabled = True
         engine.hybrid_search_enabled = False
-        
+
         initial_results = [
             {"id": "chunk1", "text": "Relevant chunk 1", "file_id": "doc1", "_distance": 0.2},
         ]
-        
+
         engine.vector_store = FakeVectorStore(results=initial_results)
-        
+
         # Patch _execute_retrieval to return the correct tuple format with False for rerank_success
         async def mock_retrieval(*args, **kwargs):
             # Return properly formatted dicts (not RAGSource) to avoid AttributeError in .get() calls
             return [{"id": "chunk1", "text": "Relevant chunk 1", "file_id": "doc1", "_distance": 0.2, "metadata": {}}], None, "CONFIDENT", False, "distance", "dense_only", 0, "fallback", False, False
-        
+
         with patch.object(engine, '_execute_retrieval', mock_retrieval):
             results = []
             async for msg in engine.query("test query", []):
                 results.append(msg)
-            
+
             done_msg = None
             for msg in results:
                 if msg.get("type") == "done":
                     done_msg = msg
                     break
-            
+
             assert done_msg is not None, "No done message found"
             assert done_msg["retrieval_debug"]["rerank_status"] == "fallback", \
                 f"Expected rerank_status='fallback', got '{done_msg['retrieval_debug'].get('rerank_status')}'"
-        
+
         print("✓ test_rerank_status_fallback passed")
 
     async def test_rerank_status_disabled(self):
@@ -381,27 +380,27 @@ class TestRAGEngineScoreTracking:
         engine = self._create_engine(reranking_service=None)
         engine.reranking_enabled = False
         engine.hybrid_search_enabled = False
-        
+
         initial_results = [
             {"id": "chunk1", "text": "Relevant chunk 1", "file_id": "doc1", "_distance": 0.2},
         ]
-        
+
         engine.vector_store = FakeVectorStore(results=initial_results)
-        
+
         results = []
         async for msg in engine.query("test query", []):
             results.append(msg)
-        
+
         done_msg = None
         for msg in results:
             if msg.get("type") == "done":
                 done_msg = msg
                 break
-        
+
         assert done_msg is not None, "No done message found"
         assert done_msg["retrieval_debug"]["rerank_status"] == "disabled", \
             f"Expected rerank_status='disabled', got '{done_msg['retrieval_debug'].get('rerank_status')}'"
-        
+
         print("✓ test_rerank_status_disabled passed")
 
     async def test_hybrid_status_both(self):
@@ -409,31 +408,31 @@ class TestRAGEngineScoreTracking:
         engine = self._create_engine(reranking_service=None)
         engine.reranking_enabled = False
         engine.hybrid_search_enabled = True
-        
+
         # Results with _fts_status='ok'
         initial_results = [
-            {"id": "chunk1", "text": "Relevant chunk 1", "file_id": "doc1", 
+            {"id": "chunk1", "text": "Relevant chunk 1", "file_id": "doc1",
              "_distance": 0.2, "_fts_status": "ok"},
-            {"id": "chunk2", "text": "Relevant chunk 2", "file_id": "doc2", 
+            {"id": "chunk2", "text": "Relevant chunk 2", "file_id": "doc2",
              "_distance": 0.4, "_fts_status": "ok"},
         ]
-        
+
         engine.vector_store = FakeVectorStore(results=initial_results)
-        
+
         results = []
         async for msg in engine.query("test query", []):
             results.append(msg)
-        
+
         done_msg = None
         for msg in results:
             if msg.get("type") == "done":
                 done_msg = msg
                 break
-        
+
         assert done_msg is not None, "No done message found"
         assert done_msg["retrieval_debug"]["hybrid_status"] == "both", \
             f"Expected hybrid_status='both', got '{done_msg['retrieval_debug'].get('hybrid_status')}'"
-        
+
         print("✓ test_hybrid_status_both passed")
 
     async def test_hybrid_status_dense_only(self):
@@ -441,31 +440,31 @@ class TestRAGEngineScoreTracking:
         engine = self._create_engine(reranking_service=None)
         engine.reranking_enabled = False
         engine.hybrid_search_enabled = True
-        
+
         # Results without _fts_status (dense only) or with _fts_status='empty'
         initial_results = [
-            {"id": "chunk1", "text": "Relevant chunk 1", "file_id": "doc1", 
+            {"id": "chunk1", "text": "Relevant chunk 1", "file_id": "doc1",
              "_distance": 0.2, "_fts_status": "empty"},
-            {"id": "chunk2", "text": "Relevant chunk 2", "file_id": "doc2", 
+            {"id": "chunk2", "text": "Relevant chunk 2", "file_id": "doc2",
              "_distance": 0.4},
         ]
-        
+
         engine.vector_store = FakeVectorStore(results=initial_results)
-        
+
         results = []
         async for msg in engine.query("test query", []):
             results.append(msg)
-        
+
         done_msg = None
         for msg in results:
             if msg.get("type") == "done":
                 done_msg = msg
                 break
-        
+
         assert done_msg is not None, "No done message found"
         assert done_msg["retrieval_debug"]["hybrid_status"] == "dense_only", \
             f"Expected hybrid_status='dense_only', got '{done_msg['retrieval_debug'].get('hybrid_status')}'"
-        
+
         print("✓ test_hybrid_status_dense_only passed")
 
     async def test_hybrid_status_disabled(self):
@@ -473,40 +472,40 @@ class TestRAGEngineScoreTracking:
         engine = self._create_engine(reranking_service=None)
         engine.reranking_enabled = False
         engine.hybrid_search_enabled = False
-        
+
         initial_results = [
             {"id": "chunk1", "text": "Relevant chunk 1", "file_id": "doc1", "_distance": 0.2},
         ]
-        
+
         engine.vector_store = FakeVectorStore(results=initial_results)
-        
+
         results = []
         async for msg in engine.query("test query", []):
             results.append(msg)
-        
+
         done_msg = None
         for msg in results:
             if msg.get("type") == "done":
                 done_msg = msg
                 break
-        
+
         assert done_msg is not None, "No done message found"
         assert done_msg["retrieval_debug"]["hybrid_status"] == "disabled", \
             f"Expected hybrid_status='disabled', got '{done_msg['retrieval_debug'].get('hybrid_status')}'"
-        
+
         print("✓ test_hybrid_status_disabled passed")
 
 
 def run_tests():
     """Run all tests and report results."""
     import pytest
-    
+
     # Set module path
     test_file = os.path.abspath(__file__)
-    
+
     # Run pytest with verbose output
     exit_code = pytest.main([test_file, "-v", "--tb=short"])
-    
+
     return exit_code
 
 

@@ -11,10 +11,8 @@ FOCUS:
 import hashlib
 import hmac
 import inspect
-import os
 import sqlite3
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -171,7 +169,7 @@ class TestRecordDocumentAction(unittest.TestCase):
         row = self.conn.execute(
             "SELECT user_id, hmac_sha256 FROM document_actions"
         ).fetchone()
-        expected_message = f"5|retry|error|admin-token-abc"
+        expected_message = "5|retry|error|admin-token-abc"
         expected_digest = hmac.new(
             b"testkey", expected_message.encode("utf-8"), hashlib.sha256
         ).hexdigest()

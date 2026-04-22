@@ -16,9 +16,7 @@ import os
 import sys
 import tempfile
 import unittest
-import sqlite3
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch, AsyncMock
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -71,7 +69,7 @@ import jwt
 from fastapi.testclient import TestClient
 
 from app.config import settings
-from app.models.database import init_db, run_migrations, SQLiteConnectionPool
+from app.models.database import SQLiteConnectionPool, init_db, run_migrations
 
 
 class FakeEmbeddingService:
@@ -133,8 +131,8 @@ class TestSearchAuth(unittest.TestCase):
         self.test_pool = SQLiteConnectionPool(self.db_path, max_size=5)
 
         # Create app with dependency overrides
-        from app.main import app as main_app
         from app.api.deps import get_db, get_embedding_service, get_vector_store
+        from app.main import app as main_app
 
         # Override the get_db dependency
         def get_test_db():
@@ -174,7 +172,6 @@ class TestSearchAuth(unittest.TestCase):
         settings.users_enabled = self._original_users_enabled
 
         # Clear dependency overrides
-        from app.api.deps import get_db, get_embedding_service, get_vector_store
 
         self.app.dependency_overrides.clear()
 

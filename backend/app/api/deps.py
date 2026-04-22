@@ -5,11 +5,10 @@ from __future__ import annotations
 import secrets
 import sqlite3
 from collections.abc import Callable
-from contextlib import contextmanager
 from enum import IntEnum
 from typing import TYPE_CHECKING
 
-from fastapi import Request, Depends, Header, HTTPException, Cookie
+from fastapi import Cookie, Depends, Header, HTTPException, Request
 
 from app.config import Settings, settings
 
@@ -29,27 +28,25 @@ class UserRole(IntEnum):
             return cls[role_name.upper()].value
         except (KeyError, AttributeError):
             return 0
-from app.services.auth_service import decode_access_token
-from app.models.database import get_pool, SQLiteConnectionPool
-from app.security import get_csrf_manager
+from app.models.database import SQLiteConnectionPool, get_pool  # noqa: E402
+from app.services.auth_service import decode_access_token  # noqa: E402
 
 # Lazy imports — services are only loaded when their getter is actually called.
 # This prevents heavy imports (unstructured, aioimaplib, torch, etc.) from
 # blocking every request handler import chain.
 if TYPE_CHECKING:
-    from app.services.llm_client import LLMClient
+    from app.services.background_tasks import BackgroundProcessor
+    from app.services.email_service import EmailIngestionService
     from app.services.embeddings import EmbeddingService
-    from app.services.vector_store import VectorStore
+    from app.services.llm_client import LLMClient
+    from app.services.llm_health import LLMHealthChecker
+    from app.services.maintenance import MaintenanceService
     from app.services.memory_store import MemoryStore
-    from app.services.reranking import RerankingService
+    from app.services.model_checker import ModelChecker
     from app.services.rag_engine import RAGEngine
     from app.services.secret_manager import SecretManager
     from app.services.toggle_manager import ToggleManager
-    from app.services.background_tasks import BackgroundProcessor
-    from app.services.maintenance import MaintenanceService
-    from app.services.llm_health import LLMHealthChecker
-    from app.services.model_checker import ModelChecker
-    from app.services.email_service import EmailIngestionService
+    from app.services.vector_store import VectorStore
 
 
 def get_db():

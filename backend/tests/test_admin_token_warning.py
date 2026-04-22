@@ -5,7 +5,6 @@ This module tests the CRITICAL log emitted when admin_secret_token
 is empty string or the default value 'admin-secret-token'.
 """
 
-import importlib
 import logging
 import os
 import sys

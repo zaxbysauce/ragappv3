@@ -1,7 +1,7 @@
 """Retrieval evaluation service for CRAG (Corrective RAG) self-evaluation."""
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from .llm_client import LLMClient
 

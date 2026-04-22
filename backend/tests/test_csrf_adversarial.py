@@ -126,7 +126,7 @@ class TestCSRFPrediction(unittest.TestCase):
                     self.assertNotIn(
                         t1[:8],
                         t2,
-                        f"Token prefix found in another token — weak randomness",
+                        "Token prefix found in another token — weak randomness",
                     )
 
     def test_sequential_tokens_have_no_pattern(self):

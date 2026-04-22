@@ -8,6 +8,7 @@ Tests 4 scenarios:
 """
 
 import pytest
+
 from app.utils.fusion import rrf_fuse
 
 

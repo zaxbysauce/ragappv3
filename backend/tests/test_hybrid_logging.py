@@ -4,14 +4,14 @@ Verifies that hybrid search INFO logs fire ONLY when the respective
 search arm (BM25 FTS or sparse) actually returned results.
 """
 
+import logging
 import os
 import sys
 import unittest
-import logging
-import asyncio
-import pytest
 from typing import Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -179,7 +179,7 @@ class HybridLoggingTests(unittest.IsolatedAsyncioTestCase):
             vs.table.count_rows = AsyncMock(return_value=100)
 
             with self.assertLogs("app.services.vector_store", level="INFO") as log:
-                results = await vs.search(
+                await vs.search(
                     embedding=[0.1] * 768,
                     query_text="test query",
                     hybrid=True,
@@ -347,7 +347,7 @@ class HybridLoggingTests(unittest.IsolatedAsyncioTestCase):
         vs.table.search = MagicMock(side_effect=search_side_effect)
 
         with self.assertLogs("app.services.vector_store", level="INFO") as log:
-            results = await vs._search_single_scale(
+            await vs._search_single_scale(
                 embedding=[0.1] * 768,
                 scale="default",
                 fetch_k=10,
@@ -462,7 +462,7 @@ async def test_bm25_fts_returns_empty_no_success_log_pytest(caplog):
         vs.table.count_rows = AsyncMock(return_value=100)
 
         with caplog.at_level(logging.INFO, "app.services.vector_store"):
-            results = await vs.search(
+            await vs.search(
                 embedding=[0.1] * 768,
                 query_text="test query",
                 hybrid=True,
@@ -500,7 +500,7 @@ async def test_search_single_scale_bm25_empty_no_success_log_pytest(caplog):
     vs.table.search = MagicMock(side_effect=search_side_effect)
 
     with caplog.at_level(logging.INFO, "app.services.vector_store"):
-        results = await vs._search_single_scale(
+        await vs._search_single_scale(
             embedding=[0.1] * 768,
             scale="default",
             fetch_k=10,

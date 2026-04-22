@@ -10,22 +10,22 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.config import settings
-from app.models.database import run_migrations, get_pool
-from app.services.llm_client import LLMClient
-from app.services.vector_store import VectorStore, VectorStoreError
-from app.services.memory_store import MemoryStore
+from app.models.database import get_pool, run_migrations
+from app.security import CSRFManager
+from app.services.background_tasks import get_background_processor
+from app.services.email_service import EmailIngestionService
 from app.services.embeddings import EmbeddingService
+from app.services.file_watcher import FileWatcher
+from app.services.llm_client import LLMClient
+from app.services.llm_health import LLMHealthChecker
+from app.services.maintenance import MaintenanceService
+from app.services.memory_store import MemoryStore
+from app.services.model_checker import ModelChecker
+from app.services.rag_engine import RAGEngine
 from app.services.reranking import RerankingService
 from app.services.secret_manager import SecretManager
 from app.services.toggle_manager import ToggleManager
-from app.services.maintenance import MaintenanceService
-from app.services.background_tasks import get_background_processor
-from app.services.file_watcher import FileWatcher
-from app.services.llm_health import LLMHealthChecker
-from app.services.model_checker import ModelChecker
-from app.services.email_service import EmailIngestionService
-from app.services.rag_engine import RAGEngine
-from app.security import CSRFManager
+from app.services.vector_store import VectorStore, VectorStoreError
 
 logger = logging.getLogger(__name__)
 
@@ -96,11 +96,11 @@ def _load_persisted_settings(sqlite_path: str) -> None:
         for key, expected_type in legacy_keys.items():
             if key in persisted:
                 try:
-                    if expected_type == bool:
+                    if expected_type is bool:
                         converted = bool(json.loads(persisted[key]))
-                    elif expected_type == int:
+                    elif expected_type is int:
                         converted = int(json.loads(persisted[key]))
-                    elif expected_type == float:
+                    elif expected_type is float:
                         converted = float(json.loads(persisted[key]))
                     else:
                         converted = persisted[key]
@@ -139,13 +139,13 @@ def _load_persisted_settings(sqlite_path: str) -> None:
                         continue
                     expected_type = type(getattr(settings, key))
                     raw = persisted[key]
-                    if expected_type == type(None):  # NoneType - just set as string
+                    if expected_type is type(None):  # NoneType - just set as string
                         converted = raw
-                    elif expected_type == bool:
+                    elif expected_type is bool:
                         converted = str(raw).lower() in ("true", "1", "yes", "on")
-                    elif expected_type == int:
+                    elif expected_type is int:
                         converted = int(raw)
-                    elif expected_type == float:
+                    elif expected_type is float:
                         converted = float(raw)
                     else:
                         try:

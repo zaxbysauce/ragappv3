@@ -16,14 +16,14 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.api.deps import (
+    evaluate_policy,
+    get_current_active_user,
     get_db,
     get_rag_engine,
-    get_current_active_user,
-    evaluate_policy,
     get_user_accessible_vault_ids,
 )
-from app.models.database import get_pool
 from app.config import settings
+from app.models.database import get_pool
 from app.services.rag_engine import RAGEngine, RAGEngineError
 
 # Track background tasks to prevent garbage collection

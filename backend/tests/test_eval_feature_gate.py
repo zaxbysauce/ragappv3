@@ -1,7 +1,8 @@
 """Tests for eval_enabled feature flag gate on /eval/ragas endpoint."""
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 

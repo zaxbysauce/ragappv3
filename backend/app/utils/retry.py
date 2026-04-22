@@ -4,7 +4,7 @@ import asyncio
 import random
 import time
 from functools import wraps
-from typing import Callable, TypeVar, ParamSpec, Coroutine, Any
+from typing import Any, Callable, Coroutine, ParamSpec, TypeVar
 
 P = ParamSpec('P')
 R = TypeVar('R')

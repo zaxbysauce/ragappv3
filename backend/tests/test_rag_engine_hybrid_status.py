@@ -7,9 +7,8 @@ Verifies Task 2.2:
 3. Both are included in retrieval_debug in the done message
 """
 
-import asyncio
-import sys
 import os
+import sys
 from typing import Dict, List, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -110,7 +109,7 @@ def _make_engine(
     engine.vector_store = mock_vs
 
     # DocumentRetrievalService: mock it to bypass expand_window chain
-    from app.services.document_retrieval import DocumentRetrievalService, RAGSource
+    from app.services.document_retrieval import DocumentRetrievalService
     mock_dr = MagicMock(spec=DocumentRetrievalService)
     # filter_relevant: sync mock that returns the RAGSource list
     mock_dr.filter_relevant = AsyncMock(return_value=[])
@@ -140,7 +139,6 @@ def _make_engine(
 @pytest.mark.asyncio
 async def test_hybrid_status_disabled_when_hybrid_search_disabled():
     """hybrid_status='disabled' when hybrid_search_enabled=False."""
-    from app.services.rag_engine import RAGEngine
 
     # Results WITH _fts_status should still produce 'disabled' when feature is off
     results = [
@@ -320,7 +318,6 @@ async def test_hybrid_status_included_in_done_message():
         # the except-handler score_type bug in rag_engine.py line 599
         # Note: rerank_success=True (4th elem) → rerank_status="ok" (8th elem)
         async def mock_retrieval(*args, **kwargs):
-            from app.services.document_retrieval import RAGSource
             return [{"id": "1", "text": "doc", "file_id": "f1", "_distance": 0.1, "_fts_status": "ok", "metadata": {}}], None, "CONFIDENT", True, "rerank", "both", 0, "ok", False, False
         with patch.object(engine, '_execute_retrieval', mock_retrieval):
             async for msg in engine.query("test query", []):
@@ -389,11 +386,10 @@ async def test_hybrid_status_disabled_in_done_message():
 def test_build_done_message_includes_hybrid_status_and_fts_exceptions():
     """_build_done_message includes hybrid_status and fts_exceptions in retrieval_debug."""
     from app.services.rag_engine import RAGEngine
-    from app.services.document_retrieval import RAGSource
 
     engine = RAGEngine.__new__(RAGEngine)
-    from app.services.prompt_builder import PromptBuilderService
     from app.services.document_retrieval import DocumentRetrievalService
+    from app.services.prompt_builder import PromptBuilderService
     engine.document_retrieval = DocumentRetrievalService(
         vector_store=MagicMock(),
         max_distance_threshold=1.0,
@@ -426,8 +422,8 @@ def test_build_done_message_with_dense_only_status():
     from app.services.rag_engine import RAGEngine
 
     engine = RAGEngine.__new__(RAGEngine)
-    from app.services.prompt_builder import PromptBuilderService
     from app.services.document_retrieval import DocumentRetrievalService
+    from app.services.prompt_builder import PromptBuilderService
     engine.document_retrieval = DocumentRetrievalService(
         vector_store=MagicMock(),
         max_distance_threshold=1.0,
@@ -451,8 +447,8 @@ def test_build_done_message_with_disabled_status():
     from app.services.rag_engine import RAGEngine
 
     engine = RAGEngine.__new__(RAGEngine)
-    from app.services.prompt_builder import PromptBuilderService
     from app.services.document_retrieval import DocumentRetrievalService
+    from app.services.prompt_builder import PromptBuilderService
     engine.document_retrieval = DocumentRetrievalService(
         vector_store=MagicMock(),
         max_distance_threshold=1.0,

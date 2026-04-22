@@ -7,12 +7,11 @@ from pathlib import Path
 import pytest
 
 from app.api.deps import (
+    MultipleOrgError,
     get_user_orgs,
     get_user_primary_org,
-    MultipleOrgError,
 )
 from app.models.database import _pool_cache, _pool_cache_lock
-
 
 # Valid SQLite schema matching production structure
 TEST_SCHEMA = """
@@ -304,7 +303,7 @@ class TestGetUserPrimaryOrg:
         conn = _get_db_conn()
         try:
             # Create multiple orgs and add user 1 to all of them
-            org1_id = _create_org("Error Org One", 1)
+            _create_org("Error Org One", 1)
             org2_id = _create_org("Error Org Two", 2)
 
             # Add user 1 to org2 (user 1 is already in org1 as owner)
@@ -370,7 +369,7 @@ class TestMultipleOrgError:
         """MultipleOrgError can be caught as general Exception."""
         conn = _get_db_conn()
         try:
-            org1_id = _create_org("Catch Test Org One", 1)
+            _create_org("Catch Test Org One", 1)
             org2_id = _create_org("Catch Test Org Two", 2)
 
             _add_org_member(org2_id, 1, "member")

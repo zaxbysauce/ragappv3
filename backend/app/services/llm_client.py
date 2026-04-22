@@ -4,15 +4,15 @@ OpenAI-compatible LLM chat client using httpx.
 
 import json
 import logging
-from typing import AsyncGenerator, List, Dict, Any, Optional
+from typing import AsyncGenerator, Dict, List, Optional
 
 import httpx
 
 from app.config import settings
 from app.services.circuit_breaker import (
-    llm_cb,
     CircuitBreakerError,
     CircuitBreakerState,
+    llm_cb,
 )
 
 logger = logging.getLogger(__name__)

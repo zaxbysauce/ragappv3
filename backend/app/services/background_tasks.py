@@ -10,13 +10,12 @@ import logging
 from dataclasses import dataclass
 from typing import Optional
 
-from .document_processor import DocumentProcessor, DocumentProcessingError
-from .llm_client import LLMClient
-from .vector_store import VectorStore
-from .embeddings import EmbeddingService
-from .maintenance import MaintenanceService
 from ..models.database import SQLiteConnectionPool
-
+from .document_processor import DocumentProcessingError, DocumentProcessor
+from .embeddings import EmbeddingService
+from .llm_client import LLMClient
+from .maintenance import MaintenanceService
+from .vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
 
@@ -275,7 +274,7 @@ class BackgroundProcessor:
     async def _process_task_wrapper(self, task: TaskItem) -> None:
         """
         Wrapper for _process_task that ensures task_done() is always called.
-        
+
         This wrapper guarantees queue.task_done() is called even if _process_task
         raises an exception or continues early.
         """

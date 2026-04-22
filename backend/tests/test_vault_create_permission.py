@@ -61,10 +61,11 @@ except ImportError:
     sys.modules["unstructured.documents.elements"] = _unstructured.documents.elements
 
 import unittest
+
 from fastapi.testclient import TestClient
 
+from app.api.deps import get_current_active_user, get_db, get_vector_store
 from app.main import app
-from app.api.deps import get_db, get_current_active_user, get_vector_store
 
 
 class SimpleConnectionPool:

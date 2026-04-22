@@ -238,7 +238,6 @@ class ContextualChunker:
                 # Retry loop with exponential backoff for transient LLM failures
                 max_attempts = 3
                 delays = [0.5, 1.0, 2.0]  # seconds
-                last_error = None
                 context = ""  # Initialize to satisfy type checker
 
                 for attempt in range(max_attempts):
@@ -250,7 +249,6 @@ class ContextualChunker:
                         )
                         break  # Success
                     except LLMError as e:
-                        last_error = e
                         if attempt < max_attempts - 1:
                             delay = delays[attempt]
                             logger.warning(

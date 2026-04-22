@@ -171,7 +171,7 @@ def rollback_migration() -> dict:
 
     Returns dict with 'moved', 'skipped', 'failed' lists.
     """
-    provider = UploadPathProvider()
+    UploadPathProvider()
     results = {"moved": [], "skipped": [], "failed": []}
 
     old_dir = settings.uploads_dir

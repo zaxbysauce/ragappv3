@@ -9,10 +9,9 @@ import time
 from typing import Callable, Dict
 
 import redis
-from fastapi import Depends, Header, HTTPException, Request, Response
+from fastapi import Header, HTTPException, Request, Response
 
 from app.config import settings
-from app.services.secret_manager import SecretManager
 
 logger = logging.getLogger("security")
 CSRF_COOKIE_NAME = "X-CSRF-Token"

@@ -7,7 +7,7 @@ import json
 import os
 import sys
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -315,7 +315,7 @@ class TestChatStreaming(unittest.TestCase):
 
 """
         events = self._parse_sse_events(sse_text)
-        
+
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]['data']['content'], "test")
 
@@ -326,7 +326,7 @@ data: {"type": "content", "content": "test"}
 
 """
         events = self._parse_sse_events(sse_text)
-        
+
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]['event_type'], "message")
         self.assertEqual(events[0]['data']['content'], "test")
@@ -338,7 +338,7 @@ data: {"type": "content", "content": "test"}
 
 """
         events = self._parse_sse_events(sse_text)
-        
+
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]['data']['content'], "test")
         # Retry field should not appear in parsed event

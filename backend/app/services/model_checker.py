@@ -1,12 +1,12 @@
 """
 Model availability checker for Ollama and OpenAI-compatible endpoints.
 """
-from typing import Dict, Any
+from typing import Any, Dict
 
 import httpx
 
 from app.config import settings
-from app.services.circuit_breaker import model_checker_cb, CircuitBreakerError
+from app.services.circuit_breaker import CircuitBreakerError, model_checker_cb
 
 
 class ModelCheckerError(Exception):
@@ -16,27 +16,27 @@ class ModelCheckerError(Exception):
 
 class ModelChecker:
     """Checks availability of embedding and chat models via Ollama or OpenAI-compatible APIs."""
-    
+
     def __init__(self, timeout: float = 10.0):
         """
         Initialize the model checker.
-        
+
         Args:
             timeout: Request timeout in seconds (default: 10.0)
         """
         self.timeout = timeout
-    
+
     async def check_models(self) -> Dict[str, Any]:
         """
         Check availability of configured embedding and chat models.
-        
+
         Automatically detects endpoint type (Ollama or OpenAI-compatible) and
         calls the appropriate API to verify configured models are available.
-        
+
         Returns:
             Dictionary with 'embedding_model' and 'chat_model' keys,
             each containing a dict with 'available' (bool) and 'error' (str or None).
-        
+
         Example:
             {
                 'embedding_model': {'available': True, 'error': None},
@@ -47,7 +47,7 @@ class ModelChecker:
             'embedding_model': {'available': False, 'error': None},
             'chat_model': {'available': False, 'error': None}
         }
-        
+
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             # Check embedding model
             result['embedding_model'] = await self._check_model_availability(
@@ -55,42 +55,42 @@ class ModelChecker:
                 settings.ollama_embedding_url,
                 settings.embedding_model
             )
-            
+
             # Check chat model
             result['chat_model'] = await self._check_model_availability(
                 client,
                 settings.ollama_chat_url,
                 settings.chat_model
             )
-        
+
         return result
-    
+
     def _detect_provider_type(self, base_url: str) -> str:
         """
         Detect whether the endpoint is Ollama or OpenAI-compatible.
-        
+
         Detection rules:
         - explicit /api/tags path => Ollama
         - explicit /v1/models or /v1/embeddings path => OpenAI-compatible
         - no explicit path + port 1234 => OpenAI-compatible
         - otherwise Ollama
-        
+
         Args:
             base_url: The base URL of the endpoint
-            
+
         Returns:
             'ollama' or 'openai_compatible'
         """
         url_lower = base_url.lower().rstrip('/')
-        
+
         # Check for explicit Ollama path
         if '/api/tags' in url_lower:
             return 'ollama'
-        
+
         # Check for explicit OpenAI-compatible paths
         if '/v1/models' in url_lower or '/v1/embeddings' in url_lower:
             return 'openai_compatible'
-        
+
         # Check for common OpenAI-compatible ports (vLLM 8000, LM Studio 1234, etc.)
         # without explicit path
         OPENAI_COMPATIBLE_PORTS = {8000, 1234, 8080, 5000, 5001}
@@ -109,10 +109,10 @@ class ModelChecker:
         except (ValueError, AttributeError):
             # URL parsing failed, continue with default provider
             pass
-        
+
         # Default to Ollama for backward compatibility
         return 'ollama'
-    
+
     async def _check_model_availability(
         self,
         client: httpx.AsyncClient,
@@ -122,22 +122,22 @@ class ModelChecker:
         """
         Check if a specific model is available at the given endpoint.
         Supports both Ollama and OpenAI-compatible endpoints.
-        
+
         Args:
             client: httpx AsyncClient instance
             base_url: Base URL of the endpoint
             model_name: Name of the model to check
-        
+
         Returns:
             Dictionary with 'available' (bool) and 'error' (str or None)
         """
         provider_type = self._detect_provider_type(base_url)
-        
+
         if provider_type == 'openai_compatible':
             return await self._check_openai_compatible_model(client, base_url, model_name)
         else:
             return await self._check_ollama_model(client, base_url, model_name)
-    
+
     async def _check_ollama_model(
         self,
         client: httpx.AsyncClient,
@@ -148,12 +148,12 @@ class ModelChecker:
         Check model availability using Ollama's /api/tags endpoint.
         """
         url = f"{base_url.rstrip('/')}/api/tags"
-        
+
         try:
             response = await client.get(url)
             response.raise_for_status()
             data = response.json()
-            
+
             # Parse models from response
             models = data.get('models', [])
             if not isinstance(models, list):
@@ -161,21 +161,21 @@ class ModelChecker:
                     'available': False,
                     'error': "Invalid response format: 'models' is not a list"
                 }
-            
+
             # Check if model name matches any available model
             # Model names in Ollama may include tags (e.g., "qwen2.5:32b")
             # We check for exact match or if model_name is a prefix
             available_model_names = [m.get('name', '') for m in models]
-            
+
             for available_name in available_model_names:
                 if available_name == model_name or available_name.startswith(f"{model_name}:"):
                     return {'available': True, 'error': None}
-            
+
             return {
                 'available': False,
                 'error': f"Model '{model_name}' not found. Available models: {', '.join(available_model_names) or 'none'}"
             }
-        
+
         except httpx.TimeoutException:
             return {
                 'available': False,
@@ -218,12 +218,12 @@ class ModelChecker:
         else:
             # Append /v1/models to base URL
             url = f"{base_url.rstrip('/')}/v1/models"
-        
+
         try:
             response = await client.get(url)
             response.raise_for_status()
             data = response.json()
-            
+
             # Parse models from OpenAI-compatible response
             # Response format: {"data": [{"id": "model-name", ...}, ...]}
             models = data.get('data', [])
@@ -232,15 +232,15 @@ class ModelChecker:
                     'available': False,
                     'error': "Invalid response format: 'data' is not a list"
                 }
-            
+
             # Extract model IDs
             available_model_ids = [m.get('id', '') for m in models if isinstance(m, dict)]
-            
+
             # Check for exact match or partial match
             for available_id in available_model_ids:
                 if available_id == model_name or available_id.startswith(f"{model_name}:"):
                     return {'available': True, 'error': None}
-            
+
             return {
                 'available': False,
                 'error': f"Model '{model_name}' not found. Available models: {', '.join(available_model_ids) or 'none'}"

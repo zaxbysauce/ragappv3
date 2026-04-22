@@ -2,8 +2,8 @@
 Basic API integration tests using unittest and FastAPI TestClient.
 """
 
-import sys
 import os
+import sys
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -53,12 +53,12 @@ except ImportError:
     sys.modules["unstructured.documents.elements"] = _unstructured.documents.elements
 
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 from fastapi.testclient import TestClient
 
-from app.main import app
 from app.api.deps import get_llm_health_checker, get_model_checker
+from app.main import app
 
 
 class TestAPI(unittest.TestCase):

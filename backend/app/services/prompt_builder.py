@@ -6,8 +6,8 @@ Handles building system prompts, user messages, and formatting context for LLM.
 from typing import Any, Dict, List, Optional
 
 from app.config import settings
-from app.services.memory_store import MemoryRecord
 from app.services.document_retrieval import RAGSource
+from app.services.memory_store import MemoryRecord
 
 CITATION_INSTRUCTION = (
     "\n\nWhen answering questions based on the provided context:\n"

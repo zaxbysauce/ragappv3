@@ -2,10 +2,8 @@
 
 import os
 import sys
-import asyncio
 import unittest
-import logging
-from typing import Dict, List, Optional, cast
+from typing import Dict, List, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 # Add parent directory to path for imports
@@ -48,8 +46,6 @@ sys.modules["unstructured.documents.elements"] = _unstructured.documents.element
 
 
 from app.services.embeddings import EmbeddingService
-from app.services.llm_client import LLMClient
-from app.services.memory_store import MemoryStore
 from app.services.rag_engine import RAGEngine
 from app.services.vector_store import VectorStore
 

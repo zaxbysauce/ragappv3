@@ -10,7 +10,7 @@ Tests cover:
 import os
 import sys
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -34,15 +34,14 @@ from fastapi.testclient import TestClient
 
 # Import metric functions directly
 from app.api.routes.eval import (
-    _calculate_faithfulness,
+    RAGASEvaluationRequest,
+    RAGASMetrics,
     _calculate_answer_relevancy,
+    _calculate_answer_similarity,
     _calculate_context_precision,
     _calculate_context_recall,
     _calculate_context_relevancy,
-    _calculate_answer_similarity,
-    RAGASEvaluationRequest,
-    RAGASMetrics,
-    RAGASEvaluationResponse,
+    _calculate_faithfulness,
 )
 
 

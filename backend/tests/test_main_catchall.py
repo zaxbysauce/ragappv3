@@ -1,8 +1,8 @@
 """
 Tests for main.py catch-all route functionality - simplified version.
 """
-import sys
 import os
+import sys
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -19,7 +19,7 @@ class TestMainCatchAllRoute(unittest.TestCase):
         main_file = os.path.join(os.path.dirname(__file__), '..', 'app', 'main.py')
         with open(main_file, 'r') as f:
             content = f.read()
-        
+
         # Check for FileResponse import (can be with other imports)
         self.assertIn('FileResponse', content,
                       "FileResponse import not found in main.py")
@@ -29,7 +29,7 @@ class TestMainCatchAllRoute(unittest.TestCase):
         main_file = os.path.join(os.path.dirname(__file__), '..', 'app', 'main.py')
         with open(main_file, 'r') as f:
             content = f.read()
-        
+
         # Check for catch-all route definition
         self.assertIn('@app.get("/{full_path:path}")', content,
                       "Catch-all route decorator not found in main.py")
@@ -41,7 +41,7 @@ class TestMainCatchAllRoute(unittest.TestCase):
         main_file = os.path.join(os.path.dirname(__file__), '..', 'app', 'main.py')
         with open(main_file, 'r') as f:
             content = f.read()
-        
+
         # Check that serve_spa returns FileResponse with index.html
         self.assertIn('FileResponse(static_dir / "index.html")', content,
                       "serve_spa does not return FileResponse with index.html")
@@ -51,17 +51,17 @@ class TestMainCatchAllRoute(unittest.TestCase):
         main_file = os.path.join(os.path.dirname(__file__), '..', 'app', 'main.py')
         with open(main_file, 'r') as f:
             lines = f.readlines()
-        
+
         # Find line numbers for key elements
         catchall_line = None
         last_router_line = None
-        
+
         for i, line in enumerate(lines):
             if '@app.get("/{full_path:path}")' in line:
                 catchall_line = i
             if 'app.include_router' in line:
                 last_router_line = i
-        
+
         self.assertIsNotNone(catchall_line, "Catch-all route not found")
         self.assertIsNotNone(last_router_line, "No routers found")
         self.assertTrue(catchall_line > last_router_line,
@@ -72,7 +72,7 @@ class TestMainCatchAllRoute(unittest.TestCase):
         main_file = os.path.join(os.path.dirname(__file__), '..', 'app', 'main.py')
         with open(main_file, 'r') as f:
             content = f.read()
-        
+
         # Check for case-insensitive normalization
         self.assertIn('normalized_path = full_path.lower()', content,
                       "Case-insensitive normalization not found")
@@ -86,7 +86,7 @@ class TestMainCatchAllRoute(unittest.TestCase):
         main_file = os.path.join(os.path.dirname(__file__), '..', 'app', 'main.py')
         with open(main_file, 'r') as f:
             content = f.read()
-        
+
         # Check for case-insensitive assets blocking
         self.assertIn('normalized_path == "assets"', content,
                       "Assets path check not found")
@@ -98,7 +98,7 @@ class TestMainCatchAllRoute(unittest.TestCase):
         main_file = os.path.join(os.path.dirname(__file__), '..', 'app', 'main.py')
         with open(main_file, 'r') as f:
             content = f.read()
-        
+
         # Check for assets mount configuration
         self.assertIn('app.mount("/assets"', content,
                       "Assets mount not found")
@@ -110,7 +110,7 @@ class TestMainCatchAllRoute(unittest.TestCase):
         main_file = os.path.join(os.path.dirname(__file__), '..', 'app', 'main.py')
         with open(main_file, 'r') as f:
             content = f.read()
-        
+
         # Check for HTTPException import
         self.assertIn('HTTPException', content,
                       "HTTPException import not found in main.py")
@@ -120,7 +120,7 @@ class TestMainCatchAllRoute(unittest.TestCase):
         main_file = os.path.join(os.path.dirname(__file__), '..', 'app', 'main.py')
         with open(main_file, 'r') as f:
             content = f.read()
-        
+
         # Check for HTTPException with 404 status
         self.assertIn('raise HTTPException(status_code=404', content,
                       "404 HTTPException not raised for API/Assets paths")
@@ -130,13 +130,13 @@ class TestMainCatchAllRoute(unittest.TestCase):
         main_file = os.path.join(os.path.dirname(__file__), '..', 'app', 'main.py')
         with open(main_file, 'r') as f:
             content = f.read()
-        
+
         # Check that serve_spa returns FileResponse (not HTTPException)
         # The return statement should come after the if block that raises for API/assets
         lines = content.split('\n')
         serve_spa_section = False
         has_return_after_check = False
-        
+
         for i, line in enumerate(lines):
             if 'async def serve_spa(full_path: str):' in line:
                 serve_spa_section = True
@@ -145,7 +145,7 @@ class TestMainCatchAllRoute(unittest.TestCase):
                 break
             elif serve_spa_section and (line.strip().startswith('def ') or line.strip().startswith('@app.get')):
                 break
-        
+
         self.assertTrue(has_return_after_check,
                         "serve_spa should return FileResponse for frontend routes")
 

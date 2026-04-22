@@ -76,6 +76,7 @@ class TestAccessToken:
         as an integer. This causes decode_access_token to return None.
         """
         import jwt
+
         from app.services.auth_service import create_access_token, get_jwt_config
 
         user_id = 42
@@ -103,8 +104,9 @@ class TestAccessToken:
 
     def test_create_access_token_expiry(self, mock_settings):
         """Create token, verify exp is ~15 minutes from now."""
-        from app.services.auth_service import create_access_token, get_jwt_config
         import jwt
+
+        from app.services.auth_service import create_access_token, get_jwt_config
 
         before_creation = datetime.now(timezone.utc)
 
@@ -147,6 +149,7 @@ class TestAccessToken:
     def test_decode_access_token_expired(self, mock_settings):
         """Create token, mock time to expire it, verify returns None."""
         import jwt
+
         from app.services.auth_service import decode_access_token
 
         # Create a token that's already expired
@@ -170,6 +173,7 @@ class TestRefreshToken:
     def test_create_refresh_token(self):
         """Verify returns (raw_token, sha256_hash) where hash is SHA256 of raw."""
         import hashlib
+
         from app.services.auth_service import create_refresh_token
 
         raw_token, sha256_hash = create_refresh_token()

@@ -14,12 +14,9 @@ This module tests:
 10. _maybe_create_vector_index handles count_rows failure gracefully
 """
 
-import logging
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch, call
-
-import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.services.vector_store import (
     VECTOR_INDEX_MIN_ROWS,
@@ -78,7 +75,7 @@ class TestInitTableDefersVectorIndex(unittest.IsolatedAsyncioTestCase):
                 with patch("app.services.vector_store.FTS") as mock_fts:
                     mock_fts.return_value = MagicMock()
 
-                    result = await store.init_table(embedding_dim=384)
+                    await store.init_table(embedding_dim=384)
 
         # Verify table was created
         self.assertIsNotNone(store.table)

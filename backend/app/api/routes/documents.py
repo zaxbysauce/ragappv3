@@ -13,51 +13,50 @@ import os
 import re
 import sqlite3
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Callable, List, Optional
 
 import aiofiles
 from fastapi import (
     APIRouter,
+    Body,
     Depends,
     Header,
     HTTPException,
+    Query,
     Request,
     UploadFile,
-    File,
-    Query,
-    Body,
 )
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.config import settings, Settings
-from app.services.document_processor import (
-    DocumentProcessor,
-    DocumentProcessingError,
-    DuplicateFileError,
-)
-from app.services.vector_store import VectorStore
-from app.services.upload_path import UploadPathProvider
-from app.services.embeddings import EmbeddingService
-from app.services.secret_manager import SecretManager
-from app.models.database import SQLiteConnectionPool
 from app.api.deps import (
-    get_secret_manager,
     get_background_processor,
-    get_vector_store,
-    get_embedding_service,
-    get_settings,
+    get_current_active_user,
     get_db,
     get_db_pool,
-    get_current_active_user,
-    require_vault_permission,
-    require_admin_role,
+    get_embedding_service,
     get_evaluate_policy,
+    get_secret_manager,
+    get_settings,
     get_user_accessible_vault_ids,
+    get_vector_store,
+    require_admin_role,
+    require_vault_permission,
 )
-from app.security import csrf_protect
+from app.config import Settings, settings
 from app.limiter import limiter
+from app.models.database import SQLiteConnectionPool
+from app.security import csrf_protect
 from app.services.background_tasks import BackgroundProcessor
+from app.services.document_processor import (
+    DocumentProcessingError,
+    DocumentProcessor,
+    DuplicateFileError,
+)
+from app.services.embeddings import EmbeddingService
+from app.services.secret_manager import SecretManager
+from app.services.upload_path import UploadPathProvider
+from app.services.vector_store import VectorStore
 
 
 def secure_filename(filename: str) -> str:
@@ -841,7 +840,7 @@ async def batch_delete_documents(
             deleted_count += 1
             logger.info("Deleted document '%s' (id: %d)", file_name, file_id)
 
-        except Exception as e:
+        except Exception:
             logger.exception("Error deleting document %d", file_id)
             failed_ids.append(file_id)
 
@@ -896,7 +895,7 @@ async def delete_all_vault_documents(
             await asyncio.to_thread(conn.commit)
             deleted_count += 1
 
-        except Exception as e:
+        except Exception:
             logger.exception(
                 "Error deleting document %d from vault %d", file_id, vault_id
             )

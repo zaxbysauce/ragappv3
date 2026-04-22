@@ -1,6 +1,7 @@
 """Tests for RRF recency scoring in fusion.py."""
 
 import pytest
+
 from app.utils.fusion import rrf_fuse
 
 

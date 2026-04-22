@@ -9,7 +9,6 @@ Verifies the FTS validation block (lifespan.py ~lines 217-231):
 """
 
 import logging
-import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

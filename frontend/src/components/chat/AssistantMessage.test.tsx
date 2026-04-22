@@ -238,18 +238,18 @@ describe("AssistantMessage", () => {
     expect(screen.getByText(/italic/)).toBeInTheDocument();
   });
 
-  it("should show streaming indicator when isStreaming is true", () => {
-    const message = createMessage();
+  it("should show streaming indicator when isStreaming is true and content is empty", () => {
+    const message = createMessage({ content: "" });
     render(<AssistantMessage message={message} isStreaming={true} />);
 
-    expect(screen.getByText("thinking...")).toBeInTheDocument();
+    expect(screen.getByText("Thinking")).toBeInTheDocument();
   });
 
   it("should not show streaming indicator when isStreaming is false", () => {
-    const message = createMessage();
+    const message = createMessage({ content: "" });
     render(<AssistantMessage message={message} isStreaming={false} />);
 
-    expect(screen.queryByText("thinking...")).not.toBeInTheDocument();
+    expect(screen.queryByText("Thinking")).not.toBeInTheDocument();
   });
 
   it("should render error message", () => {
@@ -263,7 +263,7 @@ describe("AssistantMessage", () => {
     const message = createMessage({ stopped: true });
     render(<AssistantMessage message={message} />);
 
-    expect(screen.getByText("Generation stopped")).toBeInTheDocument();
+    expect(screen.getByText("Stopped")).toBeInTheDocument();
   });
 
   it("should call onCopy when copy button is clicked", async () => {
@@ -470,8 +470,8 @@ describe("AssistantMessage - Hover Actions", () => {
 
     const messageContainer = screen.getByLabelText("Assistant message");
 
-    // Initially action bar should be hidden (opacity-0 from group-hover)
-    const actionBar = messageContainer.querySelector('[class*="opacity-0"]');
+    // Initially action bar should be hidden (opacity-30 from group-hover pattern)
+    const actionBar = messageContainer.querySelector('[class*="opacity-30"]');
     expect(actionBar).toBeInTheDocument();
 
     // After mouse enter, action buttons should be in the DOM

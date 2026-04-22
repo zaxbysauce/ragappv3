@@ -1,8 +1,6 @@
 """Tests for ingestion integrity: ANN index lifecycle, visibility filter,
 safe re-upload, vault_id required, and audit migration (Issue #13 / #14)."""
 
-import asyncio
-import inspect
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -11,8 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.services.document_retrieval import DocumentRetrievalService
-from app.services.vector_store import VECTOR_INDEX_MIN_ROWS, VectorStore
-
+from app.services.vector_store import VectorStore
 
 # ---------------------------------------------------------------------------
 # Helpers

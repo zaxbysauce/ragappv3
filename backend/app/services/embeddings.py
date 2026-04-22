@@ -4,13 +4,15 @@ Dual-provider embedding client service supporting Ollama and OpenAI-compatible A
 
 import asyncio
 import hashlib
-import httpx
 import logging
 from collections import OrderedDict
 from typing import List, Optional
 from urllib.parse import urlparse
+
+import httpx
+
 from app.config import settings
-from app.services.circuit_breaker import embeddings_cb, CircuitBreakerError
+from app.services.circuit_breaker import CircuitBreakerError, embeddings_cb
 
 logger = logging.getLogger(__name__)
 
@@ -270,7 +272,7 @@ class EmbeddingService:
         url_fingerprint = hashlib.md5(self.embeddings_url.encode("utf-8")).hexdigest()[:8]
         prefix_fingerprint = hashlib.md5((prefix or "").encode("utf-8")).hexdigest()[:8]
         cache_key = f"{model_fingerprint}_{url_fingerprint}_{prefix_fingerprint}_{hashlib.md5(text_to_embed.encode('utf-8')).hexdigest()}"
-        
+
         # Check cache
         cached = self._embed_cache.get(cache_key)
         if cached is not None:

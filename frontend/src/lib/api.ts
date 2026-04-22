@@ -47,7 +47,7 @@ export async function ensureCsrfToken(): Promise<string> {
   const cookieToken = getCsrfCookie();
   if (cookieToken) {
     _csrfToken = cookieToken;
-    return _csrfToken;
+    return cookieToken;
   }
 
   if (!_csrfFetchPromise) {

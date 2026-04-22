@@ -2,7 +2,6 @@
 
 import unittest
 from unittest.mock import MagicMock, patch
-from typing import List
 
 from app.services.document_retrieval import RAGSource
 from app.services.rag_engine import RAGEngine

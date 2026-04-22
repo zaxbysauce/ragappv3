@@ -68,6 +68,7 @@ export default function DocumentsPage() {
   // Cleanup pending delete timers on unmount
   useEffect(() => {
     return () => {
+      // eslint-disable-next-line react-hooks/exhaustive-deps
       pendingDeleteTimersRef.current.forEach((timer) => clearTimeout(timer));
     };
   }, []);
@@ -247,6 +248,7 @@ export default function DocumentsPage() {
       onConfirm: executeDeleteAllInVault,
       variant: "destructive",
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [documents.length, activeVaultId, executeDeleteAllInVault]);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {

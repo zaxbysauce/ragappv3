@@ -13,14 +13,13 @@ from typing import List, Optional, Union
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.services.memory_store import MemoryStore, MemoryRecord, MemoryStoreError
 from app.api.deps import (
-    get_memory_store,
-    get_db,
-    get_current_active_user,
     evaluate_policy,
+    get_current_active_user,
+    get_db,
+    get_memory_store,
 )
-
+from app.services.memory_store import MemoryRecord, MemoryStore, MemoryStoreError
 
 logger = logging.getLogger(__name__)
 

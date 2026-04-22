@@ -4,9 +4,9 @@ import asyncio
 import os
 import sys
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
 from dataclasses import dataclass, field
 from typing import List, Optional
+from unittest.mock import AsyncMock, MagicMock
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -497,8 +497,8 @@ class TestRetryBehavior(unittest.TestCase):
 
     def test_first_attempt_fails_second_succeeds(self):
         """Test that failed first attempt retries once and succeeds."""
-        from app.services.llm_client import LLMError
         from app.services.contextual_chunking import ContextualChunker, ProcessedChunk
+        from app.services.llm_client import LLMError
 
         call_count = [0]
 
@@ -527,8 +527,8 @@ class TestRetryBehavior(unittest.TestCase):
 
     def test_all_three_attempts_fail(self):
         """Test that all 3 attempts failing raises LLMError."""
-        from app.services.llm_client import LLMError
         from app.services.contextual_chunking import ContextualChunker, ProcessedChunk
+        from app.services.llm_client import LLMError
 
         call_count = [0]
 
@@ -587,8 +587,8 @@ class TestRetryBehavior(unittest.TestCase):
 
     def test_second_attempt_fails_third_succeeds(self):
         """Test retry when second attempt also fails."""
-        from app.services.llm_client import LLMError
         from app.services.contextual_chunking import ContextualChunker, ProcessedChunk
+        from app.services.llm_client import LLMError
 
         call_count = [0]
 
@@ -617,8 +617,8 @@ class TestRetryBehavior(unittest.TestCase):
 
     def test_llm_error_caught_by_outer_handler(self):
         """Test that LLMError after retries is caught by outer exception handler."""
-        from app.services.llm_client import LLMError
         from app.services.contextual_chunking import ContextualChunker, ProcessedChunk
+        from app.services.llm_client import LLMError
 
         call_count = [0]
 

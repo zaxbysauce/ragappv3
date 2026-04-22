@@ -823,6 +823,7 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
     };
 
     fetchSessionDetails();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedSearchQuery, sessions]);
 
   // Filter sessions based on search query (title + first message content)

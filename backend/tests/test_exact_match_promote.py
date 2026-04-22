@@ -2,10 +2,9 @@
 
 import os
 import sys
-import asyncio
 import unittest
-from unittest.mock import patch, MagicMock, AsyncMock
 from typing import Dict, List, Optional, Tuple
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -47,7 +46,6 @@ except ImportError:
     sys.modules['unstructured.documents'] = _unstructured.documents
     sys.modules['unstructured.documents.elements'] = _unstructured.documents.elements
 
-from app.services.embeddings import EmbeddingService
 from app.services.llm_client import LLMClient
 from app.services.memory_store import MemoryStore
 from app.services.rag_engine import RAGEngine

@@ -10,16 +10,14 @@ Tests cover:
 6. main.py has JWT warning log and CORS wildcard warning log
 """
 
-import ast
 import os
-import sys
 import re
+import sys
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import unittest
-
 
 AUTH_PY = os.path.join(
     os.path.dirname(__file__), "..", "app", "api", "routes", "auth.py"

@@ -9,14 +9,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.deps import (
-    get_db,
-    require_role,
     MultipleOrgError,
-    get_user_primary_org,
+    get_db,
     get_evaluate_policy,
+    get_user_primary_org,
+    require_role,
 )
 from app.models.database import transaction_context
-
 
 router = APIRouter(prefix="/groups", tags=["groups"])
 

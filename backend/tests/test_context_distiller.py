@@ -1,7 +1,9 @@
 """Tests for ContextDistiller service."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
 from app.services.context_distiller import (
     ContextDistiller,
     _cosine_similarity,
@@ -485,7 +487,7 @@ class TestDistill:
             mock_settings.context_distillation_dedup_threshold = 0.92
 
             distiller = ContextDistiller(mock_embedding_service, mock_llm_client)
-            result = await distiller.distill("test query", sources, "AMBIGUOUS")
+            await distiller.distill("test query", sources, "AMBIGUOUS")
 
             # Synthesis should NOT be called for AMBIGUOUS
             assert not mock_llm_client.chat_completion.called

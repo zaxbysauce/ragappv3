@@ -2,14 +2,14 @@
 
 import re
 import sqlite3
-from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 
-from app.api.deps import require_role, get_current_active_user
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field, field_validator
+
+from app.api.deps import require_role
 from app.config import settings
 from app.models.database import get_pool
-
 
 router = APIRouter(prefix="/organizations", tags=["organizations"])
 

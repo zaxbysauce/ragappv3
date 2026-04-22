@@ -12,7 +12,7 @@ Tests cover:
 
 import os
 import sys
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -61,8 +61,7 @@ except ImportError:
     sys.modules["unstructured.documents"] = _unstructured.documents
     sys.modules["unstructured.documents.elements"] = _unstructured.documents.elements
 
-from app.services.document_retrieval import DocumentRetrievalService, RAGSource
-
+from app.services.document_retrieval import DocumentRetrievalService
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -270,6 +269,7 @@ def test_old_rerank_score_heuristic_not_in_filter_relevant_source():
     This guards against regression if someone re-introduces the heuristic.
     """
     import inspect
+
     import app.services.document_retrieval as dr_module
 
     source = inspect.getsource(dr_module.DocumentRetrievalService.filter_relevant)
@@ -293,6 +293,7 @@ def test_skip_distance_filter_uses_reranked_parameter_only():
     parameter and not derived from any record inspection.
     """
     import inspect
+
     import app.services.document_retrieval as dr_module
 
     source = inspect.getsource(dr_module.DocumentRetrievalService.filter_relevant)

@@ -1,9 +1,7 @@
 """Tests for startup model assertion in lifespan.py."""
 
-import pytest
-from unittest.mock import patch, MagicMock
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -16,12 +14,12 @@ class TestStartupModelAssertion:
         from app.config import settings
         assert hasattr(settings, 'strict_embedding_model_check'), "strict_embedding_model_check config should exist"
         # Default should be True
-        assert settings.strict_embedding_model_check == True
+        assert settings.strict_embedding_model_check
 
     def test_strict_embedding_model_check_default_is_true(self):
         """strict_embedding_model_check should default to True."""
         from app.config import settings
-        assert settings.strict_embedding_model_check == True
+        assert settings.strict_embedding_model_check
 
     def test_lifespan_has_model_validation_code(self):
         """lifespan.py should have model validation code."""

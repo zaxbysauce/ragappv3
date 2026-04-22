@@ -119,15 +119,6 @@ class TestRunMigrations:
         source = inspect.getsource(run_migrations)
 
         # Count expected migration calls (these are the 6 current/active migrations)
-        expected_migrations = [
-            "init_db(sqlite_path)",  # Called first, creates tables
-            "migrate_add_vaults(sqlite_path)",
-            "migrate_add_email_columns(sqlite_path)",
-            "migrate_add_user_org_tables(sqlite_path)",
-            "migrate_add_vault_permission_columns(sqlite_path)",
-            "migrate_vault_paths(sqlite_path)",
-            "migrate_add_org_slug_column(sqlite_path)",
-        ]
 
         # The run_migrations function should call exactly these 7 operations
         # (init_db + 6 named migrations)
@@ -156,8 +147,8 @@ class TestRunMigrations:
 
     def test_run_migrations_calls_exactly_seven_operations(self):
         """Verify run_migrations contains exactly 7 migration calls (init + 6 migrations)."""
-        import re
         import inspect
+        import re
 
         source = inspect.getsource(run_migrations)
 
@@ -384,8 +375,8 @@ class TestRunMigrationsIntegration:
 
     def test_run_migrations_with_init_db_matches_schema(self):
         """Verify init_db produces the same tables as the raw schema."""
-        import tempfile
         import os
+        import tempfile
 
         # Create temp file for init_db
         fd, temp_path = tempfile.mkstemp(suffix=".db")
@@ -401,7 +392,7 @@ class TestRunMigrationsIntegration:
                 SELECT name FROM sqlite_master
                 WHERE type='table' AND name NOT LIKE 'sqlite_%'
             """)
-            tables = {row[0] for row in cursor.fetchall()}
+            {row[0] for row in cursor.fetchall()}
             conn.close()
 
             # Check new columns exist

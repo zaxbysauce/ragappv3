@@ -4,37 +4,37 @@ FastAPI application with lifespan context manager.
 
 import logging
 
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from slowapi.middleware import SlowAPIMiddleware
 from starlette.responses import FileResponse
 
 from app.api.routes.admin import router as admin_router
+from app.api.routes.auth import router as auth_router
 from app.api.routes.chat import router as chat_router
 from app.api.routes.documents import router as documents_router
+from app.api.routes.documents import validation_exception_handler
 from app.api.routes.email import router as email_router
 from app.api.routes.eval import router as eval_router
+from app.api.routes.groups import router as groups_router
 from app.api.routes.health import router as health_router
 from app.api.routes.memories import router as memories_router
+from app.api.routes.organizations import router as organizations_router
 from app.api.routes.search import router as search_router
 from app.api.routes.settings import router as settings_router
-from app.api.routes.vaults import router as vaults_router
-from app.api.routes.auth import router as auth_router
 from app.api.routes.users import router as users_router
-from app.api.routes.vault_members import router as vault_members_router
 from app.api.routes.vault_members import (
     group_access_router as vault_group_access_router,
 )
-from app.api.routes.organizations import router as organizations_router
-from app.api.routes.groups import router as groups_router
+from app.api.routes.vault_members import router as vault_members_router
+from app.api.routes.vaults import router as vaults_router
 from app.config import settings
 from app.lifespan import lifespan
 from app.limiter import limiter
 from app.middleware.logging import LoggingMiddleware
 from app.middleware.maintenance import MaintenanceMiddleware
-from fastapi.exceptions import RequestValidationError
-from app.api.routes.documents import validation_exception_handler
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +123,7 @@ async def health_check():
 
 
 # Serve frontend static files
-from pathlib import Path
+from pathlib import Path  # noqa: E402
 
 static_dir = Path("/app/static")
 logger.info(

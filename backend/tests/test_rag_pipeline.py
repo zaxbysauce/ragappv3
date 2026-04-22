@@ -2,10 +2,9 @@
 
 import os
 import sys
-import asyncio
 import unittest
 from typing import Any, AsyncIterator, Dict, List, Optional
-from unittest.mock import MagicMock, AsyncMock, patch, Mock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -49,7 +48,7 @@ except ImportError:
     sys.modules['unstructured.documents'] = _unstructured.documents
     sys.modules['unstructured.documents.elements'] = _unstructured.documents.elements
 
-from app.services.rag_engine import RAGEngine, RAGSource
+from app.services.rag_engine import RAGEngine
 from app.services.reranking import RerankingService
 
 
@@ -91,7 +90,7 @@ class FakeVectorStore:
             dense_results = self._results[:limit]
             # Add some FTS-style results with 'score' field and _fts_status
             fts_results = [
-                {**r, "score": 0.7 + (i * 0.05), "_fts_status": "ok"} 
+                {**r, "score": 0.7 + (i * 0.05), "_fts_status": "ok"}
                 for i, r in enumerate(dense_results[:len(dense_results)//2])
             ]
             # Combine dense and FTS results with RRF
@@ -217,7 +216,7 @@ class TestRerankingService(unittest.IsolatedAsyncioTestCase):
             reranker_model="cross-encoder/ms-marco-MiniLM-L-6-v2",
             top_n=5
         )
-        
+
         # Verify URL is properly formatted (trailing slash removed)
         self.assertEqual(service.reranker_url, "http://localhost:8000")
         self.assertEqual(service.reranker_model, "cross-encoder/ms-marco-MiniLM-L-6-v2")
@@ -230,7 +229,7 @@ class TestRerankingService(unittest.IsolatedAsyncioTestCase):
             reranker_model="cross-encoder/ms-marco-MiniLM-L-6-v2",
             top_n=3
         )
-        
+
         self.assertEqual(service.reranker_url, "http://localhost:8000")
 
     def test_reranking_service_initialization_without_endpoint(self):
@@ -240,7 +239,7 @@ class TestRerankingService(unittest.IsolatedAsyncioTestCase):
             reranker_model="cross-encoder/ms-marco-MiniLM-L-6-v2",
             top_n=5
         )
-        
+
         self.assertEqual(service.reranker_url, "")
         self.assertEqual(service.reranker_model, "cross-encoder/ms-marco-MiniLM-L-6-v2")
 
@@ -254,34 +253,34 @@ class TestRerankingService(unittest.IsolatedAsyncioTestCase):
             {"index": 2, "score": 0.75}
         ]
         mock_response.raise_for_status = MagicMock()
-        
+
         mock_client = MagicMock()
         mock_client.post = AsyncMock(return_value=mock_response)
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=None)
-        
+
         service = RerankingService(
             reranker_url="http://localhost:8000",
             reranker_model="cross-encoder/ms-marco-MiniLM-L-6-v2",
             top_n=3
         )
-        
+
         chunks = [
             {"text": "First chunk"},
             {"text": "Second chunk"},
             {"text": "Third chunk"}
         ]
-        
+
         with patch('app.services.reranking.httpx.AsyncClient', return_value=mock_client):
             reranked_chunks, rerank_success = await service.rerank("test query", chunks)
-        
+
         self.assertTrue(rerank_success)
         # Verify results are sorted by score descending
         self.assertEqual(len(reranked_chunks), 3)
         self.assertEqual(reranked_chunks[0]["text"], "Second chunk")  # Highest score
         self.assertEqual(reranked_chunks[1]["text"], "First chunk")
         self.assertEqual(reranked_chunks[2]["text"], "Third chunk")
-        
+
         # Verify scores are attached
         self.assertAlmostEqual(reranked_chunks[0]["_rerank_score"], 0.95, places=2)
         self.assertAlmostEqual(reranked_chunks[1]["_rerank_score"], 0.85, places=2)
@@ -294,7 +293,7 @@ class TestRerankingService(unittest.IsolatedAsyncioTestCase):
             reranker_model="cross-encoder/ms-marco-MiniLM-L-6-v2",
             top_n=5
         )
-        
+
         reranked_chunks, rerank_success = await service.rerank("test query", [])
         self.assertEqual(reranked_chunks, [])
         # On empty chunks, rerank returns (chunks[:0], True) — empty chunks with success=True
@@ -307,10 +306,10 @@ class TestRerankingService(unittest.IsolatedAsyncioTestCase):
             reranker_model="cross-encoder/ms-marco-MiniLM-L-6-v2",
             top_n=5
         )
-        
+
         chunks = [{"text": "Single chunk"}]
         reranked_chunks, rerank_success = await service.rerank("test query", chunks)
-        
+
         # Single chunk bypasses reranker: returns (chunks, True)
         self.assertEqual(reranked_chunks, chunks)
         self.assertTrue(rerank_success)
@@ -322,22 +321,22 @@ class TestRerankingService(unittest.IsolatedAsyncioTestCase):
             reranker_model="cross-encoder/ms-marco-MiniLM-L-6-v2",
             top_n=3
         )
-        
+
         chunks = [
             {"text": "Python is a programming language"},
             {"text": "Java is also a programming language"},
             {"text": "Python supports async/await"}
         ]
-        
+
         # Mock the local model loading and scoring
         with patch('app.services.reranking._get_local_model') as mock_get_model:
             mock_model = MagicMock()
             # Scores: index 0=0.8, index 1=0.5, index 2=0.9
             mock_model.predict.return_value = [0.8, 0.5, 0.9]
             mock_get_model.return_value = mock_model
-            
+
             reranked_chunks, rerank_success = await service.rerank("test query", chunks)
-        
+
         self.assertTrue(rerank_success)
         # Verify results are sorted by score descending
         self.assertEqual(len(reranked_chunks), 3)
@@ -352,21 +351,21 @@ class TestRerankingService(unittest.IsolatedAsyncioTestCase):
             reranker_model="cross-encoder/ms-marco-MiniLM-L-6-v2",
             top_n=5
         )
-        
+
         chunks = [
             {"text": "Chunk A"},
             {"text": "Chunk B"},
             {"text": "Chunk C"}
         ]
-        
+
         # Mock model loading to return a model that raises an error on predict
         with patch('app.services.reranking._get_local_model') as mock_get_model:
             mock_model = MagicMock()
             mock_model.predict.side_effect = RuntimeError("Model scoring failed")
             mock_get_model.return_value = mock_model
-            
+
             reranked_chunks, rerank_success = await service.rerank("test query", chunks)
-        
+
         # On exception: returns (chunks[:n], False) — original chunks with success=False
         self.assertFalse(rerank_success)
         self.assertEqual(reranked_chunks, chunks[:5])  # Original chunks (up to top_n)
@@ -377,27 +376,27 @@ class TestRerankingService(unittest.IsolatedAsyncioTestCase):
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock(side_effect=Exception("HTTP Error"))
         mock_response.json = MagicMock()
-        
+
         mock_client = MagicMock()
         mock_client.post = AsyncMock(return_value=mock_response)
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=None)
-        
+
         service = RerankingService(
             reranker_url="http://localhost:8000",
             reranker_model="cross-encoder/ms-marco-MiniLM-L-6-v2",
             top_n=5
         )
-        
+
         chunks = [
             {"text": "Chunk A"},
             {"text": "Chunk B"},
             {"text": "Chunk C"}
         ]
-        
+
         with patch('app.services.reranking.httpx.AsyncClient', return_value=mock_client):
             reranked_chunks, rerank_success = await service.rerank("test query", chunks)
-        
+
         # On exception: returns (chunks[:n], False) — original chunks with success=False
         self.assertFalse(rerank_success)
         self.assertEqual(reranked_chunks, chunks[:5])
@@ -409,27 +408,27 @@ class TestRerankingService(unittest.IsolatedAsyncioTestCase):
             reranker_model="cross-encoder/ms-marco-MiniLM-L-6-v2",
             top_n=5
         )
-        
+
         chunks = [
             {"text": "A"}, {"text": "B"}, {"text": "C"},
             {"text": "D"}, {"text": "E"}, {"text": "F"}
         ]
-        
+
         mock_response = MagicMock()
         mock_response.json.return_value = [
             {"index": i, "score": 1.0 - i * 0.1} for i in range(len(chunks))
         ]
         mock_response.raise_for_status = MagicMock()
-        
+
         mock_client = MagicMock()
         mock_client.post = AsyncMock(return_value=mock_response)
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=None)
-        
+
         with patch('app.services.reranking.httpx.AsyncClient', return_value=mock_client):
             # Override top_n to 3
             reranked_chunks, rerank_success = await service.rerank("test query", chunks, top_n=3)
-        
+
         self.assertTrue(rerank_success)
         self.assertEqual(len(reranked_chunks), 3)
 
@@ -445,36 +444,36 @@ class TestHybridSearch(unittest.TestCase):
             {"text": "Dense result 2", "_distance": 0.2, "file_id": "d2"},
             {"text": "Dense result 3", "_distance": 0.3, "file_id": "d3"},
         ]
-        
+
         # Simulate FTS results (with score)
         fts_results = [
             {"text": "FTS result 1", "score": 0.9, "file_id": "f1"},
             {"text": "Dense result 1", "_distance": 0.1, "file_id": "d1"},  # Overlap!
             {"text": "FTS result 2", "score": 0.8, "file_id": "f2"},
         ]
-        
+
         # RRF fusion: score = 1/(rank_dense + 1) + 1/(rank_fts + 1)
         # d1: 1/(0+1) + 1/(1+1) = 1.5
         # f1: 1/(3+1) + 1/(0+1) = 1.25
         # d2: 1/(1+1) + 1/(3+1) = 1.0
         # f2: 1/(3+1) + 1/(2+1) = 0.583
         # d3: 1/(2+1) + 0 = 0.333
-        
+
         # Create hybrid results with both score types
         hybrid_results = []
         seen_ids = set()
-        
+
         # Add dense results first
         for i, r in enumerate(dense_results):
             hybrid_results.append(r.copy())
             seen_ids.add(r["file_id"])
-        
+
         # Add FTS results that aren't already in
         for r in fts_results:
             if r["file_id"] not in seen_ids:
                 hybrid_results.append(r.copy())
                 seen_ids.add(r["file_id"])
-        
+
         # Verify we have combined results
         self.assertEqual(len(hybrid_results), 5)  # d1, d2, d3, f1, f2
 
@@ -484,15 +483,15 @@ class TestHybridSearch(unittest.TestCase):
         dense_results = [
             {"text": "Best match", "_distance": 0.05, "file_id": "same"},
         ]
-        
+
         fts_results = [
             {"text": "Best match", "score": 0.95, "file_id": "same"},
         ]
-        
+
         # RRF score for overlapping result:
         # rank_dense=0, rank_fts=0
         # score = 1/(0+1) + 1/(0+1) = 2.0
-        
+
         self.assertEqual(len(dense_results), 1)
         self.assertEqual(len(fts_results), 1)
         self.assertEqual(dense_results[0]["file_id"], fts_results[0]["file_id"])
@@ -502,11 +501,11 @@ class TestHybridSearch(unittest.TestCase):
         dense_results = [
             {"text": "Dense only", "_distance": 0.1, "file_id": "dense_only"},
         ]
-        
+
         fts_results = [
             {"text": "FTS only", "score": 0.9, "file_id": "fts_only"},
         ]
-        
+
         # No overlap - each result gets only one component of RRF
         self.assertNotEqual(dense_results[0]["file_id"], fts_results[0]["file_id"])
 
@@ -524,12 +523,12 @@ class TestRAGEnginePipeline(unittest.IsolatedAsyncioTestCase):
             {"text": "Relevant chunk 4", "file_id": "doc4", "_distance": 0.4, "metadata": {}},
             {"text": "Relevant chunk 5", "file_id": "doc5", "_distance": 0.5, "metadata": {}},
         ]
-        
+
         fake_vector = FakeVectorStore(results=initial_results)
         fake_embedding = FakeEmbeddingService()
         fake_memory = FakeMemoryStore()
         fake_llm = FakeLLMClient(response="Answer based on retrieved chunks.")
-        
+
         # Create engine with reranking enabled
         engine = RAGEngine(
             embedding_service=fake_embedding,
@@ -538,19 +537,19 @@ class TestRAGEnginePipeline(unittest.IsolatedAsyncioTestCase):
             llm_client=fake_llm,
             reranking_service=None  # Will use default from settings
         )
-        
+
         # Enable reranking
         engine.reranking_enabled = True
         engine.initial_retrieval_top_k = 5
         engine.retrieval_top_k = 3
-        
+
         results = []
         async for msg in engine.query("test query", []):
             results.append(msg)
-        
+
         # Should have content and done messages
         self.assertEqual(len(results), 2)
-        
+
         # Check that we got results
         done_msg = results[-1]
         self.assertEqual(done_msg["type"], "done")
@@ -564,27 +563,27 @@ class TestRAGEnginePipeline(unittest.IsolatedAsyncioTestCase):
             {"text": "Result 1", "file_id": "doc1", "_distance": 0.1, "metadata": {}},
             {"text": "Result 2", "file_id": "doc2", "_distance": 0.2, "metadata": {}},
         ]
-        
+
         fake_vector = FakeVectorStore(results=initial_results)
         fake_embedding = FakeEmbeddingService()
         fake_memory = FakeMemoryStore()
         fake_llm = FakeLLMClient(response="Answer.")
-        
+
         engine = RAGEngine(
             embedding_service=fake_embedding,
             vector_store=fake_vector,
             memory_store=fake_memory,
             llm_client=fake_llm
         )
-        
+
         # Disable reranking
         engine.reranking_enabled = False
         engine.retrieval_top_k = 10
-        
+
         results = []
         async for msg in engine.query("test query", []):
             results.append(msg)
-        
+
         done_msg = results[-1]
         # Without reranking, should return up to initial_retrieval_top_k results
         self.assertLessEqual(len(done_msg["sources"]), 10)
@@ -594,37 +593,37 @@ class TestRAGEnginePipeline(unittest.IsolatedAsyncioTestCase):
         initial_results = [
             {"text": "Hybrid result", "file_id": "doc1", "_distance": 0.1, "metadata": {}},
         ]
-        
+
         fake_vector = FakeVectorStore(results=initial_results)
         fake_embedding = FakeEmbeddingService()
         fake_memory = FakeMemoryStore()
         fake_llm = FakeLLMClient(response="Answer.")
-        
+
         engine = RAGEngine(
             embedding_service=fake_embedding,
             vector_store=fake_vector,
             memory_store=fake_memory,
             llm_client=fake_llm
         )
-        
+
         # Enable hybrid search
         engine.hybrid_search_enabled = True
         engine.hybrid_alpha = 0.5
         engine.retrieval_top_k = 5
-        
+
         # Mock the vector store search to capture parameters
         original_search = fake_vector.search
         search_params = {}
-        
+
         def mock_search(*args, **kwargs):
             search_params.update(kwargs)
             return original_search(*args, **kwargs)
-        
+
         fake_vector.search = mock_search
-        
+
         async for _ in engine.query("test query", []):
             pass
-        
+
         # Verify hybrid search parameters were passed
         self.assertTrue(search_params.get("hybrid", False))
         # With Phase 2 BM25 FTS changes, hybrid_alpha stays at 0.5 when sparse embedding
@@ -636,35 +635,35 @@ class TestRAGEnginePipeline(unittest.IsolatedAsyncioTestCase):
         initial_results = [
             {"text": "Dense result", "file_id": "doc1", "_distance": 0.1, "metadata": {}},
         ]
-        
+
         fake_vector = FakeVectorStore(results=initial_results)
         fake_embedding = FakeEmbeddingService()
         fake_memory = FakeMemoryStore()
         fake_llm = FakeLLMClient(response="Answer.")
-        
+
         engine = RAGEngine(
             embedding_service=fake_embedding,
             vector_store=fake_vector,
             memory_store=fake_memory,
             llm_client=fake_llm
         )
-        
+
         # Disable hybrid search
         engine.hybrid_search_enabled = False
         engine.retrieval_top_k = 5
-        
+
         # Mock the vector store search to capture parameters
         search_params = {}
-        
+
         def mock_search(*args, **kwargs):
             search_params.update(kwargs)
             return []
-        
+
         fake_vector.search = mock_search
-        
+
         async for _ in engine.query("test query", []):
             pass
-        
+
         # Verify hybrid search was disabled
         self.assertFalse(search_params.get("hybrid", True))
 
@@ -672,19 +671,19 @@ class TestRAGEnginePipeline(unittest.IsolatedAsyncioTestCase):
         """Test that retrieval window expands to adjacent chunks."""
         # Use longer text to pass the 50-char minimum after dedup
         initial_results = [
-            {"id": "doc1_5", "text": "This is the main chunk with some additional content to ensure it passes the 50 character minimum threshold for context distillation.", "file_id": "doc1", "_distance": 0.1, 
+            {"id": "doc1_5", "text": "This is the main chunk with some additional content to ensure it passes the 50 character minimum threshold for context distillation.", "file_id": "doc1", "_distance": 0.1,
              "metadata": {"chunk_index": 5}},
         ]
-        
+
         fake_vector = FakeVectorStore(results=initial_results)
         fake_embedding = FakeEmbeddingService()
         fake_memory = FakeMemoryStore()
         fake_llm = FakeLLMClient(response="Answer.")
-        
+
         # Enable window expansion before creating engine
         fake_vector.retrieval_window = 2
         fake_vector.retrieval_top_k = 10
-        
+
         # Mock get_chunks_by_uid to return adjacent chunks using patch
         # Note: The RAGEngine uses "id" field for lookup, so we need to include it
         adjacent_chunks = [
@@ -693,10 +692,10 @@ class TestRAGEnginePipeline(unittest.IsolatedAsyncioTestCase):
             {"id": "doc1_6", "text": "This is chunk 6 with sufficient content to pass the 50 character minimum after deduplication.", "file_id": "doc1", "_distance": 0.18,
              "metadata": {"chunk_index": 6}},
         ]
-        
+
         async def mock_get_chunks_by_uid(chunk_uids):
             return adjacent_chunks
-        
+
         with patch.object(fake_vector, 'get_chunks_by_uid', side_effect=mock_get_chunks_by_uid):
             engine = RAGEngine(
                 embedding_service=fake_embedding,
@@ -704,24 +703,24 @@ class TestRAGEnginePipeline(unittest.IsolatedAsyncioTestCase):
                 memory_store=fake_memory,
                 llm_client=fake_llm
             )
-            
+
             # Enable window expansion and disable hybrid search
             engine.hybrid_search_enabled = False
             engine.retrieval_window = 2
             engine.retrieval_top_k = 10
-            
+
             results = []
             async for msg in engine.query("test query", []):
                 results.append(msg)
-            
+
             done_msg = results[-1]
             # Debug: print what we got
             print(f"DEBUG: Got {len(done_msg.get('sources', []))} sources")
             for s in done_msg.get("sources", []):
                 print(f"  Source: {s.file_id}, chunk_index={s.metadata.get('chunk_index')}")
-            
+
             # Should include main chunk plus adjacent chunks (3 total)
-            # Note: This test may fail due to distance threshold filtering. 
+            # Note: This test may fail due to distance threshold filtering.
             # If it fails, the issue is that document_retrieval filter_relevant
             # is removing all results based on max_distance_threshold.
             # The test has been updated to show debug info.
@@ -740,18 +739,18 @@ class TestRAGEnginePipeline(unittest.IsolatedAsyncioTestCase):
         fake_embedding = FakeEmbeddingService()
         fake_memory = FakeMemoryStore()
         fake_llm = FakeLLMClient(response="No relevant documents found.")
-        
+
         engine = RAGEngine(
             embedding_service=fake_embedding,
             vector_store=fake_vector,
             memory_store=fake_memory,
             llm_client=fake_llm
         )
-        
+
         results = []
         async for msg in engine.query("", []):
             results.append(msg)
-        
+
         # Should still return a response
         self.assertGreater(len(results), 0)
 
@@ -763,21 +762,21 @@ class TestRAGEnginePipeline(unittest.IsolatedAsyncioTestCase):
         fake_embedding = FakeEmbeddingService()
         fake_memory = FakeMemoryStore()
         fake_llm = FakeLLMClient(response="Answer.")
-        
+
         engine = RAGEngine(
             embedding_service=fake_embedding,
             vector_store=fake_vector,
             memory_store=fake_memory,
             llm_client=fake_llm
         )
-        
+
         # Enable maintenance mode
         engine.maintenance_mode = True
-        
+
         results = []
         async for msg in engine.query("test query", []):
             results.append(msg)
-        
+
         # Should have fallback message
         fallback_messages = [m for m in results if m.get("type") == "fallback"]
         self.assertGreater(len(fallback_messages), 0)
