@@ -479,6 +479,8 @@ export interface ChatSession {
   created_at: string;
   updated_at: string;
   message_count?: number;
+  forked_from_session_id?: number | null;
+  fork_message_index?: number | null;
 }
 
 export interface ChatSessionMessage {
@@ -846,6 +848,19 @@ export async function updateChatSession(sessionId: number, title: string): Promi
 
 export async function deleteChatSession(sessionId: number): Promise<void> {
   await apiClient.delete(`/chat/sessions/${sessionId}`);
+}
+
+export interface ForkSessionResponse extends ChatSessionDetail {
+  forked_from_session_id: number;
+  fork_message_index: number;
+}
+
+export async function forkChatSession(sessionId: number, messageIndex: number): Promise<ForkSessionResponse> {
+  const response = await apiClient.post<ForkSessionResponse>(
+    `/chat/sessions/${sessionId}/fork`,
+    { message_index: messageIndex }
+  );
+  return response.data;
 }
 
 // ============================================================================

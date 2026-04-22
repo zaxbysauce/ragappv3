@@ -1,15 +1,18 @@
 import { motion } from "framer-motion";
-import { User, Bot, AlertCircle } from "lucide-react";
+import { User, Bot, AlertCircle, GitBranch } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MessageContent } from "./MessageContent";
+import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Message } from "@/stores/useChatStore";
 
 interface MessageBubbleProps {
   message: Message;
   isStreaming?: boolean;
+  onFork?: () => void;
 }
 
-export function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
+export function MessageBubble({ message, isStreaming, onFork }: MessageBubbleProps) {
   const isUser = message.role === "user";
 
   return (
@@ -18,7 +21,7 @@ export function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3 }}
       className={cn(
-        "flex gap-3 p-4",
+        "group flex gap-3 p-4",
         isUser ? "bg-primary/10" : "bg-muted/30"
       )}
     >
@@ -61,6 +64,29 @@ export function MessageBubble({ message, isStreaming }: MessageBubbleProps) {
         {message.stopped && !message.error && (
           <div className="mt-3 inline-flex items-center gap-2 rounded-md bg-muted border border-border px-3 py-1.5">
             <span className="text-xs font-medium text-muted-foreground">Stopped</span>
+          </div>
+        )}
+
+        {onFork && (
+          <div className="flex items-center mt-2 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity duration-200">
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    onClick={onFork}
+                    aria-label="Branch conversation from here"
+                  >
+                    <GitBranch className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>Branch from here</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </div>
         )}
       </div>

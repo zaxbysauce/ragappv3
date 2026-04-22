@@ -3,7 +3,7 @@
 
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { motion } from "framer-motion";
-import { Bot, Copy, Check, RotateCcw, Bug, ChevronRight, FileText, ThumbsUp, ThumbsDown, AlertCircle } from "lucide-react";
+import { Bot, Copy, Check, RotateCcw, Bug, ChevronRight, FileText, ThumbsUp, ThumbsDown, AlertCircle, GitBranch } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -41,6 +41,8 @@ interface AssistantMessageProps {
   feedback?: "up" | "down" | null;
   /** Callback when feedback is changed */
   onFeedback?: (feedback: "up" | "down" | null) => void;
+  /** Callback to fork the conversation from this message */
+  onFork?: () => void;
 }
 
 interface CitationChipProps {
@@ -246,6 +248,8 @@ interface ActionBarProps {
   onFeedback?: (feedback: "up" | "down" | null) => void;
   /** Message ID for localStorage key */
   messageId?: string;
+  /** Callback to fork the conversation from this message */
+  onFork?: () => void;
 }
 
 function ActionBar({
@@ -261,8 +265,10 @@ function ActionBar({
   feedback: externalFeedback,
   onFeedback,
   messageId,
+  onFork,
 }: ActionBarProps) {
   const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
   const [internalFeedback, setInternalFeedback] = useState<"up" | "down" | null>(null);
 
   // Use external feedback if provided, otherwise use internal state
@@ -308,12 +314,25 @@ function ActionBar({
 
   const handleCopy = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(content);
+      if (navigator.clipboard) {
+        await navigator.clipboard.writeText(content);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = content;
+        ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        if (!ok) throw new Error('execCommand failed');
+      }
       setCopied(true);
       onCopy?.();
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      // Silently fail if clipboard is not available
+      setCopyFailed(true);
+      setTimeout(() => setCopyFailed(false), 2000);
     }
   }, [content, onCopy]);
 
@@ -340,17 +359,19 @@ function ActionBar({
                 size="icon"
                 className="h-7 w-7"
                 onClick={handleCopy}
-                aria-label={copied ? "Copied" : "Copy message"}
+                aria-label={copied ? "Copied" : copyFailed ? "Copy failed" : "Copy message"}
               >
                 {copied ? (
                   <Check className="h-3.5 w-3.5 text-success" />
+                ) : copyFailed ? (
+                  <AlertCircle className="h-3.5 w-3.5 text-destructive" />
                 ) : (
                   <Copy className="h-3.5 w-3.5" />
                 )}
               </Button>
             </TooltipTrigger>
             <TooltipContent>
-              <p>{copied ? "Copied!" : "Copy"}</p>
+              <p>{copied ? "Copied!" : copyFailed ? "Copy failed" : "Copy"}</p>
             </TooltipContent>
           </Tooltip>
         )}
@@ -370,6 +391,25 @@ function ActionBar({
             </TooltipTrigger>
             <TooltipContent>
               <p>Retry</p>
+            </TooltipContent>
+          </Tooltip>
+        )}
+
+        {onFork && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                onClick={onFork}
+                aria-label="Branch conversation from here"
+              >
+                <GitBranch className="h-3.5 w-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>Branch from here</p>
             </TooltipContent>
           </Tooltip>
         )}
@@ -452,6 +492,7 @@ export function AssistantMessage({
   onDebugToggle,
   feedback: externalFeedback,
   onFeedback,
+  onFork,
 }: AssistantMessageProps) {
   const [isDebugActive, setIsDebugActive] = useState(false);
   const { openRightPane, setSelectedEvidenceSource, setActiveRightTab } = useChatShellStore();
@@ -562,7 +603,7 @@ export function AssistantMessage({
         {/* Header */}
         <div className="flex items-center gap-2 mb-1">
           <span className="font-semibold text-sm">Assistant</span>
-          {isStreaming && (
+          {isStreaming && !message.content && (
             <div className="flex items-center gap-1.5">
               <span className="text-xs font-medium text-primary/70">Thinking</span>
               <span className="flex items-center gap-0.5">
@@ -630,6 +671,7 @@ export function AssistantMessage({
             feedback={externalFeedback}
             onFeedback={onFeedback}
             messageId={message.id}
+            onFork={onFork}
           />
         )}
 
