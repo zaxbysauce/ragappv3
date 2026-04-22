@@ -1,4 +1,4 @@
-import axios from "axios";
+import axios, { AxiosRequestHeaders } from "axios";
 import { setChatHistory as storageSetChatHistory, getChatHistory as storageGetChatHistory } from "./storage";
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || "/api";
@@ -51,21 +51,23 @@ export async function ensureCsrfToken(): Promise<string> {
   }
 
   if (!_csrfFetchPromise) {
-    _csrfFetchPromise = fetch(`${API_BASE_URL}/csrf-token`, { credentials: "include" })
+    const newPromise: Promise<string> = fetch(`${API_BASE_URL}/csrf-token`, { credentials: "include" })
       .then(async (resp) => {
         if (!resp.ok) throw new Error("Failed to fetch CSRF token");
         const data = await resp.json();
         if (!data.csrf_token || typeof data.csrf_token !== "string") {
           throw new Error("CSRF token missing from response");
         }
-        _csrfToken = data.csrf_token;
-        return _csrfToken;
-      })
-      .finally(() => {
-        _csrfFetchPromise = null;
+        const token: string = data.csrf_token;
+        _csrfToken = token;
+        return token;
       });
+    _csrfFetchPromise = newPromise;
+    newPromise.finally(() => {
+      _csrfFetchPromise = null;
+    });
   }
-  return _csrfFetchPromise;
+  return _csrfFetchPromise as Promise<string>;
 }
 
 export function attachCsrfInterceptor(instance: ReturnType<typeof axios.create>): void {
@@ -75,7 +77,7 @@ export function attachCsrfInterceptor(instance: ReturnType<typeof axios.create>)
       const token = await ensureCsrfToken();
       if (token) {
         if (!config.headers) {
-          config.headers = {};
+          config.headers = {} as AxiosRequestHeaders;
         }
         config.headers["X-CSRF-Token"] = token;
       }
