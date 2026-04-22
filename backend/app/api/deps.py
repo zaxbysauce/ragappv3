@@ -11,6 +11,9 @@ from typing import TYPE_CHECKING
 from fastapi import Cookie, Depends, Header, HTTPException, Request
 
 from app.config import Settings, settings
+from app.models.database import SQLiteConnectionPool, get_pool
+from app.security import get_csrf_manager  # noqa: F401
+from app.services.auth_service import decode_access_token
 
 
 class UserRole(IntEnum):
@@ -28,9 +31,7 @@ class UserRole(IntEnum):
             return cls[role_name.upper()].value
         except (KeyError, AttributeError):
             return 0
-from app.models.database import SQLiteConnectionPool, get_pool  # noqa: E402
-from app.security import get_csrf_manager  # noqa: E402, F401  # re-exported for app.api.routes.settings
-from app.services.auth_service import decode_access_token  # noqa: E402
+
 
 # Lazy imports — services are only loaded when their getter is actually called.
 # This prevents heavy imports (unstructured, aioimaplib, torch, etc.) from
