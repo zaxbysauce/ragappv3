@@ -343,6 +343,7 @@ def run_migrations(sqlite_path: str) -> None:
     migrate_add_vault_permission_columns(sqlite_path)
     migrate_vault_paths(sqlite_path)
     migrate_add_org_slug_column(sqlite_path)
+    migrate_add_fork_columns(sqlite_path)
 
     # Add partial unique index for duplicate hash detection (HIGH-10)
     # Wrapped in IntegrityError handler: existing databases may have duplicate
@@ -653,6 +654,25 @@ def migrate_vault_paths(sqlite_path: str) -> None:
             except (OSError, shutil.Error) as e:
                 logger.warning(f"Failed to migrate vault '{name}' (ID {vault_id}): {e}")
                 # Continue with other vaults, don't raise
+    finally:
+        conn.close()
+
+
+def migrate_add_fork_columns(sqlite_path: str) -> None:
+    """Migration: Add forked_from_session_id and fork_message_index to chat_sessions."""
+    conn = sqlite3.connect(sqlite_path)
+    try:
+        cursor = conn.execute("PRAGMA table_info(chat_sessions)")
+        columns = {row[1] for row in cursor.fetchall()}
+        if "forked_from_session_id" not in columns:
+            conn.execute(
+                "ALTER TABLE chat_sessions ADD COLUMN forked_from_session_id INTEGER"
+            )
+        if "fork_message_index" not in columns:
+            conn.execute(
+                "ALTER TABLE chat_sessions ADD COLUMN fork_message_index INTEGER"
+            )
+        conn.commit()
     finally:
         conn.close()
 

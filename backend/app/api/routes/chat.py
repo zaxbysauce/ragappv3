@@ -84,6 +84,12 @@ class UpdateSessionRequest(BaseModel):
     title: str
 
 
+class ForkSessionRequest(BaseModel):
+    """Request model for forking a chat session from a specific message index."""
+
+    message_index: int = Field(..., ge=0, description="Index of the last message to include in the fork (0-based)")
+
+
 def stream_chat_response(
     message: str,
     history: List[Dict[str, Any]],
@@ -315,7 +321,7 @@ async def list_sessions(
     # Build single JOIN query with optional vault_id filter to avoid N+1
     if vault_id is not None:
         query = """
-            SELECT s.id, s.vault_id, s.title, s.created_at, s.updated_at, COUNT(m.id) as message_count
+            SELECT s.id, s.vault_id, s.title, s.created_at, s.updated_at, COUNT(m.id) as message_count, s.forked_from_session_id, s.fork_message_index
             FROM chat_sessions s
             LEFT JOIN chat_messages m ON m.session_id = s.id
             WHERE s.vault_id = ?
@@ -325,7 +331,7 @@ async def list_sessions(
         params = (vault_id,)
     else:
         query = """
-            SELECT s.id, s.vault_id, s.title, s.created_at, s.updated_at, COUNT(m.id) as message_count
+            SELECT s.id, s.vault_id, s.title, s.created_at, s.updated_at, COUNT(m.id) as message_count, s.forked_from_session_id, s.fork_message_index
             FROM chat_sessions s
             LEFT JOIN chat_messages m ON m.session_id = s.id
             GROUP BY s.id
@@ -336,7 +342,7 @@ async def list_sessions(
     result = await asyncio.to_thread(conn.execute, query, params)
     rows = await asyncio.to_thread(result.fetchall)
 
-    # Map rows to dicts (message_count is now the 6th column, index 5)
+    # Map rows to dicts
     sessions_with_count = []
     for row in rows:
         sessions_with_count.append(
@@ -347,6 +353,8 @@ async def list_sessions(
                 "created_at": row[3],
                 "updated_at": row[4],
                 "message_count": row[5],
+                "forked_from_session_id": row[6],
+                "fork_message_index": row[7],
             }
         )
 
@@ -458,6 +466,87 @@ async def create_session(
         "title": row[2],
         "created_at": row[3],
         "updated_at": row[4],
+    }
+
+
+@router.post("/chat/sessions/{session_id}/fork")
+async def fork_session(
+    session_id: int,
+    request: ForkSessionRequest,
+    conn: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_active_user),
+):
+    """
+    Fork a chat session from a specific message index.
+
+    Creates a new session containing messages 0..message_index (inclusive)
+    from the original session, preserving vault context.
+    """
+    # Fetch original session
+    session_result = await asyncio.to_thread(
+        conn.execute,
+        "SELECT id, vault_id, title FROM chat_sessions WHERE id = ?",
+        (session_id,),
+    )
+    session_row = await asyncio.to_thread(session_result.fetchone)
+    if session_row is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    vault_id = session_row[1]
+    if not await evaluate_policy(user, "vault", vault_id, "write"):
+        raise HTTPException(status_code=403, detail="No write access to this vault")
+
+    # Fetch messages up to message_index
+    messages_result = await asyncio.to_thread(
+        conn.execute,
+        "SELECT role, content, sources, created_at FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC, id ASC",
+        (session_id,),
+    )
+    all_rows = await asyncio.to_thread(messages_result.fetchall)
+    if request.message_index >= len(all_rows):
+        raise HTTPException(
+            status_code=400,
+            detail=f"message_index {request.message_index} is out of bounds for session with {len(all_rows)} messages",
+        )
+    forked_rows = all_rows[: request.message_index + 1]
+
+    # Create new forked session
+    fork_title = f"Branch of {session_row[2] or 'conversation'}"
+    cursor = await asyncio.to_thread(
+        conn.execute,
+        "INSERT INTO chat_sessions (vault_id, title, forked_from_session_id, fork_message_index, created_at, updated_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+        (vault_id, fork_title, session_id, request.message_index),
+    )
+    await asyncio.to_thread(conn.commit)
+    new_session_id = cursor.lastrowid
+
+    # Copy messages into the new session
+    for row in forked_rows:
+        await asyncio.to_thread(
+            conn.execute,
+            "INSERT INTO chat_messages (session_id, role, content, sources, created_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)",
+            (new_session_id, row[0], row[1], row[2]),
+        )
+    await asyncio.to_thread(conn.commit)
+
+    # Return new session info with copied messages
+    messages = []
+    for row in forked_rows:
+        sources = None
+        if row[2]:
+            try:
+                sources = json.loads(row[2])
+            except json.JSONDecodeError:
+                sources = []
+        messages.append({"role": row[0], "content": row[1], "sources": sources})
+
+    return {
+        "id": new_session_id,
+        "vault_id": vault_id,
+        "title": fork_title,
+        "forked_from_session_id": session_id,
+        "fork_message_index": request.message_index,
+        "messages": messages,
     }
 
 

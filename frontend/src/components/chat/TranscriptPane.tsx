@@ -25,11 +25,12 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { cn } from "@/lib/utils";
 import { MessageBubble } from "./MessageBubble";
 import { AssistantMessage } from "./AssistantMessage";
-import { WaitingIndicator } from "./WaitingIndicator";
 import { useChatStore } from "@/stores/useChatStore";
 import { useVaultStore } from "@/stores/useVaultStore";
 import { useSendMessage, MAX_INPUT_LENGTH } from "@/hooks/useSendMessage";
 import { useChatHistory } from "@/hooks/useChatHistory";
+import { forkChatSession } from "@/lib/api";
+import { toast } from "sonner";
 
 // =============================================================================
 // TYPES & INTERFACES
@@ -488,7 +489,7 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const navigate = useNavigate();
-  const { messages, isStreaming, setInput, setMessages } = useChatStore();
+  const { messages, isStreaming, setInput, setMessages, loadChat } = useChatStore();
   const { getActiveVault } = useVaultStore();
   const activeVault = getActiveVault();
   const vaultId = useVaultStore((state) => state.activeVaultId);
@@ -502,10 +503,6 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [showDebug, setShowDebug] = useState(false);
 
-  // Waiting indicator state with anti-flicker debounce
-  const [isWaitingForResponse, setIsWaitingForResponse] = useState(false);
-  const waitingDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   // Check if vault has indexed documents (using file_count from Vault interface)
   const hasIndexedDocs = activeVault ? activeVault.file_count > 0 : false;
 
@@ -518,59 +515,14 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
     measureElement: (el) => el?.getBoundingClientRect().height ?? 0,
   });
 
-  // Auto-scroll to bottom on new messages only if user is already at bottom
+  // Auto-scroll to bottom on new messages/content if user is already at bottom
   useEffect(() => {
-    if (isAtBottom && messages.length > 0 && scrollRef.current) {
+    if (isAtBottom && messages.length > 0) {
       requestAnimationFrame(() => {
-        virtualizer.scrollToIndex(messages.length - 1, { align: 'end' });
+        virtualizer.scrollToIndex(messages.length - 1, { align: 'end', behavior: 'auto' });
       });
     }
-  }, [messages, isStreaming, isAtBottom, virtualizer]);
-
-  // Scroll to bottom when waiting indicator appears
-  useEffect(() => {
-    if (isWaitingForResponse && isAtBottom && messages.length > 0 && scrollRef.current) {
-      requestAnimationFrame(() => {
-        if (scrollRef.current) {
-          scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-        }
-      });
-    }
-  }, [isWaitingForResponse, isAtBottom, messages.length]);
-
-  // Re-measure virtual items during streaming to handle growing content
-  useEffect(() => {
-    if (isStreaming) {
-      virtualizer.measure();
-    }
-  }, [isStreaming, messages, virtualizer]);
-
-  // Anti-flicker: only show waiting indicator after 100ms of streaming
-  // Use hasShownWaitingRef to prevent rapid toggles from preventing indicator from showing
-  const hasShownWaitingRef = useRef(false);
-
-  useEffect(() => {
-    if (isStreaming) {
-      if (!hasShownWaitingRef.current) {
-        waitingDebounceRef.current = setTimeout(() => {
-          setIsWaitingForResponse(true);
-          hasShownWaitingRef.current = true;
-        }, 100);
-      }
-    } else {
-      if (waitingDebounceRef.current && !hasShownWaitingRef.current) {
-        clearTimeout(waitingDebounceRef.current);
-        waitingDebounceRef.current = null;
-      }
-      setIsWaitingForResponse(false);
-      hasShownWaitingRef.current = false;
-    }
-    return () => {
-      if (waitingDebounceRef.current) {
-        clearTimeout(waitingDebounceRef.current);
-      }
-    };
-  }, [isStreaming]);
+  }, [messages, isAtBottom, virtualizer]);
 
   // Auto-focus chat input on mount (only if no dialog/modal is open)
   useEffect(() => {
@@ -586,7 +538,7 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
 
     const { scrollTop, scrollHeight, clientHeight } = container;
     const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
-    const atBottom = distanceFromBottom < 100;
+    const atBottom = distanceFromBottom < 150;
 
     setIsAtBottom(atBottom);
     setShowScrollButton(!atBottom);
@@ -625,6 +577,27 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
       handleSend();
     }
   };
+
+  // Handle fork - create a new session branching from a specific message index
+  const handleFork = useCallback(async (messageIndex: number) => {
+    const { activeChatId } = useChatStore.getState();
+    if (!activeChatId) return;
+    try {
+      const forked = await forkChatSession(parseInt(activeChatId), messageIndex);
+      const forkMessages = forked.messages.map((m, i) => ({
+        id: String(i),
+        role: m.role as "user" | "assistant",
+        content: m.content,
+        sources: m.sources ?? undefined,
+      }));
+      loadChat(String(forked.id), forkMessages);
+      await refreshHistory();
+      navigate(`/chat/${forked.id}`);
+    } catch (err) {
+      console.error("Fork failed:", err);
+      toast.error("Failed to branch conversation. Please try again.");
+    }
+  }, [loadChat, refreshHistory, navigate]);
 
   // Handle debug toggle
   const handleDebugToggle = () => {
@@ -695,34 +668,21 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
                             message={message}
                             isStreaming={isAssistantStreaming}
                             showDebug={showDebug}
-                            onCopy={() => { navigator.clipboard.writeText(message.content); }}
+                            onCopy={undefined}
                             onRetry={handleRetry}
                             onDebugToggle={handleDebugToggle}
+                            onFork={!isStreaming ? () => handleFork(virtualItem.index) : undefined}
                           />
                         ) : (
                           <MessageBubble
                             message={message}
                             isStreaming={isAssistantStreaming}
+                            onFork={!isStreaming ? () => handleFork(virtualItem.index) : undefined}
                           />
                         )}
                       </div>
                     );
                   })}
-                    {/* WaitingIndicator positioned at the bottom of the virtualized content */}
-                    <AnimatePresence>
-                      {isWaitingForResponse && messages.length > 0 && messages[messages.length - 1].role === "assistant" && !messages[messages.length - 1].content && (
-                        <div
-                          style={{
-                            position: 'absolute',
-                            top: virtualizer.getTotalSize(),
-                            left: 0,
-                            width: '100%',
-                          }}
-                        >
-                          <WaitingIndicator />
-                        </div>
-                      )}
-                    </AnimatePresence>
                   </div>
               </>
             )}
