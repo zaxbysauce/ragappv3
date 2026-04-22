@@ -13,7 +13,6 @@ from pydantic import BaseModel, Field
 from app.api.deps import get_embedding_service, require_admin_role
 from app.services.embeddings import EmbeddingService
 
-
 router = APIRouter()
 logger = logging.getLogger(__name__)
 

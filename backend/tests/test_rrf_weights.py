@@ -1,6 +1,7 @@
 """Tests for RRF weights parameter in fusion.py."""
 
 import pytest
+
 from app.utils.fusion import rrf_fuse
 
 

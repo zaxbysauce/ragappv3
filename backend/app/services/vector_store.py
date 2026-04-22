@@ -4,18 +4,19 @@ LanceDB vector store service for semantic search.
 
 import asyncio
 import json
+import logging
 import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, cast
+
 import lancedb
-import pyarrow as pa
 import numpy as np
-import logging
+import pyarrow as pa
+from lancedb.index import FTS, IvfPq
 
 from app.config import settings
 from app.utils.fusion import rrf_fuse
-from lancedb.index import IvfPq, FTS
 
 logger = logging.getLogger(__name__)
 
@@ -773,7 +774,7 @@ class VectorStore:
             # If hybrid disabled, return dense results only
             if not hybrid or not query_text:
                 logger.debug(
-                    f"Dense-only search (hybrid disabled or no query text)"
+                    "Dense-only search (hybrid disabled or no query text)"
                 )
                 return dense_results
 

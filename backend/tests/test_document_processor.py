@@ -7,7 +7,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -51,13 +50,13 @@ except ImportError:
     sys.modules['unstructured.documents'] = _unstructured.documents
     sys.modules['unstructured.documents.elements'] = _unstructured.documents.elements
 
-from app.models.database import init_db, SQLiteConnectionPool
+from app.config import settings
+from app.models.database import SQLiteConnectionPool, init_db
 from app.services.document_processor import (
     DocumentProcessor,
     DuplicateFileError,
-    ProcessedDocument
+    ProcessedDocument,
 )
-from app.config import settings
 
 
 class TestDocumentProcessor(unittest.TestCase):

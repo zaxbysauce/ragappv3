@@ -15,14 +15,10 @@ Tests attack vectors:
 import os
 import sqlite3
 import tempfile
-import json
-import threading
-import time
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
-import pytest
 import jwt
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -123,7 +119,6 @@ def get_expired_token(user_id: int, username: str, role: str) -> str:
 
 def get_malformed_token_wrong_algorithm(user_id: int, username: str, role: str) -> str:
     """Generate a token with wrong algorithm (algorithm=none attack)."""
-    from app.config import settings
 
     expires = datetime.now(timezone.utc) + timedelta(hours=1)
     payload = {
@@ -180,9 +175,9 @@ class TestSQLInjection:
         )
 
         # Create app
-        from app.api.routes.users import router as users_router
-        from app.models.database import get_pool, SQLiteConnectionPool
         from app.api import deps
+        from app.api.routes.users import router as users_router
+        from app.models.database import SQLiteConnectionPool
 
         app = FastAPI()
         app.include_router(users_router)
@@ -306,9 +301,9 @@ class TestXSSPrevention:
         )
 
         # Create app
-        from app.api.routes.users import router as users_router
-        from app.models.database import get_pool, SQLiteConnectionPool
         from app.api import deps
+        from app.api.routes.users import router as users_router
+        from app.models.database import SQLiteConnectionPool
 
         app = FastAPI()
         app.include_router(users_router)
@@ -386,13 +381,12 @@ class TestXSSPrevention:
         """Test XSS in full_name field."""
         # Create user with XSS in full_name
         malicious_full_name = "<img src=x onerror=alert(1)>"
-        cursor = self.conn.execute(
+        self.conn.execute(
             """INSERT INTO users (username, hashed_password, full_name, role, is_active)
                VALUES (?, ?, ?, ?, ?)""",
             ("testxss2", hash_password("pass"), malicious_full_name, "member", 1),
         )
         self.conn.commit()
-        test_user_id = cursor.lastrowid
 
         token = get_token(self.admin_id, "admin", "admin")
         response = self.client.get(
@@ -433,9 +427,9 @@ class TestMassAssignment:
             self.conn, "member", "pass123", "member", "Regular Member"
         )
 
-        from app.api.routes.users import router as users_router
-        from app.models.database import get_pool, SQLiteConnectionPool
         from app.api import deps
+        from app.api.routes.users import router as users_router
+        from app.models.database import SQLiteConnectionPool
 
         app = FastAPI()
         app.include_router(users_router)
@@ -534,9 +528,9 @@ class TestNegativeAndBoundaryUserIds:
             self.conn, "admin", "pass123", "admin", "Admin User"
         )
 
-        from app.api.routes.users import router as users_router
-        from app.models.database import get_pool, SQLiteConnectionPool
         from app.api import deps
+        from app.api.routes.users import router as users_router
+        from app.models.database import SQLiteConnectionPool
 
         app = FastAPI()
         app.include_router(users_router)
@@ -668,9 +662,9 @@ class TestOversizedParameters:
         for i in range(50):
             create_user(self.conn, f"user{i}", "pass123", "member")
 
-        from app.api.routes.users import router as users_router
-        from app.models.database import get_pool, SQLiteConnectionPool
         from app.api import deps
+        from app.api.routes.users import router as users_router
+        from app.models.database import SQLiteConnectionPool
 
         app = FastAPI()
         app.include_router(users_router)
@@ -777,9 +771,9 @@ class TestEmptyAndMalformedBodies:
             self.conn, "member", "pass123", "member", "Regular Member"
         )
 
-        from app.api.routes.users import router as users_router
-        from app.models.database import get_pool, SQLiteConnectionPool
         from app.api import deps
+        from app.api.routes.users import router as users_router
+        from app.models.database import SQLiteConnectionPool
 
         app = FastAPI()
         app.include_router(users_router)
@@ -944,9 +938,9 @@ class TestJWTTokenManipulation:
             self.conn, "member", "pass123", "member", "Regular Member"
         )
 
-        from app.api.routes.users import router as users_router
-        from app.models.database import get_pool, SQLiteConnectionPool
         from app.api import deps
+        from app.api.routes.users import router as users_router
+        from app.models.database import SQLiteConnectionPool
 
         app = FastAPI()
         app.include_router(users_router)
@@ -1030,7 +1024,6 @@ class TestJWTTokenManipulation:
 
     def test_tampered_token_signature(self):
         """Token with tampered signature should be rejected."""
-        from app.config import settings
 
         # Get a valid token then modify the signature
         valid_token = get_token(self.admin_id, "admin", "admin")
@@ -1091,9 +1084,9 @@ class TestLastSuperadminRaceCondition:
             self.conn, "admin", "pass123", "admin", "Admin User"
         )
 
-        from app.api.routes.users import router as users_router
-        from app.models.database import get_pool, SQLiteConnectionPool
         from app.api import deps
+        from app.api.routes.users import router as users_router
+        from app.models.database import SQLiteConnectionPool
 
         app = FastAPI()
         app.include_router(users_router)
@@ -1217,9 +1210,9 @@ class TestInvalidRoleValues:
             self.conn, "member", "pass123", "member", "Regular Member"
         )
 
-        from app.api.routes.users import router as users_router
-        from app.models.database import get_pool, SQLiteConnectionPool
         from app.api import deps
+        from app.api.routes.users import router as users_router
+        from app.models.database import SQLiteConnectionPool
 
         app = FastAPI()
         app.include_router(users_router)
@@ -1333,9 +1326,9 @@ class TestInvalidIsActiveValues:
             self.conn, "member", "pass123", "member", "Regular Member"
         )
 
-        from app.api.routes.users import router as users_router
-        from app.models.database import get_pool, SQLiteConnectionPool
         from app.api import deps
+        from app.api.routes.users import router as users_router
+        from app.models.database import SQLiteConnectionPool
 
         app = FastAPI()
         app.include_router(users_router)

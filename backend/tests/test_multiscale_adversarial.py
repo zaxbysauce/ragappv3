@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.services.vector_store import VectorStore, _MULTI_SCALE_CONCURRENCY
+from app.services.vector_store import _MULTI_SCALE_CONCURRENCY, VectorStore
 
 
 class TestAdversarialLargeScaleCount(unittest.IsolatedAsyncioTestCase):
@@ -143,7 +143,7 @@ class TestAdversarialScaleStringParsing(unittest.IsolatedAsyncioTestCase):
             mock_settings.multi_scale_indexing_enabled = True
             mock_settings.multi_scale_chunk_sizes = " 512 , 1024 , 2048 "
 
-            results = await store.search(embedding=[0.0] * self.embedding_dim, limit=10)
+            await store.search(embedding=[0.0] * self.embedding_dim, limit=10)
 
         # Should only have 3 unique scales (whitespace stripped)
         self.assertEqual(len(queried_scales), 3)
@@ -180,7 +180,7 @@ class TestAdversarialScaleStringParsing(unittest.IsolatedAsyncioTestCase):
             mock_settings.multi_scale_indexing_enabled = True
             mock_settings.multi_scale_chunk_sizes = "512,512,1024,1024"
 
-            results = await store.search(embedding=[0.0] * self.embedding_dim, limit=10)
+            await store.search(embedding=[0.0] * self.embedding_dim, limit=10)
 
         # Code should search all 4 entries (no deduplication)
         self.assertEqual(len(queried_scales), 4)
@@ -216,7 +216,7 @@ class TestAdversarialScaleStringParsing(unittest.IsolatedAsyncioTestCase):
             mock_settings.multi_scale_indexing_enabled = True
             mock_settings.multi_scale_chunk_sizes = "512,,1024,"
 
-            results = await store.search(embedding=[0.0] * self.embedding_dim, limit=10)
+            await store.search(embedding=[0.0] * self.embedding_dim, limit=10)
 
         # Empty strings should be filtered out (code uses `if s.strip()`)
         self.assertEqual(len(queried_scales), 2)
@@ -431,7 +431,7 @@ class TestAdversarialInvalidConfig(unittest.IsolatedAsyncioTestCase):
             mock_settings.multi_scale_indexing_enabled = True
             mock_settings.multi_scale_chunk_sizes = "0"
 
-            results = await store.search(embedding=[0.0] * self.embedding_dim, limit=10)
+            await store.search(embedding=[0.0] * self.embedding_dim, limit=10)
 
         # Single scale doesn't trigger multi-scale path
         # (len(scale_strs) > 1 check)
@@ -695,7 +695,7 @@ class TestAdversarialSemaphoreEdgeCases(unittest.IsolatedAsyncioTestCase):
                     "256,512,768,1024,1280,1536,1792,2048"
                 )
 
-                results = await store.search(
+                await store.search(
                     embedding=[0.0] * self.embedding_dim, limit=10
                 )
 

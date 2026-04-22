@@ -1,6 +1,5 @@
 """Tests for vault_members API routes."""
 
-import os
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -9,10 +8,9 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.routes.vault_members import router as vault_members_router
 from app.api.routes.auth import router as auth_router
+from app.api.routes.vault_members import router as vault_members_router
 from app.services.auth_service import create_access_token, hash_password
-
 
 # Valid SQLite schema (avoiding UNIQUE NOCASE syntax issue in source)
 TEST_SCHEMA = """

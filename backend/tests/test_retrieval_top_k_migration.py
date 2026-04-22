@@ -10,9 +10,8 @@ import asyncio
 import os
 import sys
 import unittest
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
 import warnings
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -48,7 +47,7 @@ class TestConfigDeprecationWarnings(unittest.TestCase):
 
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            settings = Settings(max_context_chunks=20)
+            Settings(max_context_chunks=20)
 
             # Filter for DeprecationWarning only
             deprecation_warnings = [
@@ -88,9 +87,8 @@ class TestRAGEngineRetrievalTopK(unittest.TestCase):
 
     def test_rag_engine_uses_retrieval_top_k(self):
         """Test that search_memories is called with settings.retrieval_top_k value."""
-        from app.config import Settings
-        from app.services.rag_engine import RAGEngine
         from app.services.memory_store import MemoryStore
+        from app.services.rag_engine import RAGEngine
 
         # Create mock memory_store
         mock_memory_store = MagicMock(spec=MemoryStore)
@@ -134,8 +132,7 @@ class TestRAGEngineAsyncBehavior:
 
     async def test_rag_engine_search_memories_called_with_retrieval_top_k(self):
         """Test that search_memories is called with correct retrieval_top_k limit."""
-        from app.services.rag_engine import RAGEngine
-        from unittest.mock import AsyncMock, MagicMock, patch
+        from unittest.mock import patch
 
         # Mock settings
         with patch("app.services.rag_engine.settings") as mock_settings:

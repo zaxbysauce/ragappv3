@@ -12,20 +12,17 @@ scale searches in the multi-scale search path:
 """
 
 import asyncio
-import json
 import os
 import shutil
 import tempfile
-import unittest
 import time
+import unittest
 from pathlib import Path
-from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import numpy as np
 import pytest
 
-from app.services.vector_store import VectorStore, _MULTI_SCALE_CONCURRENCY
+from app.services.vector_store import _MULTI_SCALE_CONCURRENCY, VectorStore
 
 
 class TestMultiScaleConcurrencyConstant(unittest.TestCase):
@@ -406,7 +403,7 @@ class TestMultiScaleSearchEdgeCases(unittest.IsolatedAsyncioTestCase):
                 "512,1024,2048"  # Multiple scales but disabled
             )
 
-            results = await store.search(
+            await store.search(
                 embedding=[0.0] * self.embedding_dim,
                 limit=10,
             )
@@ -454,7 +451,7 @@ class TestMultiScaleSearchEdgeCases(unittest.IsolatedAsyncioTestCase):
             mock_settings.multi_scale_indexing_enabled = True
             mock_settings.multi_scale_chunk_sizes = "512,1024"
 
-            results = await store.search(
+            await store.search(
                 embedding=[0.0] * self.embedding_dim,
                 limit=10,
             )
@@ -504,7 +501,7 @@ class TestMultiScaleSearchEdgeCases(unittest.IsolatedAsyncioTestCase):
             mock_settings.multi_scale_indexing_enabled = True
             mock_settings.multi_scale_chunk_sizes = " 512 , 1024 "  # Whitespace
 
-            results = await store.search(
+            await store.search(
                 embedding=[0.0] * self.embedding_dim,
                 limit=10,
             )
@@ -556,7 +553,7 @@ class TestMultiScaleSearchEdgeCases(unittest.IsolatedAsyncioTestCase):
             mock_settings.multi_scale_indexing_enabled = True
             mock_settings.multi_scale_chunk_sizes = "512,,1024"  # Empty value
 
-            results = await store.search(
+            await store.search(
                 embedding=[0.0] * self.embedding_dim,
                 limit=10,
             )

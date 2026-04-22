@@ -3,16 +3,14 @@
 import sqlite3
 import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, patch, MagicMock
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.routes.groups import router as groups_router
 from app.api.routes.auth import router as auth_router
+from app.api.routes.groups import router as groups_router
 from app.services.auth_service import create_access_token, hash_password
-
 
 # Valid SQLite schema matching production structure
 TEST_SCHEMA = """
@@ -252,8 +250,6 @@ class TestEvaluatePolicyWiring:
 
     def test_list_groups_calls_evaluate_with_correct_params(self, monkeypatch):
         """Verify evaluate is called with (user, 'group', 0, 'list') for list_groups."""
-        from app.models.database import _pool_cache, _pool_cache_lock
-        from app.config import settings
 
         # Track calls to evaluate
         call_tracker = {"calls": []}
@@ -477,10 +473,10 @@ class TestAllRoutesHaveEvaluateDependency:
 
     def test_list_groups_has_evaluate_dependency(self):
         """List groups route should have evaluate: Callable = Depends(get_evaluate_policy)."""
-        from app.api.routes.groups import list_groups
-
         # Get the signature
         import inspect
+
+        from app.api.routes.groups import list_groups
 
         sig = inspect.signature(list_groups)
         params = list(sig.parameters.values())
@@ -498,8 +494,9 @@ class TestAllRoutesHaveEvaluateDependency:
 
     def test_create_group_has_evaluate_dependency(self):
         """Create group route should have evaluate dependency."""
-        from app.api.routes.groups import create_group
         import inspect
+
+        from app.api.routes.groups import create_group
 
         sig = inspect.signature(create_group)
         params = list(sig.parameters.values())
@@ -511,8 +508,9 @@ class TestAllRoutesHaveEvaluateDependency:
 
     def test_get_group_has_evaluate_dependency(self):
         """Get group route should have evaluate dependency."""
-        from app.api.routes.groups import get_group
         import inspect
+
+        from app.api.routes.groups import get_group
 
         sig = inspect.signature(get_group)
         params = list(sig.parameters.values())
@@ -522,8 +520,9 @@ class TestAllRoutesHaveEvaluateDependency:
 
     def test_update_group_has_evaluate_dependency(self):
         """Update group route should have evaluate dependency."""
-        from app.api.routes.groups import update_group
         import inspect
+
+        from app.api.routes.groups import update_group
 
         sig = inspect.signature(update_group)
         params = list(sig.parameters.values())
@@ -535,8 +534,9 @@ class TestAllRoutesHaveEvaluateDependency:
 
     def test_delete_group_has_evaluate_dependency(self):
         """Delete group route should have evaluate dependency."""
-        from app.api.routes.groups import delete_group
         import inspect
+
+        from app.api.routes.groups import delete_group
 
         sig = inspect.signature(delete_group)
         params = list(sig.parameters.values())
@@ -548,8 +548,9 @@ class TestAllRoutesHaveEvaluateDependency:
 
     def test_get_group_members_has_evaluate_dependency(self):
         """Get group members route should have evaluate dependency."""
-        from app.api.routes.groups import get_group_members
         import inspect
+
+        from app.api.routes.groups import get_group_members
 
         sig = inspect.signature(get_group_members)
         params = list(sig.parameters.values())
@@ -561,8 +562,9 @@ class TestAllRoutesHaveEvaluateDependency:
 
     def test_update_group_members_has_evaluate_dependency(self):
         """Update group members route should have evaluate dependency."""
-        from app.api.routes.groups import update_group_members
         import inspect
+
+        from app.api.routes.groups import update_group_members
 
         sig = inspect.signature(update_group_members)
         params = list(sig.parameters.values())
@@ -574,8 +576,9 @@ class TestAllRoutesHaveEvaluateDependency:
 
     def test_get_group_vaults_has_evaluate_dependency(self):
         """Get group vaults route should have evaluate dependency."""
-        from app.api.routes.groups import get_group_vaults
         import inspect
+
+        from app.api.routes.groups import get_group_vaults
 
         sig = inspect.signature(get_group_vaults)
         params = list(sig.parameters.values())
@@ -587,8 +590,9 @@ class TestAllRoutesHaveEvaluateDependency:
 
     def test_update_group_vaults_has_evaluate_dependency(self):
         """Update group vaults route should have evaluate dependency."""
-        from app.api.routes.groups import update_group_vaults
         import inspect
+
+        from app.api.routes.groups import update_group_vaults
 
         sig = inspect.signature(update_group_vaults)
         params = list(sig.parameters.values())

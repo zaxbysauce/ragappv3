@@ -12,12 +12,10 @@ Run with: python -m pytest backend/tests/test_integration.py -v
 
 import os
 import sys
-import asyncio
-import json
 import tempfile
-from pathlib import Path
 from io import BytesIO
-from typing import List, Dict, Any, Optional
+from pathlib import Path
+from typing import Dict, List, Optional
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -73,7 +71,7 @@ sys.modules["unstructured.documents.elements"] = _unstructured.documents.element
 # =============================================================================
 
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch, Mock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 # =============================================================================
 # Fake Service Implementations for Testing
@@ -238,8 +236,6 @@ def setup_app_state(app, **overrides):
     This initializes all the state attributes that dependencies expect.
     """
     import tempfile
-    import os
-    from pathlib import Path
 
     # Create a temp directory for test database
     test_data_dir = Path(tempfile.mkdtemp(prefix="knowledgevault_test_"))
@@ -251,7 +247,7 @@ def setup_app_state(app, **overrides):
     settings.data_dir = test_data_dir
 
     # Now initialize the database (it will use settings.sqlite_path)
-    from app.models.database import init_db, get_pool
+    from app.models.database import get_pool, init_db
 
     init_db(str(settings.sqlite_path))
 
@@ -304,6 +300,7 @@ def create_test_client(**overrides):
     state that the middleware expects.
     """
     from fastapi.testclient import TestClient
+
     from app.main import app
 
     setup_app_state(app, **overrides)
@@ -344,6 +341,7 @@ class TestIntegration(unittest.TestCase):
     def test_upload_index_chat_flow(self, mock_processor_class):
         """Test complete flow: upload document, index it, then chat with RAG."""
         from fastapi.testclient import TestClient
+
         from app.main import app
 
         # Setup mocks for app state
@@ -388,9 +386,10 @@ class TestIntegration(unittest.TestCase):
     def test_chat_with_indexed_document(self):
         """Test chat endpoint returns response with sources."""
         from fastapi.testclient import TestClient
+
+        from app.api.deps import get_rag_engine
         from app.main import app
         from app.services.rag_engine import RAGEngine
-        from app.api.deps import get_rag_engine
 
         # Setup mocks for app state
         setup_app_state(app)
@@ -450,6 +449,7 @@ class TestIntegration(unittest.TestCase):
     def test_chat_streaming_response(self, mock_get_rag_engine):
         """Test streaming chat endpoint yields chunks correctly."""
         from fastapi.testclient import TestClient
+
         from app.main import app
         from app.services.rag_engine import RAGEngine
 
@@ -493,6 +493,7 @@ class TestIntegration(unittest.TestCase):
     def test_memory_search_full_text(self):
         """Test memory search endpoint returns relevant memories."""
         from fastapi.testclient import TestClient
+
         from app.main import app
 
         # Setup mocks for app state
@@ -534,6 +535,7 @@ class TestIntegration(unittest.TestCase):
     def test_memory_search_empty_query(self):
         """Test memory search handles empty queries gracefully."""
         from fastapi.testclient import TestClient
+
         from app.main import app
 
         # Setup mocks for app state
@@ -551,6 +553,7 @@ class TestIntegration(unittest.TestCase):
     def test_memory_search_whitespace_only(self):
         """Test memory search handles whitespace-only queries gracefully."""
         from fastapi.testclient import TestClient
+
         from app.main import app
 
         # Setup mocks for app state
@@ -575,6 +578,7 @@ class TestIntegration(unittest.TestCase):
     def test_document_delete_without_existing_doc(self, mock_vector_store_class):
         """Test document deletion returns 404 for non-existent document."""
         from fastapi.testclient import TestClient
+
         from app.main import app
 
         # Setup mocks for app state
@@ -600,6 +604,7 @@ class TestIntegration(unittest.TestCase):
     ):
         """Test successful document deletion removes file and chunks."""
         from fastapi.testclient import TestClient
+
         from app.main import app
 
         # Setup mocks for app state
@@ -637,12 +642,13 @@ class TestIntegration(unittest.TestCase):
     def test_document_delete_not_found(self):
         """Test deleting a non-existent document returns 404."""
         from fastapi.testclient import TestClient
+
         from app.main import app
 
         # Setup mocks for app state
         setup_app_state(app)
 
-        client = TestClient(app)
+        TestClient(app)
 
         # This requires authentication to test properly
         # The endpoint should return 404 for non-existent documents
@@ -656,9 +662,10 @@ class TestIntegration(unittest.TestCase):
     def test_chat_with_embedding_service_down(self):
         """Test chat handles embedding service downtime gracefully."""
         from fastapi.testclient import TestClient
+
+        from app.api.deps import get_rag_engine
         from app.main import app
         from app.services.rag_engine import RAGEngine
-        from app.api.deps import get_rag_engine
 
         # Setup mocks for app state
         setup_app_state(app)
@@ -693,9 +700,10 @@ class TestIntegration(unittest.TestCase):
     def test_chat_with_llm_service_down(self):
         """Test chat handles LLM service downtime gracefully."""
         from fastapi.testclient import TestClient
+
+        from app.api.deps import get_rag_engine
         from app.main import app
         from app.services.rag_engine import RAGEngine
-        from app.api.deps import get_rag_engine
 
         # Setup mocks for app state
         setup_app_state(app)
@@ -730,9 +738,10 @@ class TestIntegration(unittest.TestCase):
     def test_chat_streaming_with_llm_error(self):
         """Test streaming chat handles LLM errors gracefully."""
         from fastapi.testclient import TestClient
+
+        from app.api.deps import get_rag_engine
         from app.main import app
         from app.services.rag_engine import RAGEngine
-        from app.api.deps import get_rag_engine
 
         # Setup mocks for app state
         setup_app_state(app)
@@ -770,6 +779,7 @@ class TestIntegration(unittest.TestCase):
     def test_upload_file_too_large(self):
         """Test upload rejects files exceeding size limit."""
         from fastapi.testclient import TestClient
+
         from app.main import app
 
         # Setup mocks for app state
@@ -791,6 +801,7 @@ class TestIntegration(unittest.TestCase):
     def test_upload_invalid_file_extension(self):
         """Test upload rejects files with invalid extensions."""
         from fastapi.testclient import TestClient
+
         from app.main import app
 
         # Setup mocks for app state
@@ -812,6 +823,7 @@ class TestIntegration(unittest.TestCase):
     def test_upload_empty_filename(self):
         """Test upload handles empty filename gracefully."""
         from fastapi.testclient import TestClient
+
         from app.main import app
 
         # Setup mocks for app state
@@ -834,8 +846,9 @@ class TestIntegration(unittest.TestCase):
     def test_health_endpoint_during_degraded_state(self):
         """Test health endpoint reflects degraded service state."""
         from fastapi.testclient import TestClient
-        from app.main import app
+
         from app.api.deps import get_llm_health_checker, get_model_checker
+        from app.main import app
 
         # Setup mocks for app state
         setup_app_state(app)
@@ -883,6 +896,7 @@ class TestIntegration(unittest.TestCase):
     def test_create_memory_with_invalid_tags(self):
         """Test memory creation handles invalid tag formats."""
         from fastapi.testclient import TestClient
+
         from app.main import app
 
         # Setup mocks for app state
@@ -904,6 +918,7 @@ class TestIntegration(unittest.TestCase):
     def test_update_nonexistent_memory(self):
         """Test updating a non-existent memory returns 404."""
         from fastapi.testclient import TestClient
+
         from app.main import app
 
         # Setup mocks for app state
@@ -920,6 +935,7 @@ class TestIntegration(unittest.TestCase):
     def test_delete_nonexistent_memory(self):
         """Test deleting a non-existent memory returns 404."""
         from fastapi.testclient import TestClient
+
         from app.main import app
 
         # Setup mocks for app state

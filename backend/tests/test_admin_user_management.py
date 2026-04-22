@@ -8,10 +8,9 @@ These tests verify:
 """
 
 import os
+import shutil
 import sqlite3
 import tempfile
-import shutil
-from typing import Generator
 
 import pytest
 from fastapi import FastAPI
@@ -699,13 +698,12 @@ class TestUpdateUserActiveStatus:
         from app.services.auth_service import hash_password
 
         hashed = hash_password("pass123")
-        cursor = self.conn.execute(
+        self.conn.execute(
             """INSERT INTO users (username, hashed_password, full_name, role, is_active, must_change_password)
                VALUES (?, ?, ?, ?, ?, ?)""",
             ("admin2", hashed, "Admin Two", "admin", 1, 0),
         )
         self.conn.commit()
-        admin2_id = cursor.lastrowid
 
         # Now admin1 (the original self.admin_id) tries to deactivate admin2
         # But first we need another admin to be the one making the request

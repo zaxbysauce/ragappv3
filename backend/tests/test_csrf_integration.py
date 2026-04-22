@@ -69,7 +69,6 @@ class TestCSRFTokenEndpoint(unittest.TestCase):
             len(data["csrf_token"]), 10, "csrf_token should be non-empty"
         )
         # Token should be URL-safe base64 (alphanumeric + underscore/dash)
-        import re
 
         self.assertRegex(
             data["csrf_token"],

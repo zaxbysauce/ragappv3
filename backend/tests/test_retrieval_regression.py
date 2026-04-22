@@ -6,9 +6,10 @@ Committable to version control.
 
 import os
 import sys
-import pytest
+from typing import Dict, List, Optional
+
 import numpy as np
-from typing import List, Dict, Tuple, Optional
+import pytest
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -254,7 +255,7 @@ class DeterministicEmbeddingService:
         # Use bag-of-words approach with keyword-based embedding
         # This ensures semantically similar texts cluster together
         text_lower = text.lower()
-        words = set(text_lower.split())
+        set(text_lower.split())
 
         # Create a base vector from the text hash for uniqueness
         seed = hash(text) % (2**31)

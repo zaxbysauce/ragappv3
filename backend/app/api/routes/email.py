@@ -7,7 +7,6 @@ including health, statistics, and IMAP inbox status.
 
 import asyncio
 import secrets
-from datetime import datetime, timezone
 from typing import Optional
 
 import aioimaplib
@@ -143,7 +142,6 @@ async def _get_today_stats(pool) -> tuple[int, int]:
     Returns:
         Tuple of (processed_today, failed_today) counts
     """
-    import sqlite3
     from datetime import date
 
     conn = pool.get_connection()

@@ -5,13 +5,12 @@ import sqlite3
 import sys
 import tempfile
 import unittest
-from pathlib import Path
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from app.models.database import init_db, SQLiteConnectionPool
-from app.services.maintenance import MaintenanceService, MaintenanceError
+from app.models.database import SQLiteConnectionPool, init_db
+from app.services.maintenance import MaintenanceService
 
 
 class TestMaintenanceService(unittest.TestCase):
@@ -50,7 +49,7 @@ class TestMaintenanceService(unittest.TestCase):
     def test_maintenance_service_initialization(self):
         """Test MaintenanceService initializes correctly."""
         init_db(self.temp_db_path)
-        service = MaintenanceService(self.pool)
+        MaintenanceService(self.pool)
 
         # Check that maintenance flag row was created
         conn = sqlite3.connect(self.temp_db_path)

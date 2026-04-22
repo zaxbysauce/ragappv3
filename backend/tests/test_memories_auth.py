@@ -11,10 +11,10 @@ import os
 import sys
 import tempfile
 import threading
-from pathlib import Path
 import unittest
+from pathlib import Path
 from queue import Empty, Queue
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -63,13 +63,14 @@ except ImportError:
     sys.modules["unstructured.documents"] = _unstructured.documents
     sys.modules["unstructured.documents.elements"] = _unstructured.documents.elements
 
+import sqlite3
+
 from fastapi.testclient import TestClient
 
-from app.main import app
-from app.api.deps import get_db, get_vector_store, get_memory_store
-from app.services.auth_service import create_access_token, hash_password
+from app.api.deps import get_db, get_memory_store, get_vector_store
 from app.config import settings
-import sqlite3
+from app.main import app
+from app.services.auth_service import create_access_token, hash_password
 
 
 class SimpleConnectionPool:

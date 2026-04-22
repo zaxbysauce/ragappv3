@@ -15,27 +15,24 @@ Target functions:
 - require_role(role)
 """
 
-import asyncio
 import sqlite3
 import sys
 from pathlib import Path
-from typing import Any, Dict, Optional
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 # Add backend to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "backend"))
 
-from app.api.deps import (
-    evaluate_policy,
-    require_vault_permission,
-    require_role,
-    get_current_active_user,
-    get_db,
-)
 from fastapi import HTTPException
 
+from app.api.deps import (
+    evaluate_policy,
+    get_current_active_user,
+    require_role,
+    require_vault_permission,
+)
 
 # =============================================================================
 # AUTH HEADER INJECTION TESTS
@@ -737,7 +734,7 @@ class TestNonVaultResourceType:
         malicious_action = "read'; GRANT ALL ON vaults TO attacker; --"
 
         # Even superadmin should safely handle malicious action
-        result = await evaluate_policy(
+        await evaluate_policy(
             principal=principal,
             resource_type="vault",
             resource_id=1,

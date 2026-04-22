@@ -11,7 +11,6 @@ import {
   Slash,
   Sparkles,
   Database,
-  ChevronDown,
   ArrowDown,
   FileText,
   GitCompare,

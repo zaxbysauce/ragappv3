@@ -4,7 +4,7 @@ Tests attack vectors identified in the requirements.
 """
 
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 # Source files being tested:
 # - backend/app/services/vector_store.py (hybrid_alpha clamping)

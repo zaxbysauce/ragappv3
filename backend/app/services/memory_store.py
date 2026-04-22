@@ -3,7 +3,7 @@
 import re
 import sqlite3
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from app.config import settings
 from app.models.database import SQLiteConnectionPool, get_pool

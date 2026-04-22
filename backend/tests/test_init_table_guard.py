@@ -12,12 +12,9 @@ This module tests:
 8. FTS index NOT recreated when fts_index_exists=True
 """
 
-import logging
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
 
 from app.services.vector_store import (
     VECTOR_INDEX_MIN_ROWS,
@@ -393,7 +390,7 @@ class TestDeferredIndexLogMessage(unittest.IsolatedAsyncioTestCase):
         # Verify the call contains the threshold value
         # The log format is: "Table created; vector index deferred until ≥%d rows"
         call_args = deferred_call[0] if deferred_call[0] else []
-        call_kwargs = deferred_call[1] if deferred_call[1] else {}
+        deferred_call[1] if deferred_call[1] else {}
 
         # The threshold should be passed as an argument
         threshold_found = False

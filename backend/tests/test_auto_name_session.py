@@ -200,7 +200,7 @@ class TestAutoNameSession(unittest.IsolatedAsyncioTestCase):
         update_queries = self._get_update_queries()
         self.assertEqual(len(update_queries), 1)
 
-        update_query = update_queries[0]["query"]
+        update_queries[0]["query"]
         update_params = update_queries[0]["params"]
 
         # Should have 3 args: (title, session_id, existing_title)
@@ -247,7 +247,6 @@ class TestAutoNameSession(unittest.IsolatedAsyncioTestCase):
         self.mock_llm_client.chat_completion = AsyncMock(return_value="New Title")
 
         # Simulate concurrent change by setting rowcount=0 on UPDATE cursor
-        original_execute = self._mock_conn.execute
 
         def mock_execute_with_zero_rowcount(query, params=None):
             cursor = MagicMock()
@@ -372,7 +371,7 @@ class TestAutoNameSession(unittest.IsolatedAsyncioTestCase):
         """
         from app.api.routes.chat import _auto_name_session, _background_tasks
 
-        initial_task_count = len(_background_tasks)
+        len(_background_tasks)
 
         # Set up successful mock
         self._setup_select_result(None)

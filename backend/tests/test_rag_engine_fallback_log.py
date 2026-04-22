@@ -1,16 +1,16 @@
 """Tests for RAGEngine fallback warning log fix - handles None thresholds."""
 
-import pytest
 import logging
-from unittest.mock import MagicMock, patch, call
-from typing import List, Dict, Any
 
 # Import the module under test
 import sys
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 sys.path.insert(0, "C:/opencode/RAGAPPv2/backend")
 
-from app.services.rag_engine import RAGEngine, RAGSource
+from app.services.rag_engine import RAGEngine
 
 
 class TestRAGEngineFallbackWarningLog:
@@ -170,7 +170,7 @@ class TestRAGEngineFallbackWarningLog:
         # Check that a warning was logged with None threshold
         warning_logs = [r for r in caplog.records if r.levelname == "WARNING"]
         # Look for the fallback warning message
-        fallback_warnings = [
+        [
             r
             for r in warning_logs
             if "Threshold filtering removed all" in str(r.message)

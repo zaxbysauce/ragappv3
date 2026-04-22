@@ -10,10 +10,10 @@ Tests cover:
 - get_user_accessible_vault_ids: vault access enumeration for regular users
 """
 
-import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
-from fastapi import HTTPException
+from unittest.mock import MagicMock, patch
 
+import pytest
+from fastapi import HTTPException
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fixtures
@@ -186,8 +186,10 @@ class TestGetCurrentUserCookieFallback:
         self, mock_settings_jwt_mode, mock_db
     ):
         """Auth via Authorization header → returns user dict."""
-        import jwt
         from datetime import datetime, timedelta, timezone
+
+        import jwt
+
         from app.api.deps import get_current_active_user
 
         secret, algorithm = "test-secret-key", "HS256"
@@ -223,8 +225,10 @@ class TestGetCurrentUserCookieFallback:
     @pytest.mark.asyncio
     async def test_auth_via_cookie_returns_user(self, mock_settings_jwt_mode, mock_db):
         """Auth via cookie (access_token) → returns user dict."""
-        import jwt
         from datetime import datetime, timedelta, timezone
+
+        import jwt
+
         from app.api.deps import get_current_active_user
 
         secret, algorithm = "test-secret-key", "HS256"
@@ -314,8 +318,10 @@ class TestJWTTypeEnforcement:
         self, mock_settings_jwt_mode, mock_db
     ):
         """Access token with type='access' → accepted."""
-        import jwt
         from datetime import datetime, timedelta, timezone
+
+        import jwt
+
         from app.api.deps import get_current_active_user
 
         secret, algorithm = "test-secret-key", "HS256"
@@ -351,8 +357,10 @@ class TestJWTTypeEnforcement:
         self, mock_settings_jwt_mode, mock_db
     ):
         """Token without type field → 403 'Invalid token type'."""
-        import jwt
         from datetime import datetime, timedelta, timezone
+
+        import jwt
+
         from app.api.deps import get_current_active_user
 
         secret, algorithm = "test-secret-key", "HS256"
@@ -382,8 +390,10 @@ class TestJWTTypeEnforcement:
         self, mock_settings_jwt_mode, mock_db
     ):
         """Token with type='refresh' → 403 'Invalid token type'."""
-        import jwt
         from datetime import datetime, timedelta, timezone
+
+        import jwt
+
         from app.api.deps import get_current_active_user
 
         secret, algorithm = "test-secret-key", "HS256"
@@ -422,8 +432,10 @@ class TestMustChangePassword:
         self, mock_settings_jwt_mode, mock_db
     ):
         """User with must_change_password=True in DB → user dict has must_change_password=True."""
-        import jwt
         from datetime import datetime, timedelta, timezone
+
+        import jwt
+
         from app.api.deps import get_current_active_user
 
         secret, algorithm = "test-secret-key", "HS256"
@@ -460,8 +472,10 @@ class TestMustChangePassword:
         self, mock_settings_jwt_mode, mock_db
     ):
         """User with must_change_password=False in DB → user dict has must_change_password=False."""
-        import jwt
         from datetime import datetime, timedelta, timezone
+
+        import jwt
+
         from app.api.deps import get_current_active_user
 
         secret, algorithm = "test-secret-key", "HS256"
@@ -498,8 +512,10 @@ class TestMustChangePassword:
         self, mock_settings_jwt_mode, mock_db
     ):
         """User with must_change_password=NULL in DB → user dict has must_change_password=False."""
-        import jwt
         from datetime import datetime, timedelta, timezone
+
+        import jwt
+
         from app.api.deps import get_current_active_user
 
         secret, algorithm = "test-secret-key", "HS256"
@@ -606,7 +622,7 @@ class TestRequireAdminRole:
     @pytest.mark.asyncio
     async def test_unauthenticated_user_raises_from_get_current_user(self):
         """Unauthenticated user → 401 (from get_current_active_user dependency)."""
-        from app.api.deps import get_current_active_user, require_admin_role
+        from app.api.deps import get_current_active_user
 
         with pytest.raises(HTTPException) as exc_info:
             await get_current_active_user(
@@ -728,8 +744,10 @@ class TestGetCurrentUserJWT:
     @pytest.mark.asyncio
     async def test_get_current_user_with_jwt(self, mock_settings_jwt_mode, mock_db):
         """users_enabled=True, valid JWT → returns user dict from DB."""
-        import jwt
         from datetime import datetime, timedelta, timezone
+
+        import jwt
+
         from app.api.deps import get_current_active_user
 
         # Create a valid JWT token directly
@@ -774,8 +792,10 @@ class TestGetCurrentUserJWT:
         self, mock_settings_jwt_mode, mock_db
     ):
         """users_enabled=True, JWT for inactive user → 403."""
-        import jwt
         from datetime import datetime, timedelta, timezone
+
+        import jwt
+
         from app.api.deps import get_current_active_user
 
         secret, algorithm = "test-secret-key", "HS256"
@@ -812,8 +832,10 @@ class TestGetCurrentUserJWT:
     @pytest.mark.asyncio
     async def test_get_current_user_not_found(self, mock_settings_jwt_mode, mock_db):
         """users_enabled=True, JWT for non-existent user → 403."""
-        import jwt
         from datetime import datetime, timedelta, timezone
+
+        import jwt
+
         from app.api.deps import get_current_active_user
 
         secret, algorithm = "test-secret-key", "HS256"
@@ -842,8 +864,10 @@ class TestGetCurrentUserJWT:
     @pytest.mark.asyncio
     async def test_get_current_user_expired_token(self, mock_settings_jwt_mode):
         """users_enabled=True, expired JWT → 403."""
-        import jwt
         from datetime import datetime, timedelta, timezone
+
+        import jwt
+
         from app.api.deps import get_current_active_user
 
         secret, algorithm = "test-secret-key", "HS256"

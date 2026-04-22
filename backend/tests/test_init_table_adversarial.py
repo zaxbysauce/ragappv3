@@ -12,15 +12,11 @@ Attack surfaces tested:
 """
 
 import asyncio
-import logging
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from app.services.vector_store import (
-    VECTOR_INDEX_MIN_ROWS,
     VectorStore,
     VectorStoreConnectionError,
 )
@@ -153,7 +149,7 @@ class TestAdversarialCorruptTable(unittest.IsolatedAsyncioTestCase):
             with patch("app.services.vector_store.FTS") as mock_fts:
                 mock_fts.return_value = MagicMock()
 
-                with patch("app.services.vector_store.logger") as mock_logger:
+                with patch("app.services.vector_store.logger"):
                     # Should NOT raise - list_indices failure is caught
                     await store.init_table(embedding_dim=384)
 
@@ -197,7 +193,7 @@ class TestAdversarialCorruptTable(unittest.IsolatedAsyncioTestCase):
             with patch("app.services.vector_store.FTS") as mock_fts:
                 mock_fts.return_value = MagicMock()
 
-                with patch("app.services.vector_store.logger") as mock_logger:
+                with patch("app.services.vector_store.logger"):
                     # Should NOT raise
                     await store.init_table(embedding_dim=384)
 
@@ -247,7 +243,7 @@ class TestAdversarialOverwritePathFailures(unittest.IsolatedAsyncioTestCase):
                 with patch("app.services.vector_store.FTS") as mock_fts:
                     mock_fts.return_value = MagicMock()
 
-                    with patch("app.services.vector_store.logger") as mock_logger:
+                    with patch("app.services.vector_store.logger"):
                         # Should NOT raise - drop_table failure is caught silently
                         await store.init_table(embedding_dim=384)
 
@@ -587,7 +583,7 @@ class TestAdversarialSchemaMismatch(unittest.IsolatedAsyncioTestCase):
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
 
-                with patch("app.services.vector_store.logger") as mock_logger:
+                with patch("app.services.vector_store.logger"):
                     # Should open the table without crashing
                     await store.init_table(embedding_dim=384)
 
@@ -673,7 +669,7 @@ class TestAdversarialFTSCreationEdgeCases(unittest.IsolatedAsyncioTestCase):
                 with patch("app.services.vector_store.FTS") as mock_fts:
                     mock_fts.return_value = MagicMock()
 
-                    with patch("app.services.vector_store.logger") as mock_logger:
+                    with patch("app.services.vector_store.logger"):
                         # KeyError is NOT caught, should propagate
                         with self.assertRaises(KeyError):
                             await store.init_table(embedding_dim=384)
@@ -787,7 +783,7 @@ class TestAdversarialTableJustCreatedState(unittest.IsolatedAsyncioTestCase):
             with patch("app.services.vector_store.FTS") as mock_fts:
                 mock_fts.return_value = MagicMock()
 
-                with patch("app.services.vector_store.logger") as mock_logger:
+                with patch("app.services.vector_store.logger"):
                     # Should NOT raise - drop_table failure is caught silently
                     await store.init_table(embedding_dim=384)
 

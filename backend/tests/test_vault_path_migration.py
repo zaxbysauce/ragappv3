@@ -1,12 +1,11 @@
 """Tests for vault path migration - renaming vaults/{sanitized_name}/ to vaults/{id}/."""
 
-import pytest
 import sqlite3
-import shutil
-from pathlib import Path
-from unittest.mock import patch, MagicMock
-
 import sys
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "app"))
 

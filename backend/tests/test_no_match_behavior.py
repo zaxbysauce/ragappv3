@@ -8,8 +8,9 @@ Verifies that:
 - The no_match flag is accessible on the service instance after filter_relevant() call
 """
 
-import pytest
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from app.services.document_retrieval import DocumentRetrievalService, RAGSource
 
@@ -116,7 +117,7 @@ class TestNoMatchBehavior:
         results_all_exceed = [
             {"text": "irrelevant", "file_id": "file1", "_distance": 0.9},
         ]
-        output1 = await retrieval_service.filter_relevant(results_all_exceed)
+        await retrieval_service.filter_relevant(results_all_exceed)
 
         # VERIFY: no_match is True after first call
         assert retrieval_service.no_match is True, (
@@ -183,7 +184,7 @@ class TestNoMatchBehavior:
             },  # exactly at threshold
         ]
 
-        output = await retrieval_service.filter_relevant(results)
+        await retrieval_service.filter_relevant(results)
 
         # At threshold (0.5) with threshold 0.5: 0.5 > 0.5 is False, so it passes
         # Actually checking: should_skip = distance > threshold = 0.5 > 0.5 = False

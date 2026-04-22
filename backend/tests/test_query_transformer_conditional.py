@@ -8,6 +8,7 @@ Validates that:
 """
 
 import unittest
+
 from app.services.query_transformer import _is_exact_or_document_query
 
 

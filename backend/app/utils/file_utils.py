@@ -1,7 +1,6 @@
 """File utility functions for deduplication and file operations."""
 
 import hashlib
-import os
 from pathlib import Path
 
 

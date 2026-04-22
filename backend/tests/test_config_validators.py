@@ -7,7 +7,9 @@ Tests cover:
 """
 
 import warnings
+
 import pytest
+
 from app.config import Settings
 
 

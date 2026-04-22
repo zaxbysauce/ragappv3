@@ -12,11 +12,11 @@ Supports two backends:
 import logging
 import math
 import threading
-from typing import List, Dict, Any, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
-from app.services.circuit_breaker import reranking_cb, CircuitBreakerError
+from app.services.circuit_breaker import CircuitBreakerError, reranking_cb
 
 logger = logging.getLogger(__name__)
 
@@ -141,10 +141,10 @@ class RerankingService:
         # Sort by score descending before slicing to ensure correct results
         sorted_data = sorted(data, key=lambda x: x.get("score", 0), reverse=True)
         raw_scores = [item["score"] for item in sorted_data[:top_n]]
-        
+
         # Unconditional sigmoid with overflow protection for BGE-M3 logits
         normalized_scores = [_safe_sigmoid(score) for score in raw_scores]
-        
+
         return [(item["index"], score) for item, score in zip(sorted_data[:top_n], normalized_scores)]
 
     async def close(self):
@@ -167,11 +167,11 @@ class RerankingService:
             pairs = [(query, text) for text in texts]
             scores = model.predict(pairs)
             indexed = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
-            
+
             # Unconditional sigmoid with overflow protection for BGE-M3 logits
             raw_scores = [score for _, score in indexed[:top_n]]
             normalized_scores = [_safe_sigmoid(score) for score in raw_scores]
-            
+
             return list(zip([idx for idx, _ in indexed[:top_n]], normalized_scores))
 
         return await asyncio.to_thread(_score)

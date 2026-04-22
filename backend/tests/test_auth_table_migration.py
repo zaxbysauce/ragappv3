@@ -11,19 +11,14 @@ Verifies:
 """
 
 import sqlite3
-import tempfile
 from pathlib import Path
-
-import pytest
 
 from app.models.database import (
     SQLiteConnectionPool,
-    get_pool,
     init_db,
     migrate_add_user_org_tables,
     run_migrations,
 )
-
 
 # Expected auth table names
 AUTH_TABLES = [

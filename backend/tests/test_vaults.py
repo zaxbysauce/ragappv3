@@ -10,7 +10,7 @@ import threading
 import unittest
 from pathlib import Path
 from queue import Empty, Queue
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -54,8 +54,9 @@ except ImportError:
     sys.modules['unstructured.documents'] = _unstructured.documents
     sys.modules['unstructured.documents.elements'] = _unstructured.documents.elements
 
-from fastapi.testclient import TestClient
 from unittest.mock import AsyncMock
+
+from fastapi.testclient import TestClient
 
 # Create a temporary database for testing
 TEST_DB_PATH = None
@@ -71,8 +72,14 @@ def setup_test_db():
 
 setup_test_db()
 
+from app.api.deps import (
+    get_db,
+    get_embedding_service,
+    get_memory_store,
+    get_rag_engine,
+    get_vector_store,
+)
 from app.main import app
-from app.api.deps import get_db, get_vector_store, get_memory_store, get_rag_engine, get_embedding_service
 
 
 class SimpleConnectionPool:

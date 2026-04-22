@@ -207,7 +207,7 @@ class QueryTransformer:
             # Check HyDE cache (both Redis and LRU)
             hyde_cache_key = self._make_cache_key(settings.chat_model, "hyde", query)
             hyde_passage = None
-            
+
             # Try Redis first
             if self._redis_client:
                 try:
@@ -216,11 +216,11 @@ class QueryTransformer:
                         hyde_passage = json.loads(cached_hyde)
                 except Exception as e:
                     logger.warning("Redis HyDE cache get failed: %s", e)
-            
+
             # Try LRU fallback
             if not hyde_passage:
                 hyde_passage = self._lru_get_hyde(hyde_cache_key)
-            
+
             if hyde_passage is None:
                 hyde_passage = await self.generate_hyde(query)
                 if hyde_passage:
@@ -236,7 +236,7 @@ class QueryTransformer:
                             logger.warning("Redis HyDE cache set failed: %s", e)
                     # Store in LRU cache
                     self._lru_set_hyde(hyde_cache_key, hyde_passage)
-            
+
             if hyde_passage:
                 variants.append(('hyde', hyde_passage))
 

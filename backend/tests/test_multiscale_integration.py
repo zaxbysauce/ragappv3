@@ -2,11 +2,10 @@
 
 import os
 import sys
-import asyncio
 import unittest
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, cast
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import patch
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -29,7 +28,7 @@ except ImportError:
 from app.config import settings
 from app.services.embeddings import EmbeddingService
 from app.services.llm_client import LLMClient
-from app.services.memory_store import MemoryStore, MemoryRecord
+from app.services.memory_store import MemoryRecord, MemoryStore
 from app.services.rag_engine import RAGEngine
 from app.services.vector_store import VectorStore
 

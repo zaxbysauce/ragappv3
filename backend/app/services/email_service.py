@@ -12,21 +12,20 @@ import email.policy
 import logging
 import os
 import re
+import sqlite3
 import tempfile
 from datetime import datetime
-from pathlib import Path
+from email.header import decode_header
+from email.message import EmailMessage
 from typing import Optional, Union
 
 import aioimaplib
 import bleach
-from email.message import EmailMessage
-from email.header import decode_header
 
 from app.config import Settings
 from app.models.database import SQLiteConnectionPool
 from app.services.background_tasks import BackgroundProcessor
 from app.services.upload_path import UploadPathProvider
-
 
 logger = logging.getLogger(__name__)
 

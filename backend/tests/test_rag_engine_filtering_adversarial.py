@@ -8,18 +8,16 @@ Attack vectors covered:
 - Negative scores
 """
 
-import pytest
-import math
-from unittest.mock import MagicMock, patch
-from dataclasses import dataclass
-from typing import Any, Dict, List
 
 # Import the RAGEngine and RAGSource
 import sys
+from unittest.mock import patch
+
+import pytest
 
 sys.path.insert(0, "backend")
 
-from app.services.rag_engine import RAGEngine, RAGSource
+from app.services.rag_engine import RAGEngine
 
 
 class TestFilterRelevantAdversarial:

@@ -10,8 +10,6 @@ Tests cover:
 """
 
 import asyncio
-import email
-import email.policy
 import os
 import sys
 import tempfile
@@ -20,7 +18,7 @@ import unittest
 from datetime import datetime
 from email.message import EmailMessage
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -66,10 +64,11 @@ try:
 except ImportError:
     sys.modules['aioimaplib'] = types.ModuleType('aioimaplib')
 
+from pydantic import SecretStr
+
 from app.config import Settings
 from app.models.database import SQLiteConnectionPool
 from app.services.email_service import EmailIngestionService
-from pydantic import SecretStr
 
 
 class FakeBackgroundProcessor:
@@ -116,7 +115,7 @@ class FakeIMAPClient:
         if uid in self.emails:
             email_data = self.emails[uid]
             if 'RFC822.SIZE' in parts:
-                size = len(email_data['content'])
+                len(email_data['content'])
                 return ('OK', [(b'1 (RFC822.SIZE {size})',)])
             elif 'RFC822' in parts:
                 # Real aioimaplib returns: [(b'uid (RFC822 {size})', b'...email content...')]
@@ -571,7 +570,7 @@ class TestIMAPConnection(unittest.IsolatedAsyncioTestCase):
     async def test_connect_with_backoff_max_delay_reached(self, mock_wait_for):
         """Test backoff delay caps at max (60s) before giving up."""
         attempt_count = 0
-        fake_imap = FakeIMAPClient()
+        FakeIMAPClient()
 
         def mock_imap_connection(*args, **kwargs):
             nonlocal attempt_count
@@ -587,7 +586,7 @@ class TestIMAPConnection(unittest.IsolatedAsyncioTestCase):
     @patch('app.services.email_service.asyncio.wait_for', side_effect=asyncio.TimeoutError())
     async def test_connect_with_backoff_gives_up_after_max_retries(self, mock_wait_for):
         """Test gives up after max delay reached and still failing."""
-        fake_imap = FakeIMAPClient()
+        FakeIMAPClient()
 
         def mock_imap_connection(*args, **kwargs):
             raise Exception("Persistent connection failure")
@@ -600,7 +599,7 @@ class TestIMAPConnection(unittest.IsolatedAsyncioTestCase):
     @patch('app.services.email_service.asyncio.wait_for', side_effect=asyncio.TimeoutError())
     async def test_connect_with_backoff_stop_event_interrupts(self, mock_wait_for):
         """Test stop event interrupts backoff."""
-        fake_imap = FakeIMAPClient()
+        FakeIMAPClient()
 
         def mock_imap_connection(*args, **kwargs):
             raise Exception("Connection failed")

@@ -8,8 +8,7 @@ Two strategies are supported via settings.token_pack_strategy:
   - 'greedy'             (legacy):  first-fit with early break on overflow
 """
 
-import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from app.services.document_retrieval import RAGSource
 from app.services.rag_engine import RAGEngine

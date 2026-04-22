@@ -8,9 +8,9 @@ import logging
 import shutil
 import sqlite3
 import threading
-from pathlib import Path
-from queue import Queue, Empty, Full
 from contextlib import contextmanager
+from pathlib import Path
+from queue import Empty, Full, Queue
 
 from app.config import settings
 

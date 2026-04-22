@@ -1,10 +1,8 @@
 """Tests for UploadPathProvider refactor - verifying no DB calls and no _get_vault_name."""
 
-import pytest
-from pathlib import Path
-from unittest.mock import MagicMock, patch, PropertyMock
-
 import sys
+from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "app"))
 
@@ -164,7 +162,7 @@ class TestUploadPathProviderNoDBImport:
 
         # Check that database module is not in the module's globals
         # (except for _lookup_vault_id which has a lazy import, but that's in migrate_uploads)
-        top_level_imports = [
+        [
             name
             for name in dir(upload_module)
             if not name.startswith("_") or name == "_lookup_vault_id"

@@ -3,8 +3,10 @@
 Tests attack vectors for the exact_match_promote feature in _execute_retrieval.
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
 from app.services.rag_engine import RAGEngine
 from app.services.vector_store import VectorStore
 

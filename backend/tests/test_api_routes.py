@@ -5,14 +5,13 @@ Tests cover health, settings, memories, documents, and chat endpoints.
 All external services (LLM, vector store) are mocked for deterministic tests.
 """
 
-import json
 import os
 import sqlite3
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -65,7 +64,6 @@ from fastapi.testclient import TestClient
 
 from app.api.deps import get_llm_health_checker, get_model_checker
 
-
 # Create a temporary database for testing
 TEST_DB_PATH = None
 TEST_DATA_DIR = None
@@ -96,8 +94,8 @@ def get_test_settings():
 # Set up test database before importing app
 setup_test_db()
 
-from app.main import app
 from app.config import settings
+from app.main import app
 
 
 class TestHealthEndpoint(unittest.TestCase):
@@ -188,8 +186,8 @@ class TestSettingsEndpoints(unittest.TestCase):
         self._original_chunk_size = settings.chunk_size
         self._original_rag_threshold = settings.rag_relevance_threshold
         # Override get_db to use a pool that allows cross-thread usage
-        from app.models.database import get_pool
         from app.api.deps import get_db
+        from app.models.database import get_pool
 
         self._test_pool = get_pool(str(TEST_DB_PATH))
 
@@ -285,18 +283,18 @@ class TestMemoriesEndpoints(unittest.TestCase):
         init_db(db_path)
 
         # Create a real MemoryStore pointing to test DB
-        from app.services.memory_store import MemoryStore
         from app.models.database import SQLiteConnectionPool
+        from app.services.memory_store import MemoryStore
 
         self.test_pool = SQLiteConnectionPool(db_path, max_size=2)
         test_store = MemoryStore(pool=self.test_pool)
 
         # Override get_db to use a pool that allows cross-thread usage
         # Create a simple pool for testing
-        import sqlite3
-        from app.api.deps import get_db, get_memory_store
-        from queue import Queue, Empty
         import threading
+        from queue import Empty, Queue
+
+        from app.api.deps import get_db, get_memory_store
 
         class SimpleConnectionPool:
             def __init__(self, db_path):
@@ -483,10 +481,10 @@ class TestDocumentsEndpoints(unittest.TestCase):
 
         # Override get_db to use a pool that allows cross-thread usage
         # Create a simple pool for testing
-        import sqlite3
-        from app.api.deps import get_db
-        from queue import Queue, Empty
         import threading
+        from queue import Empty, Queue
+
+        from app.api.deps import get_db
 
         class SimpleConnectionPool:
             def __init__(self, db_path):

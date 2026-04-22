@@ -9,11 +9,9 @@ Uses temp directory, settings.data_dir = Path(temp_dir), init_db(db_path)
 """
 
 import os
+import shutil
 import sqlite3
 import tempfile
-import shutil
-from pathlib import Path
-from typing import Generator
 
 import pytest
 from fastapi import FastAPI
@@ -351,7 +349,7 @@ class TestUserGroupMembershipSetup:
 
         # Create app with users router
         from app.api.routes.users import router as users_router
-        from app.models.database import get_pool, SQLiteConnectionPool
+        from app.models.database import SQLiteConnectionPool
 
         app = FastAPI()
         app.include_router(users_router)
@@ -771,7 +769,7 @@ class TestVaultGroupMembershipSetup:
 
         # Create app with vaults router
         from app.api.routes.vaults import router as vaults_router
-        from app.models.database import get_pool, SQLiteConnectionPool
+        from app.models.database import SQLiteConnectionPool
 
         app = FastAPI()
         app.include_router(vaults_router)
