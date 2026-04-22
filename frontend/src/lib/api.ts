@@ -63,9 +63,14 @@ export async function ensureCsrfToken(): Promise<string> {
         return token;
       });
     _csrfFetchPromise = newPromise;
-    newPromise.finally(() => {
-      _csrfFetchPromise = null;
-    });
+    newPromise
+      .catch(() => {
+        // Mark rejection as handled to prevent unhandled rejection warnings in test environments
+        // Callers will handle the actual error when they await the promise
+      })
+      .finally(() => {
+        _csrfFetchPromise = null;
+      });
   }
   return _csrfFetchPromise as Promise<string>;
 }
