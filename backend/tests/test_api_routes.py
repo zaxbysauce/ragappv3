@@ -617,6 +617,31 @@ class TestChatEndpoint(unittest.TestCase):
         self.assertEqual(len(data["sources"]), 2)
         self.assertEqual(data["sources"][0]["file_id"], "1")
         self.assertEqual(len(data["memories_used"]), 1)
+        # score_type default must survive when the engine omits it, so the
+        # frontend never falls back to an undefined polarity.
+        self.assertEqual(data.get("score_type"), "distance")
+
+    def test_chat_non_streaming_propagates_score_type(self):
+        """POST /api/chat must include score_type from the engine's done event."""
+
+        async def mock_query(user_input, chat_history, stream=False, **kwargs):
+            yield {"type": "content", "content": "ok"}
+            yield {
+                "type": "done",
+                "sources": [{"file_id": "1", "score": 0.42}],
+                "memories_used": [],
+                "score_type": "rerank",
+            }
+
+        self._set_mock_rag_engine(mock_query)
+
+        response = self.client.post(
+            "/api/chat",
+            json={"message": "q", "history": [], "stream": False},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json().get("score_type"), "rerank")
 
     def test_chat_non_streaming_with_history(self):
         """Test POST /api/chat with chat history."""

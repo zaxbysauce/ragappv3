@@ -200,6 +200,55 @@ class TestChatStreaming(unittest.TestCase):
         self.assertIn("sources", done_event)
         self.assertEqual(done_event["sources"], expected_sources)
 
+    def test_stream_chat_done_event_has_score_type(self):
+        """Done event must propagate score_type from the engine so the frontend
+        can interpret source scores with the correct polarity and thresholds.
+        """
+        async def mock_query(*args, **kwargs):
+            yield {"type": "content", "content": "Response"}
+            yield {
+                "type": "done",
+                "sources": [{"file_id": "a", "score": 0.2}],
+                "memories_used": [],
+                "score_type": "rerank",
+            }
+
+        self._set_mock_rag_engine(mock_query)
+
+        response = self.client.post(
+            "/api/chat/stream",
+            json={"messages": [{"role": "user", "content": "test"}]}
+        )
+
+        events = self._parse_sse_events(response.text)
+        done_events = [e['data'] for e in events if e.get('data', {}).get("type") == "done"]
+
+        self.assertEqual(len(done_events), 1)
+        self.assertIn("score_type", done_events[0])
+        self.assertEqual(done_events[0]["score_type"], "rerank")
+
+    def test_stream_chat_done_event_score_type_defaults_to_distance(self):
+        """If the engine omits score_type, the route must default to 'distance'
+        so the frontend never sees an undefined value.
+        """
+        async def mock_query(*args, **kwargs):
+            yield {"type": "content", "content": "Response"}
+            # Intentionally no score_type key
+            yield {"type": "done", "sources": [], "memories_used": []}
+
+        self._set_mock_rag_engine(mock_query)
+
+        response = self.client.post(
+            "/api/chat/stream",
+            json={"messages": [{"role": "user", "content": "test"}]}
+        )
+
+        events = self._parse_sse_events(response.text)
+        done_events = [e['data'] for e in events if e.get('data', {}).get("type") == "done"]
+
+        self.assertEqual(len(done_events), 1)
+        self.assertEqual(done_events[0].get("score_type"), "distance")
+
     def test_stream_chat_done_event_has_memories_used(self):
         """Test done event includes memories_used array."""
         expected_memories = ["User likes Python", "User prefers dark mode"]

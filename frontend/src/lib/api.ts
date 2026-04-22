@@ -778,11 +778,18 @@ export function chatStream(
                 callbacks.onMessage(parsed.content);
               }
               if (parsed.sources) {
-                // Inject score_type from done event into each source
-                const scoreType = (parsed as any).score_type as Source["score_type"];
-                const enrichedSources = scoreType
-                  ? parsed.sources.map((s: Source) => ({ ...s, score_type: scoreType }))
-                  : parsed.sources;
+                // Inject score_type from done event into each source so
+                // relevance labels render with the correct polarity and
+                // thresholds. Default to "distance" if the backend did not
+                // send one (older backends / error paths) — safer than
+                // leaving `score_type` undefined, which previously caused
+                // every source to fall through to the "Tangential" bucket.
+                const scoreType = ((parsed as { score_type?: Source["score_type"] }).score_type
+                  ?? "distance") as Source["score_type"];
+                const enrichedSources = parsed.sources.map((s: Source) => ({
+                  ...s,
+                  score_type: scoreType,
+                }));
                 callbacks.onSources?.(enrichedSources);
               }
             } catch {

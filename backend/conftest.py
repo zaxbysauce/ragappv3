@@ -19,8 +19,15 @@ _lancedb.index.FTS = type("FTS", (), {})
 sys.modules["lancedb"] = _lancedb
 sys.modules["lancedb.index"] = _lancedb.index
 
-# Stub pyarrow
-sys.modules["pyarrow"] = types.ModuleType("pyarrow")
+# Stub pyarrow only when the real package is unavailable. Replacing a real
+# pyarrow install with an attribute-less stub breaks `import pandas`, because
+# pandas.compat.pyarrow reads `pyarrow.__version__` during its own import.
+try:
+    import pyarrow  # noqa: F401
+except ImportError:
+    _pa_stub = types.ModuleType("pyarrow")
+    _pa_stub.__version__ = "0.0.0"
+    sys.modules["pyarrow"] = _pa_stub
 
 # Stub unstructured
 _unstructured = types.ModuleType("unstructured")
