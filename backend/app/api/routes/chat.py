@@ -503,6 +503,11 @@ async def fork_session(
         (session_id,),
     )
     all_rows = await asyncio.to_thread(messages_result.fetchall)
+    if request.message_index >= len(all_rows):
+        raise HTTPException(
+            status_code=400,
+            detail=f"message_index {request.message_index} is out of bounds for session with {len(all_rows)} messages",
+        )
     forked_rows = all_rows[: request.message_index + 1]
 
     # Create new forked session

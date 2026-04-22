@@ -30,6 +30,7 @@ import { useVaultStore } from "@/stores/useVaultStore";
 import { useSendMessage, MAX_INPUT_LENGTH } from "@/hooks/useSendMessage";
 import { useChatHistory } from "@/hooks/useChatHistory";
 import { forkChatSession } from "@/lib/api";
+import { toast } from "sonner";
 
 // =============================================================================
 // TYPES & INTERFACES
@@ -594,6 +595,7 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
       navigate(`/chat/${forked.id}`);
     } catch (err) {
       console.error("Fork failed:", err);
+      toast.error("Failed to branch conversation. Please try again.");
     }
   }, [loadChat, refreshHistory, navigate]);
 
