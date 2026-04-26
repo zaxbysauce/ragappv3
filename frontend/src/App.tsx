@@ -1,5 +1,4 @@
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
-import { AuthProvider } from "@/contexts/AuthContext";
 import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { PageShell } from "@/components/layout/PageShell";
@@ -112,9 +111,8 @@ function App() {
   return (
     <ErrorBoundary>
       <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-        <AuthProvider>
-          <Suspense fallback={<PageLoader />}>
-            <Routes>
+        <Suspense fallback={<PageLoader />}>
+          <Routes>
               <Route path="/setup" element={<SetupPage />} />
               <Route path="/register" element={<RegisterPage />} />
               <Route path="/login" element={<LoginPage />} />
@@ -233,7 +231,6 @@ function App() {
               <Route path="/*" element={<NotFoundPage />} />
             </Routes>
           </Suspense>
-        </AuthProvider>
       </BrowserRouter>
     </ErrorBoundary>
   );

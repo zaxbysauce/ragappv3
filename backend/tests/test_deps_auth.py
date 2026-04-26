@@ -111,8 +111,8 @@ class TestGetCurrentUserAdminToken:
                     db=mock_conn,
                 )
 
-            assert exc_info.value.status_code == 403
-            assert "change default admin token" in exc_info.value.detail.lower()
+        assert exc_info.value.status_code == 403
+        assert "change default admin token" in exc_info.value.detail.lower()
 
     @pytest.mark.asyncio
     async def test_get_current_user_accepts_explicit_default_token(self, mock_db):
@@ -278,7 +278,7 @@ class TestGetCurrentUserCookieFallback:
 
     @pytest.mark.asyncio
     async def test_invalid_token_in_header_returns_403(self, mock_settings_jwt_mode):
-        """Invalid token in header → 403."""
+        """Invalid token in header → 401."""
         from app.api.deps import get_current_active_user
 
         with pytest.raises(HTTPException) as exc_info:
@@ -288,11 +288,11 @@ class TestGetCurrentUserCookieFallback:
                 db=MagicMock(),
             )
 
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 401
 
     @pytest.mark.asyncio
     async def test_invalid_token_in_cookie_returns_403(self, mock_settings_jwt_mode):
-        """Invalid token in cookie → 403."""
+        """Invalid token in cookie → 401."""
         from app.api.deps import get_current_active_user
 
         with pytest.raises(HTTPException) as exc_info:
@@ -302,7 +302,7 @@ class TestGetCurrentUserCookieFallback:
                 db=MagicMock(),
             )
 
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 401
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -353,10 +353,10 @@ class TestJWTTypeEnforcement:
         assert result["id"] == 42
 
     @pytest.mark.asyncio
-    async def test_token_without_type_field_returns_403(
+    async def test_token_without_type_field_returns_401(
         self, mock_settings_jwt_mode, mock_db
     ):
-        """Token without type field → 403 'Invalid token type'."""
+        """Token without type field → 401 'Invalid token type'."""
         from datetime import datetime, timedelta, timezone
 
         import jwt
@@ -382,14 +382,14 @@ class TestJWTTypeEnforcement:
                 db=mock_conn,
             )
 
-        assert exc_info.value.status_code == 403
-        assert "invalid token type" in exc_info.value.detail.lower()
+        assert exc_info.value.status_code == 401
+        assert "token_invalid" in exc_info.value.detail.lower()
 
     @pytest.mark.asyncio
-    async def test_token_with_type_refresh_returns_403(
+    async def test_token_with_type_refresh_returns_401(
         self, mock_settings_jwt_mode, mock_db
     ):
-        """Token with type='refresh' → 403 'Invalid token type'."""
+        """Token with type='refresh' → 401 'Invalid token type'."""
         from datetime import datetime, timedelta, timezone
 
         import jwt
@@ -415,13 +415,8 @@ class TestJWTTypeEnforcement:
                 db=mock_conn,
             )
 
-        assert exc_info.value.status_code == 403
-        assert "invalid token type" in exc_info.value.detail.lower()
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Test must_change_password Field
-# ─────────────────────────────────────────────────────────────────────────────
+        assert exc_info.value.status_code == 401
+        assert "token_invalid" in exc_info.value.detail.lower()
 
 
 class TestMustChangePassword:
@@ -791,7 +786,7 @@ class TestGetCurrentUserJWT:
     async def test_get_current_user_inactive_user(
         self, mock_settings_jwt_mode, mock_db
     ):
-        """users_enabled=True, JWT for inactive user → 403."""
+        """users_enabled=True, JWT for inactive user → 401 user_inactive."""
         from datetime import datetime, timedelta, timezone
 
         import jwt
@@ -826,12 +821,12 @@ class TestGetCurrentUserJWT:
                 db=mock_conn,
             )
 
-        assert exc_info.value.status_code == 403
-        assert "inactive" in exc_info.value.detail.lower()
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.detail == "user_inactive"
 
     @pytest.mark.asyncio
     async def test_get_current_user_not_found(self, mock_settings_jwt_mode, mock_db):
-        """users_enabled=True, JWT for non-existent user → 403."""
+        """users_enabled=True, JWT for non-existent user → 401."""
         from datetime import datetime, timedelta, timezone
 
         import jwt
@@ -858,12 +853,12 @@ class TestGetCurrentUserJWT:
                 db=mock_conn,
             )
 
-        assert exc_info.value.status_code == 403
-        assert "not found" in exc_info.value.detail.lower()
+        assert exc_info.value.status_code == 401
+        assert "token_invalid" in exc_info.value.detail.lower()
 
     @pytest.mark.asyncio
     async def test_get_current_user_expired_token(self, mock_settings_jwt_mode):
-        """users_enabled=True, expired JWT → 403."""
+        """users_enabled=True, expired JWT → 401."""
         from datetime import datetime, timedelta, timezone
 
         import jwt
@@ -887,7 +882,7 @@ class TestGetCurrentUserJWT:
                 db=MagicMock(),
             )
 
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 401
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -967,6 +962,23 @@ class TestEvaluatePolicy:
         # Member cannot access non-vault resources
         member = {"id": 3, "role": "member"}
         assert await evaluate_policy(member, "document", 1, "read") is False
+
+    @pytest.mark.asyncio
+    async def test_evaluate_policy_group_resource_allows_admin(self):
+        """Group resource type → superadmin and admin have access, member does not."""
+        from app.api.deps import evaluate_policy
+
+        # Superadmin can access group resources
+        superadmin = {"id": 1, "role": "superadmin"}
+        assert await evaluate_policy(superadmin, "group", 1, "read") is True
+
+        # Admin can access group resources (whitelisted alongside vault)
+        admin = {"id": 2, "role": "admin"}
+        assert await evaluate_policy(admin, "group", 1, "read") is True
+
+        # Member cannot access group resources
+        member = {"id": 3, "role": "member"}
+        assert await evaluate_policy(member, "group", 1, "read") is False
 
 
 # ─────────────────────────────────────────────────────────────────────────────

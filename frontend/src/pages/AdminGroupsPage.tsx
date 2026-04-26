@@ -54,7 +54,7 @@ function AdminGroupsPageContent(): JSX.Element {
   // ============================================================================
 
   const createMutation = useMutation({
-    mutationFn: (data: GroupFormData) => createGroup(data.name, data.description ?? ""),
+    mutationFn: (data: GroupFormData) => createGroup(data.name, data.description ?? null),
     onSuccess: () => {
       toast.success("Group created successfully");
       setCreateDialogOpen(false);
@@ -68,7 +68,7 @@ function AdminGroupsPageContent(): JSX.Element {
   const updateMutation = useMutation({
     mutationFn: (data: GroupFormData) => {
       if (!selectedGroup) throw new Error("No group selected");
-      return updateGroup(selectedGroup.id, data.name, data.description ?? "");
+      return updateGroup(selectedGroup.id, data.name, data.description ?? null);
     },
     onSuccess: () => {
       toast.success("Group updated successfully");

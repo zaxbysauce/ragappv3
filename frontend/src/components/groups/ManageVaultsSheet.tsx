@@ -107,6 +107,10 @@ export function ManageVaultsSheet({
   // ============================================================================
 
   const filteredVaults = allVaults.filter((vault) => {
+    // Only show vaults belonging to the same organization as the group
+    if (group?.org_id != null && vault.org_id !== group.org_id) {
+      return false;
+    }
     const searchLower = searchQuery.toLowerCase();
     return (
       vault.name.toLowerCase().includes(searchLower) ||

@@ -39,13 +39,14 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         # Try passlib first
         return pwd_context.verify(plain_password, hashed_password)
     except Exception:
-        pass
+        logger.warning("passlib verification failed, falling back to bcrypt")
     # Fallback to bcrypt directly if passlib fails (handles bcrypt version issues)
     try:
         import bcrypt
 
         return bcrypt.checkpw(plain_password.encode(), hashed_password.encode())
     except Exception:
+        logger.error("Password verification failed", exc_info=True)
         return False
 
 
@@ -81,17 +82,35 @@ def create_access_token(user_id: int, username: str, role: str) -> str:
     return jwt.encode(payload, secret, algorithm=algorithm)
 
 
-def decode_access_token(token: str) -> Optional[dict]:
-    """Decode and validate a JWT access token."""
+class TokenExpiredError(Exception):
+    """Raised when a token has expired."""
+
+    pass
+
+
+class TokenInvalidError(Exception):
+    """Raised when a token is invalid."""
+
+    pass
+
+
+def decode_access_token(token: str) -> dict:
+    """Decode and validate a JWT access token.
+
+    Raises:
+        TokenExpiredError: When the token has expired
+        TokenInvalidError: When the token is invalid or malformed
+    """
     try:
         secret, algorithm = get_jwt_config()
         return jwt.decode(token, secret, algorithms=[algorithm])
     except jwt.ExpiredSignatureError:
-        return None
+        raise TokenExpiredError("Token has expired")
     except jwt.InvalidTokenError:
-        return None
-    except Exception:
-        return None
+        raise TokenInvalidError("Invalid token")
+    except Exception as e:
+        logger.warning("Unexpected error decoding token: %s", type(e).__name__)
+        raise TokenInvalidError("Invalid token")
 
 
 def create_refresh_token() -> Tuple[str, str]:

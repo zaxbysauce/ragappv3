@@ -136,21 +136,24 @@ class TestAccessToken:
         assert expected_min <= exp_datetime <= expected_max
 
     def test_decode_access_token_invalid(self, mock_settings):
-        """Decode garbage string returns None."""
-        from app.services.auth_service import decode_access_token
+        """Decode garbage string raises TokenInvalidError."""
+        import pytest
 
-        result = decode_access_token("not.a.valid.token.at.all")
-        assert result is None
+        from app.services.auth_service import TokenInvalidError, decode_access_token
+
+        with pytest.raises(TokenInvalidError):
+            decode_access_token("not.a.valid.token.at.all")
 
         # Also test completely garbage input
-        result = decode_access_token("garbage!!!")
-        assert result is None
+        with pytest.raises(TokenInvalidError):
+            decode_access_token("garbage!!!")
 
     def test_decode_access_token_expired(self, mock_settings):
-        """Create token, mock time to expire it, verify returns None."""
+        """Create token, verify expired token raises TokenExpiredError."""
         import jwt
+        import pytest
 
-        from app.services.auth_service import decode_access_token
+        from app.services.auth_service import TokenExpiredError, decode_access_token
 
         # Create a token that's already expired
         secret, algorithm = TEST_SECRET_KEY, TEST_ALGORITHM
@@ -162,9 +165,9 @@ class TestAccessToken:
         }
         expired_token = jwt.encode(expired_payload, secret, algorithm=algorithm)
 
-        # Should return None for expired token
-        result = decode_access_token(expired_token)
-        assert result is None
+        # Should raise TokenExpiredError for expired token
+        with pytest.raises(TokenExpiredError):
+            decode_access_token(expired_token)
 
 
 class TestRefreshToken:

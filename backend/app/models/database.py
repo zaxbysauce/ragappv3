@@ -336,6 +336,48 @@ def run_migrations(sqlite_path: str) -> None:
         None
     """
     init_db(sqlite_path)
+
+    # Migrate refresh token index from non-unique to unique
+    conn = sqlite3.connect(sqlite_path)
+    try:
+        # Check if a unique index already exists (from prior migration run)
+        cursor = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_user_sessions_refresh_hash'"
+        )
+        row = cursor.fetchone()
+        needs_migration = False
+        if not row:
+            # No index at all — check for duplicate hashes before creating unique index
+            dup_cursor = conn.execute(
+                "SELECT refresh_token_hash, COUNT(*) as cnt FROM user_sessions GROUP BY refresh_token_hash HAVING cnt > 1"
+            )
+            if dup_cursor.fetchone():
+                needs_migration = True
+            # Create unique index directly (with or without dedup)
+            conn.execute("DROP INDEX IF EXISTS idx_user_sessions_refresh_hash")
+            if needs_migration:
+                conn.execute(
+                    "DELETE FROM user_sessions WHERE id NOT IN (SELECT MAX(id) FROM user_sessions GROUP BY refresh_token_hash)"
+                )
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_user_sessions_refresh_hash ON user_sessions(refresh_token_hash)"
+            )
+        elif row[0] and "UNIQUE" not in row[0].upper():
+            # Non-unique index exists — migrate to unique
+            conn.execute("DROP INDEX IF EXISTS idx_user_sessions_refresh_hash")
+            conn.execute(
+                "DELETE FROM user_sessions WHERE id NOT IN (SELECT MAX(id) FROM user_sessions GROUP BY refresh_token_hash)"
+            )
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_user_sessions_refresh_hash ON user_sessions(refresh_token_hash)"
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
     migrate_add_vaults(sqlite_path)
     migrate_add_email_columns(sqlite_path)
     migrate_add_file_metadata_columns(sqlite_path)

@@ -21,11 +21,11 @@ export default function RegisterPage() {
     confirmPassword: "",
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const { register, isLoading, authMode, isAuthenticated } = useAuthStore();
+  const { register, isLoading, isAuthenticated } = useAuthStore();
   const navigate = useNavigate();
 
-  // Guard: redirect if not in JWT mode or already authenticated
-  if (authMode !== "jwt" || isAuthenticated) {
+  // Guard: redirect if already authenticated
+  if (isAuthenticated) {
     return <Navigate to="/login" replace />;
   }
 

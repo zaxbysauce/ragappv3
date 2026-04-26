@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import axios from "axios";
-import { setJwtAccessToken, getJwtAccessToken, ensureCsrfToken, resetCsrfToken, attachCsrfInterceptor } from "@/lib/api";
+import { setJwtAccessToken, getJwtAccessToken, refreshAccessToken, ensureCsrfToken, resetCsrfToken, attachCsrfInterceptor } from "@/lib/api";
 
 interface User {
   id: number;
@@ -29,7 +29,7 @@ interface AuthState {
   isLoading: boolean;
   isInitialized: boolean;
   needsSetup: boolean | null;
-  authMode: "jwt" | "apikey" | "unknown";
+  authMode: "jwt" | "unknown";
 
   // Actions
   login: (username: string, password: string) => Promise<void>;
@@ -38,7 +38,7 @@ interface AuthState {
   refreshToken: () => Promise<string | null>;
   fetchMe: () => Promise<void>;
   checkSetupStatus: () => Promise<void>;
-  setAuthMode: (mode: "jwt" | "apikey") => void;
+  setAuthMode: (mode: "jwt") => void;
   updateProfile: (data: { full_name?: string }) => Promise<void>;
   init: () => Promise<void>;
 
@@ -87,7 +87,7 @@ export const useAuthStore = create<AuthState>()(
 
       _setLoading: (loading: boolean) => set({ isLoading: loading }),
 
-      setAuthMode: (mode: "jwt" | "apikey") => set({ authMode: mode }),
+      setAuthMode: (mode: "jwt") => set({ authMode: mode }),
 
       init: async () => {
         // Guard: if init is already in-flight, await the same promise instead of
@@ -249,19 +249,24 @@ export const useAuthStore = create<AuthState>()(
 
       refreshToken: async (): Promise<string | null> => {
         try {
-          const response = await authClient.post<{ access_token: string }>(
-            "/auth/refresh",
-            {},
-            { withCredentials: true }
-          );
-
-          const { access_token } = response.data;
-
-          // Update store and apiClient
-          set({ accessToken: access_token });
-          setJwtAccessToken(access_token);
-
-          return access_token;
+          // Use the centralized refreshAccessToken from api.ts (singleton lock)
+          // instead of calling authClient directly. This prevents concurrent refresh
+          // from rotating the same cookie twice.
+          const newToken = await refreshAccessToken();
+          if (newToken) {
+            // Update both store state AND apiClient module-level token
+            set({ accessToken: newToken });
+            setJwtAccessToken(newToken);
+            return newToken;
+          }
+          // Clear auth state when refresh returns null (server rejected refresh)
+          set({
+            user: null,
+            accessToken: null,
+            isAuthenticated: false,
+          });
+          setJwtAccessToken(null);
+          return null;
         } catch (error) {
           console.error("Token refresh failed:", error);
           // Clear auth state on refresh failure

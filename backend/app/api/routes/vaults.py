@@ -73,6 +73,7 @@ class VaultResponse(BaseModel):
     file_count: int = 0
     memory_count: int = 0
     session_count: int = 0
+    org_id: Optional[int] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -94,6 +95,7 @@ def _row_to_vault_response(row) -> VaultResponse:
         file_count=row[5] or 0,
         memory_count=row[6] or 0,
         session_count=row[7] or 0,
+        org_id=row[8],
     )
 
 
@@ -101,7 +103,8 @@ _VAULT_WITH_COUNTS_SQL = """
     SELECT v.id, v.name, v.description, v.created_at, v.updated_at,
            COUNT(DISTINCT f.id) as file_count,
            COUNT(DISTINCT m.id) as memory_count,
-           COUNT(DISTINCT cs.id) as session_count
+           COUNT(DISTINCT cs.id) as session_count,
+           v.org_id
     FROM vaults v
     LEFT JOIN files f ON f.vault_id = v.id
     LEFT JOIN memories m ON m.vault_id = v.id
