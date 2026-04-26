@@ -203,7 +203,7 @@ def issue_csrf_token(response: Response, csrf_manager: CSRFManager) -> str:
         token,
         max_age=settings.csrf_token_ttl,
         samesite="lax",
-        secure=False,  # Allow HTTP for development; set True in production with HTTPS
+        secure=settings.csrf_cookie_secure,
         httponly=False,
     )
     return token

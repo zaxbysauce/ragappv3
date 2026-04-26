@@ -262,6 +262,8 @@ class Settings(BaseSettings):
     csrf_token_ttl: int = 900
     admin_rate_limit: str = "10/minute"
     health_check_api_key: str = "health-api-key"
+    csrf_cookie_secure: bool = False
+    """Set Secure flag on CSRF cookie. Default False for local development. Set to True in production with HTTPS."""
 
     # Auto-scan configuration
     auto_scan_enabled: bool = True

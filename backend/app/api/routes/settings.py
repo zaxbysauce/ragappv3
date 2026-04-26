@@ -6,7 +6,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, field_validator, model_validator
 
-from app.api.deps import get_csrf_manager, get_current_active_user, get_db
+from app.api.deps import get_csrf_manager, get_current_active_user, get_db, require_role
 from app.config import settings
 from app.security import CSRFManager, issue_csrf_token
 
@@ -412,7 +412,7 @@ def get_settings(
 def post_settings(
     update: SettingsUpdate,
     conn: sqlite3.Connection = Depends(get_db),
-    user: dict = Depends(get_current_active_user),
+    _role: dict = Depends(require_role("admin")),
 ):
     """Apply settings update and persist to database."""
     result = _apply_settings_update(update)
@@ -424,7 +424,7 @@ def post_settings(
 def put_settings(
     update: SettingsUpdate,
     conn: sqlite3.Connection = Depends(get_db),
-    user: dict = Depends(get_current_active_user),
+    _role: dict = Depends(require_role("admin")),
 ):
     """Update settings (upserts into settings_kv)."""
     result = _apply_settings_update(update)
@@ -442,7 +442,7 @@ def get_csrf_token(
 
 
 @router.get("/settings/connection")
-async def test_connection():
+async def test_connection(user: dict = Depends(get_current_active_user)):
     """Test connectivity to Ollama endpoints and reranker."""
     targets = {
         "embeddings": settings.ollama_embedding_url,

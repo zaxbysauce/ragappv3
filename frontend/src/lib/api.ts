@@ -121,7 +121,7 @@ export function attachCsrfInterceptor(instance: ReturnType<typeof axios.create>)
 let _refreshInFlight: Promise<string | null> | null = null;
 
 // Standalone refresh function to avoid circular dependencies
-async function refreshAccessToken(): Promise<string | null> {
+export async function refreshAccessToken(): Promise<string | null> {
   if (_refreshInFlight) {
     return _refreshInFlight;
   }
@@ -175,16 +175,10 @@ const apiClient = axios.create({
   },
 });
 
-// Attach authentication token (JWT takes precedence over API key)
+// Attach JWT authentication token to all apiClient requests
 apiClient.interceptors.request.use((config) => {
-  // JWT takes precedence over API key
   if (_jwtAccessToken) {
     config.headers.Authorization = `Bearer ${_jwtAccessToken}`;
-    return config;
-  }
-  const apiKey = localStorage.getItem("kv_api_key");
-  if (apiKey) {
-    config.headers.Authorization = `Bearer ${apiKey}`;
   }
   return config;
 });
@@ -220,38 +214,41 @@ apiClient.interceptors.response.use(
       return Promise.reject(error);
     }
 
-    // Handle 401 Unauthorized - attempt silent refresh for JWT, or clear API key
+    // Handle 401 Unauthorized — attempt silent token refresh for expired JWTs
     if (error.response?.status === 401) {
-      // JWT auth: attempt silent token refresh before redirecting
-      if (_jwtAccessToken) {
-        // Use a flag to prevent infinite refresh loops
-        if (!error.config._retry) {
-          error.config._retry = true;
+      const detail = error.response?.data?.detail;
+      const isTokenInvalid = typeof detail === "string" && (
+        detail.includes("token_invalid") || detail.includes("user_inactive")
+      );
+
+      if (_jwtAccessToken && !isTokenInvalid) {
+        // Token may be refreshable — retry with exponential backoff
+        const retryCount = (error.config._retryCount || 0) as number;
+        const maxRetries = 2;
+        const delays = [1000, 2000]; // 1s, 2s
+
+        if (retryCount < maxRetries) {
+          error.config._retryCount = retryCount + 1;
+
           try {
+            // Wait before retrying (exponential backoff)
+            await new Promise((resolve) => setTimeout(resolve, delays[retryCount] || 2000));
+
             const newToken = await refreshAccessToken();
             if (newToken) {
               error.config.headers.Authorization = `Bearer ${newToken}`;
               return apiClient(error.config);
             }
           } catch {
-            // Refresh failed, fall through to logout
+            // Refresh failed — fall through to logout
           }
         }
-        // Clear JWT auth
-        _jwtAccessToken = null;
-        window.dispatchEvent(new CustomEvent("auth:unauthorized"));
-        if (window.location.pathname !== "/login") {
-          window.location.href = "/login";
-        }
-      } else {
-        // API key auth: clear the key and redirect
-        localStorage.removeItem("kv_api_key");
-        // Dispatch custom event that AuthProvider can listen to
-        window.dispatchEvent(new CustomEvent("auth:unauthorized"));
-        // Also try to redirect using router if available
-        if (window.history && window.location.pathname !== "/login") {
-          window.location.href = "/login";
-        }
+      }
+
+      // Clear auth state and redirect to login
+      _jwtAccessToken = null;
+      if (window.location.pathname !== "/login") {
+        window.location.href = "/login";
       }
     }
 
@@ -521,8 +518,9 @@ export interface Vault {
   updated_at: string;
   file_count: number;
   memory_count: number;
-  session_count: number;
-}
+    session_count: number;
+    org_id: number | null;
+  }
 
 export interface VaultListResponse {
   vaults: Vault[];
@@ -690,6 +688,59 @@ export async function getDocumentStats(vaultId?: number): Promise<DocumentStatsR
   return response.data;
 }
 
+/**
+ * Parse an SSE stream from a ReadableStream, invoking callbacks for each event.
+ * Shared between the initial fetch and the 401 retry path to avoid duplication.
+ */
+async function parseSSEStream(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  callbacks: ChatStreamCallbacks,
+): Promise<void> {
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith("data: ")) {
+        const data = trimmed.slice(6);
+        if (data === "[DONE]") {
+          callbacks.onComplete?.();
+          return;
+        }
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed.type === 'error') {
+            callbacks.onError?.(new Error(parsed.message || 'Chat stream error'));
+            return;
+          }
+          if (parsed.content) {
+            callbacks.onMessage(parsed.content);
+          }
+          if (parsed.sources) {
+            const scoreType = ((parsed as { score_type?: Source["score_type"] }).score_type
+              ?? "distance") as Source["score_type"];
+            const enrichedSources = parsed.sources.map((s: Source) => ({
+              ...s,
+              score_type: scoreType,
+            }));
+            callbacks.onSources?.(enrichedSources);
+          }
+        } catch {
+          callbacks.onMessage(data);
+        }
+      }
+    }
+  }
+}
+
 export function chatStream(
   messages: ChatMessage[],
   callbacks: ChatStreamCallbacks,
@@ -703,8 +754,7 @@ export function chatStream(
       if (_jwtAccessToken && isTokenNearExpiry(_jwtAccessToken)) {
         const refreshedToken = await refreshAccessToken();
         if (!refreshedToken) {
-          // Refresh failed - dispatch auth error and abort
-          window.dispatchEvent(new CustomEvent("auth:unauthorized"));
+          // Refresh failed - abort
           callbacks.onError?.(new Error("Session expired. Please log in again."));
           return;
         }
@@ -723,14 +773,8 @@ export function chatStream(
         "Content-Type": "application/json",
         "X-CSRF-Token": csrfToken,
       };
-      // JWT takes precedence over API key
       if (_jwtAccessToken) {
         headers["Authorization"] = `Bearer ${_jwtAccessToken}`;
-      } else {
-        const apiKey = localStorage.getItem("kv_api_key");
-        if (apiKey) {
-          headers["Authorization"] = `Bearer ${apiKey}`;
-        }
       }
 
       const response = await fetch(`${API_BASE_URL}/chat/stream`, {
@@ -741,6 +785,45 @@ export function chatStream(
       });
 
       if (!response.ok) {
+        if (response.status === 401 && _jwtAccessToken) {
+          // Check error detail — only retry on token_expired, skip token_invalid/user_inactive
+          const errorBody = await response.json().catch(() => null);
+          const detail = errorBody?.detail;
+          const isTokenExpired = typeof detail === "string" && detail.includes("token_expired");
+          const isTokenInvalid = typeof detail === "string" && (
+            detail.includes("token_invalid") || detail.includes("user_inactive")
+          );
+
+          if (isTokenExpired && !isTokenInvalid) {
+            try {
+              // Backoff delay before retry (1 second, matching interceptor pattern)
+              await new Promise((resolve) => setTimeout(resolve, 1000));
+
+              const newToken = await refreshAccessToken();
+              if (newToken) {
+                headers["Authorization"] = `Bearer ${newToken}`;
+                const retryResponse = await fetch(`${API_BASE_URL}/chat/stream`, {
+                  method: "POST",
+                  headers,
+                  body: JSON.stringify({ messages, ...(vaultId != null && { vault_id: vaultId }) }),
+                  signal: abortController.signal,
+                });
+                if (!retryResponse.ok) {
+                  throw new Error(`HTTP error! status: ${retryResponse.status}`);
+                }
+                const retryReader = retryResponse.body?.getReader();
+                if (!retryReader) {
+                  throw new Error("Response body is not readable");
+                }
+                await parseSSEStream(retryReader, callbacks);
+                callbacks.onComplete?.();
+                return;
+              }
+            } catch {
+              // Refresh or retry failed — fall through to error
+            }
+          }
+        }
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
@@ -749,56 +832,7 @@ export function chatStream(
         throw new Error("Response body is not readable");
       }
 
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (trimmed.startsWith("data: ")) {
-            const data = trimmed.slice(6);
-            if (data === "[DONE]") {
-              callbacks.onComplete?.();
-              return;
-            }
-            try {
-              const parsed = JSON.parse(data);
-              if (parsed.type === 'error') {
-                callbacks.onError?.(new Error(parsed.message || 'Chat stream error'));
-                return;
-              }
-              if (parsed.content) {
-                callbacks.onMessage(parsed.content);
-              }
-              if (parsed.sources) {
-                // Inject score_type from done event into each source so
-                // relevance labels render with the correct polarity and
-                // thresholds. Default to "distance" if the backend did not
-                // send one (older backends / error paths) — safer than
-                // leaving `score_type` undefined, which previously caused
-                // every source to fall through to the "Tangential" bucket.
-                const scoreType = ((parsed as { score_type?: Source["score_type"] }).score_type
-                  ?? "distance") as Source["score_type"];
-                const enrichedSources = parsed.sources.map((s: Source) => ({
-                  ...s,
-                  score_type: scoreType,
-                }));
-                callbacks.onSources?.(enrichedSources);
-              }
-            } catch {
-              callbacks.onMessage(data);
-            }
-          }
-        }
-      }
-
+      await parseSSEStream(reader, callbacks);
       callbacks.onComplete?.();
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
@@ -937,12 +971,12 @@ export interface Group {
 
 export interface GroupCreateRequest {
   name: string;
-  description: string;
+  description: string | null;
 }
 
 export interface GroupUpdateRequest {
   name: string;
-  description: string;
+  description: string | null;
 }
 
 export interface GroupListResponse {
@@ -966,7 +1000,7 @@ export async function listGroups(
   return response.data;
 }
 
-export async function createGroup(name: string, description: string): Promise<Group> {
+export async function createGroup(name: string, description: string | null): Promise<Group> {
   const request: GroupCreateRequest = { name, description };
   const response = await apiClient.post<Group>("/groups", request);
   return response.data;
@@ -975,7 +1009,7 @@ export async function createGroup(name: string, description: string): Promise<Gr
 export async function updateGroup(
   groupId: number,
   name: string,
-  description: string
+  description: string | null
 ): Promise<Group> {
   const request: GroupUpdateRequest = { name, description };
   const response = await apiClient.put<Group>(`/groups/${groupId}`, request);

@@ -20,6 +20,63 @@ from app.services.auth_service import hash_password, password_strength_check
 router = APIRouter(prefix="/users", tags=["users"])
 
 
+def _auto_assign_user_to_defaults(conn, user_id: int) -> None:
+    """Assign a user to the Default org, All Users group, and vault 1 access.
+
+    Lazily creates the Default organization and All Users group if they
+    don't exist. Fully idempotent — safe to call multiple times for the
+    same user. Uses caller's transaction context (no internal BEGIN/COMMIT).
+    """
+    # 1. Ensure Default organization exists, retrieve org_id
+    conn.execute(
+        "INSERT OR IGNORE INTO organizations (name, description) VALUES (?, ?)",
+        ("Default", "Default organization for all users"),
+    )
+    row = conn.execute(
+        "SELECT id FROM organizations WHERE name = 'Default' LIMIT 1"
+    ).fetchone()
+    if row is None:
+        raise RuntimeError("Failed to retrieve Default organization after insert")
+    org_id = row[0]
+
+    # 2. Add user as member of Default org
+    conn.execute(
+        "INSERT OR IGNORE INTO org_members (org_id, user_id, role) VALUES (?, ?, ?)",
+        (org_id, user_id, "member"),
+    )
+
+    # 3. Ensure All Users group exists, retrieve group_id
+    conn.execute(
+        "INSERT OR IGNORE INTO groups (org_id, name, description) VALUES (?, ?, ?)",
+        (org_id, "All Users", "All users in this organization"),
+    )
+    row = conn.execute(
+        "SELECT id FROM groups WHERE org_id = ? AND name = 'All Users' LIMIT 1",
+        (org_id,),
+    ).fetchone()
+    if row is None:
+        raise RuntimeError("Failed to retrieve All Users group after insert")
+    group_id = row[0]
+
+    # 4. Add user to All Users group
+    conn.execute(
+        "INSERT OR IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)",
+        (group_id, user_id),
+    )
+
+    # 5. Grant All Users group read access to vault 1
+    conn.execute(
+        "INSERT OR IGNORE INTO vault_group_access (vault_id, group_id, permission) VALUES (?, ?, ?)",
+        (1, group_id, "read"),
+    )
+
+    # 6. Grant user write access to vault 1
+    conn.execute(
+        "INSERT OR IGNORE INTO vault_members (vault_id, user_id, permission) VALUES (?, ?, ?)",
+        (1, user_id, "write"),
+    )
+
+
 class UpdateRoleRequest(BaseModel):
     role: str = Field(...)
 
@@ -67,6 +124,7 @@ class UserGroupResponse(BaseModel):
     org_id: int
 
 
+@router.post("", include_in_schema=False)
 @router.post("/")
 async def create_user(
     body: CreateUserRequest,
@@ -124,11 +182,8 @@ async def create_user(
         conn.commit()
         user_id = cursor.lastrowid
 
-        # Grant write access to the default vault so the user can chat immediately
-        conn.execute(
-            "INSERT OR IGNORE INTO vault_members (vault_id, user_id, permission) VALUES (1, ?, 'write')",
-            (user_id,),
-        )
+        # Auto-assign user to Default org, All Users group, and vault 1 access
+        _auto_assign_user_to_defaults(conn, user_id)
         conn.commit()
 
         # Fetch the created user
@@ -150,6 +205,7 @@ async def create_user(
         pool.release_connection(conn)
 
 
+@router.get("", include_in_schema=False)
 @router.get("/")
 async def list_users(
     skip: int = 0,

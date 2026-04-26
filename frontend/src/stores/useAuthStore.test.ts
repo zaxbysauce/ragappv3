@@ -30,6 +30,7 @@ vi.mock("axios", () => ({
 vi.mock("@/lib/api", () => ({
   setJwtAccessToken: vi.fn(),
   getJwtAccessToken: vi.fn(() => null),
+  refreshAccessToken: vi.fn(),
   resetCsrfToken: mockResetCsrfToken,
   ensureCsrfToken: mockEnsureCsrfToken,
   attachCsrfInterceptor: vi.fn(),
@@ -46,7 +47,7 @@ vi.mock("@/lib/api", () => ({
 
 // Import after mocks
 import { useAuthStore, resetInitState } from "./useAuthStore";
-import { setJwtAccessToken, getJwtAccessToken } from "@/lib/api";
+import { setJwtAccessToken, getJwtAccessToken, refreshAccessToken } from "@/lib/api";
 
 describe("useAuthStore", () => {
   // Grab references to the mock functions for tests
@@ -308,9 +309,7 @@ describe("useAuthStore", () => {
 
       const { refreshToken } = useAuthStore.getState();
       
-      mockPost?.mockResolvedValueOnce({
-        data: { access_token: "new-jwt" },
-      });
+      vi.mocked(refreshAccessToken).mockResolvedValueOnce("new-jwt");
 
       const result = await refreshToken();
 
@@ -328,9 +327,7 @@ describe("useAuthStore", () => {
 
       const { refreshToken } = useAuthStore.getState();
       
-      mockPost?.mockRejectedValueOnce({
-        response: { status: 401 },
-      });
+      vi.mocked(refreshAccessToken).mockResolvedValueOnce(null);
 
       const result = await refreshToken();
 
@@ -619,11 +616,7 @@ describe("useAuthStore", () => {
       expect(useAuthStore.getState().authMode).toBe("jwt");
     });
 
-    it("should set authMode to apikey", () => {
-      const { setAuthMode } = useAuthStore.getState();
-      setAuthMode("apikey");
-      expect(useAuthStore.getState().authMode).toBe("apikey");
-    });
+    // "apikey" mode removed — JWT is the only auth mode
   });
 
   describe("_setLoading", () => {

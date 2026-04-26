@@ -1,6 +1,8 @@
 """Authentication routes."""
 
 import hashlib
+import logging
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -8,6 +10,7 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from app.api.deps import get_current_active_user, get_db
+from app.api.routes.users import _auto_assign_user_to_defaults
 from app.limiter import limiter
 from app.security import csrf_protect, get_csrf_manager, issue_csrf_token
 from app.services.auth_service import (
@@ -17,6 +20,8 @@ from app.services.auth_service import (
     password_strength_check,
     verify_password,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -91,15 +96,13 @@ async def register(
         )
         db.commit()
         user_id = cursor.lastrowid
-    except Exception as e:
+    except Exception:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to create user: {str(e)}")
+        logger.error("Failed to create user", exc_info=True)
+        raise HTTPException(status_code=500, detail="An internal error occurred. Please try again later.")
 
-    # Grant write access to the default vault so new users can chat immediately
-    db.execute(
-        "INSERT OR IGNORE INTO vault_members (vault_id, user_id, permission) VALUES (1, ?, 'write')",
-        (user_id,),
-    )
+    # Auto-assign user to Default org, All Users group, and vault 1 access
+    _auto_assign_user_to_defaults(db, user_id)
     db.commit()
 
     # Create tokens for auto-login
@@ -235,11 +238,10 @@ async def login(
             (datetime.now(timezone.utc).isoformat(), user_id),
         )
         db.commit()
-    except Exception as e:
+    except Exception:
         db.rollback()
-        raise HTTPException(
-            status_code=500, detail=f"Failed to create session: {str(e)}"
-        )
+        logger.error("Failed to create session", exc_info=True)
+        raise HTTPException(status_code=500, detail="An internal error occurred. Please try again later.")
 
     # Set httpOnly refresh cookie
     response.set_cookie(
@@ -279,7 +281,7 @@ async def refresh(
 ):
     """Refresh access token using httpOnly refresh cookie. Rotates refresh token."""
     if not refresh_token:
-        raise HTTPException(status_code=401, detail="Refresh token missing")
+        raise HTTPException(status_code=401, detail="Refresh token missing", headers={"WWW-Authenticate": "Bearer"})
 
     token_hash = hashlib.sha256(refresh_token.encode()).hexdigest()
 
@@ -292,7 +294,7 @@ async def refresh(
     row = cursor.fetchone()
 
     if not row:
-        raise HTTPException(status_code=401, detail="Invalid refresh token")
+        raise HTTPException(status_code=401, detail="Invalid refresh token", headers={"WWW-Authenticate": "Bearer"})
 
     session_id, user_id, expires_at_str, username, role, is_active = row
 
@@ -301,19 +303,34 @@ async def refresh(
     if expires_at < datetime.now(timezone.utc):
         db.execute("DELETE FROM user_sessions WHERE id = ?", (session_id,))
         db.commit()
-        raise HTTPException(status_code=401, detail="Refresh token expired")
+        raise HTTPException(status_code=401, detail="Refresh token expired", headers={"WWW-Authenticate": "Bearer"})
 
     if not is_active:
         raise HTTPException(status_code=403, detail="User account is inactive")
 
-    # Rotate: delete old session, create new
+    # Rotate: delete old session, create new with SQLite serialization
     new_refresh_token_raw, new_refresh_token_hash = create_refresh_token()
     new_expires_at = datetime.now(timezone.utc) + timedelta(
         days=REFRESH_TOKEN_MAX_AGE_DAYS
     )
 
     try:
-        # Insert new session FIRST, then delete old — prevents token loss on INSERT failure
+        db.execute("BEGIN EXCLUSIVE")
+    except sqlite3.OperationalError:
+        # Already in a transaction (e.g., from connection pool wrapper) — proceed without exclusive lock
+        pass
+
+    try:
+        # Re-verify the session still exists (prevents TOCTOU)
+        cursor = db.execute(
+            "SELECT id FROM user_sessions WHERE id = ? AND refresh_token_hash = ?",
+            (session_id, token_hash),
+        )
+        if not cursor.fetchone():
+            db.execute("ROLLBACK")
+            raise HTTPException(status_code=401, detail="Refresh token already used", headers={"WWW-Authenticate": "Bearer"})
+
+        # Insert new session BEFORE deleting old — if INSERT fails, old session remains valid
         db.execute(
             "INSERT INTO user_sessions (user_id, refresh_token_hash, expires_at, last_used_at) VALUES (?, ?, ?, ?)",
             (
@@ -323,13 +340,24 @@ async def refresh(
                 datetime.now(timezone.utc).isoformat(),
             ),
         )
+        # Delete old session
         db.execute("DELETE FROM user_sessions WHERE id = ?", (session_id,))
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(
-            status_code=500, detail=f"Failed to rotate session: {str(e)}"
-        )
+        db.execute("COMMIT")
+    except sqlite3.IntegrityError:
+        try:
+            db.execute("ROLLBACK")
+        except Exception:
+            pass
+        raise HTTPException(status_code=401, detail="Refresh token already used", headers={"WWW-Authenticate": "Bearer"})
+    except HTTPException:
+        raise
+    except Exception:
+        try:
+            db.execute("ROLLBACK")
+        except Exception:
+            pass
+        logger.error("Session rotation failed", exc_info=True)
+        raise HTTPException(status_code=500, detail="An internal error occurred. Please try again later.")
 
     access_token = create_access_token(user_id, username, role)
 
@@ -370,6 +398,7 @@ async def logout(
             db.commit()
         except Exception:
             db.rollback()
+            logger.error("Failed to delete session during logout", exc_info=True)
 
     response.delete_cookie(key=REFRESH_TOKEN_COOKIE_NAME, path="/api/auth/refresh")
     return {"message": "Logged out successfully"}
@@ -430,7 +459,8 @@ async def update_me(
         db.commit()
     except Exception:
         db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to update user")
+        logger.error("Failed to update user", exc_info=True)
+        raise HTTPException(status_code=500, detail="An internal error occurred. Please try again later.")
 
     cursor = db.execute(
         "SELECT id, username, full_name, role, is_active FROM users WHERE id = ?",
@@ -500,11 +530,10 @@ async def change_password(
             (user_id,),
         )
         db.commit()
-    except Exception as e:
+    except Exception:
         db.rollback()
-        raise HTTPException(
-            status_code=500, detail=f"Failed to change password: {str(e)}"
-        )
+        logger.error("Failed to change password", exc_info=True)
+        raise HTTPException(status_code=500, detail="An internal error occurred. Please try again later.")
 
     # Generate new tokens
     access_token = create_access_token(user_id, username, role)
@@ -519,11 +548,10 @@ async def change_password(
             (user_id, refresh_token_hash, expires_at.isoformat()),
         )
         db.commit()
-    except Exception as e:
+    except Exception:
         db.rollback()
-        raise HTTPException(
-            status_code=500, detail=f"Failed to create new session: {str(e)}"
-        )
+        logger.error("Failed to create new session", exc_info=True)
+        raise HTTPException(status_code=500, detail="An internal error occurred. Please try again later.")
 
     # Set httpOnly refresh cookie
     response.set_cookie(
@@ -556,7 +584,7 @@ async def list_sessions(
     cursor = db.execute(
         """SELECT id, ip_address, user_agent, created_at, expires_at
            FROM user_sessions
-           WHERE user_id = ?
+           WHERE user_id = ? AND expires_at > datetime('now')
            ORDER BY created_at DESC""",
         (user["id"],),
     )
@@ -605,11 +633,10 @@ async def revoke_session(
             (session_id,),
         )
         db.commit()
-    except Exception as e:
+    except Exception:
         db.rollback()
-        raise HTTPException(
-            status_code=500, detail=f"Failed to revoke session: {str(e)}"
-        )
+        logger.error("Failed to revoke session", exc_info=True)
+        raise HTTPException(status_code=500, detail="An internal error occurred. Please try again later.")
 
     return Response(status_code=204)
 
@@ -628,7 +655,7 @@ async def revoke_all_sessions(
     # Get current session from cookie
     refresh_token = request.cookies.get(REFRESH_TOKEN_COOKIE_NAME)
     if not refresh_token:
-        raise HTTPException(status_code=401, detail="Refresh token missing")
+        raise HTTPException(status_code=401, detail="Refresh token missing", headers={"WWW-Authenticate": "Bearer"})
 
     token_hash = hashlib.sha256(refresh_token.encode()).hexdigest()
 
@@ -640,7 +667,7 @@ async def revoke_all_sessions(
     row = cursor.fetchone()
 
     if not row:
-        raise HTTPException(status_code=401, detail="Invalid refresh token")
+        raise HTTPException(status_code=401, detail="Invalid refresh token", headers={"WWW-Authenticate": "Bearer"})
 
     current_session_id = row[0]
 
@@ -662,11 +689,10 @@ async def revoke_all_sessions(
             (new_refresh_token_hash, new_expires_at.isoformat(), current_session_id),
         )
         db.commit()
-    except Exception as e:
+    except Exception:
         db.rollback()
-        raise HTTPException(
-            status_code=500, detail=f"Failed to revoke sessions: {str(e)}"
-        )
+        logger.error("Failed to revoke all sessions", exc_info=True)
+        raise HTTPException(status_code=500, detail="An internal error occurred. Please try again later.")
 
     # Generate new access token
     access_token = create_access_token(user["id"], user["username"], user["role"])

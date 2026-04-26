@@ -3,7 +3,6 @@ import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { ProtectedRoute } from "./ProtectedRoute";
 import { RoleGuard, AdminGuard, SuperAdminGuard } from "./RoleGuard";
-import * as AuthContext from "@/contexts/AuthContext";
 import * as useAuthStoreModule from "@/stores/useAuthStore";
 
 // Mock lucide-react to avoid a jsdom ARIA live-region segfault on cleanup.
@@ -21,10 +20,6 @@ vi.mock("@/stores/useAuthStore", () => ({
   useAuthStore: vi.fn(),
 }));
 
-vi.mock("@/contexts/AuthContext", () => ({
-  useAuth: vi.fn(),
-}));
-
 // Helper to render with router
 const renderWithRouter = (ui: React.ReactElement, initialEntry = "/") => {
   return render(
@@ -40,12 +35,6 @@ describe("ProtectedRoute", () => {
   });
 
   it("shows loading spinner when loading", () => {
-    // Set up return values for both mocks
-    vi.mocked(AuthContext.useAuth).mockReturnValue({
-      isAuthenticated: false,
-      isLoading: true,
-      user: null,
-    } as any);
     vi.mocked(useAuthStoreModule.useAuthStore).mockReturnValue({
       isAuthenticated: false,
       isLoading: true,
@@ -59,11 +48,6 @@ describe("ProtectedRoute", () => {
   });
 
   it("redirects to /login when not authenticated", () => {
-    vi.mocked(AuthContext.useAuth).mockReturnValue({
-      isAuthenticated: false,
-      isLoading: false,
-      user: null,
-    } as any);
     vi.mocked(useAuthStoreModule.useAuthStore).mockReturnValue({
       isAuthenticated: false,
       isLoading: false,
@@ -76,11 +60,6 @@ describe("ProtectedRoute", () => {
   });
 
   it("redirects to /setup when needsSetup is true", () => {
-    vi.mocked(AuthContext.useAuth).mockReturnValue({
-      isAuthenticated: false,
-      isLoading: false,
-      user: null,
-    } as any);
     vi.mocked(useAuthStoreModule.useAuthStore).mockReturnValue({
       isAuthenticated: false,
       isLoading: false,
@@ -93,11 +72,6 @@ describe("ProtectedRoute", () => {
   });
 
   it("renders children when authenticated via store", () => {
-    vi.mocked(AuthContext.useAuth).mockReturnValue({
-      isAuthenticated: true,
-      isLoading: false,
-      user: { id: "1", username: "testuser" },
-    } as any);
     vi.mocked(useAuthStoreModule.useAuthStore).mockReturnValue({
       isAuthenticated: true,
       isLoading: false,
@@ -111,11 +85,6 @@ describe("ProtectedRoute", () => {
   });
 
   it("renders children when authenticated via store (JWT)", () => {
-    vi.mocked(AuthContext.useAuth).mockReturnValue({
-      isAuthenticated: false,
-      isLoading: false,
-      user: null,
-    } as any);
     vi.mocked(useAuthStoreModule.useAuthStore).mockReturnValue({
       isAuthenticated: true,
       isLoading: false,

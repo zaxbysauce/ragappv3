@@ -13,7 +13,11 @@ from fastapi import Cookie, Depends, Header, HTTPException, Request
 from app.config import Settings, settings
 from app.models.database import SQLiteConnectionPool, get_pool
 from app.security import get_csrf_manager  # noqa: F401
-from app.services.auth_service import decode_access_token
+from app.services.auth_service import (
+    TokenExpiredError,
+    TokenInvalidError,
+    decode_access_token,
+)
 
 
 class UserRole(IntEnum):
@@ -185,18 +189,43 @@ async def get_current_active_user(
         }
 
     # User authentication enabled - validate JWT token
-    payload = decode_access_token(token)
-
-    if not payload:
-        raise HTTPException(status_code=403, detail="Invalid or expired token")
+    try:
+        payload = decode_access_token(token)
+    except TokenExpiredError:
+        raise HTTPException(
+            status_code=401,
+            detail="token_expired",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except TokenInvalidError:
+        raise HTTPException(
+            status_code=401,
+            detail="token_invalid",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     # Enforce token type — reject refresh tokens used as access tokens
     if payload.get("type") != "access":
-        raise HTTPException(status_code=403, detail="Invalid token type")
+        raise HTTPException(
+            status_code=401,
+            detail="token_invalid",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
-    user_id = int(payload.get("sub", 0))
+    try:
+        user_id = int(payload.get("sub", 0))
+    except (ValueError, TypeError):
+        raise HTTPException(
+            status_code=401,
+            detail="token_invalid",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     if not user_id:
-        raise HTTPException(status_code=403, detail="Invalid token payload")
+        raise HTTPException(
+            status_code=401,
+            detail="token_invalid",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     cursor = db.execute(
         "SELECT id, username, full_name, role, is_active, must_change_password FROM users WHERE id = ?",
@@ -205,7 +234,11 @@ async def get_current_active_user(
     row = cursor.fetchone()
 
     if not row:
-        raise HTTPException(status_code=403, detail="User not found")
+        raise HTTPException(
+            status_code=401,
+            detail="token_invalid",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     user = {
         "id": row[0],
@@ -219,7 +252,11 @@ async def get_current_active_user(
     }
 
     if not user["is_active"]:
-        raise HTTPException(status_code=403, detail="User account is inactive")
+        raise HTTPException(
+            status_code=401,
+            detail="user_inactive",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     return user
 
@@ -238,7 +275,11 @@ async def _evaluate_policy(
     if user_id is None:
         return False
 
-    if resource_type != "vault":
+    if resource_type not in ("vault", "group"):
+        return user_role == "superadmin"
+
+    # Group resources: admin and superadmin have full access
+    if resource_type == "group":
         return user_role in ("superadmin", "admin")
 
     if resource_id is None:
