@@ -10,9 +10,9 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from app.api.deps import get_current_active_user, get_db
+from app.api.routes.users import _auto_assign_user_to_defaults
 from app.limiter import limiter
 from app.security import csrf_protect, get_csrf_manager, issue_csrf_token
-from app.api.routes.users import _auto_assign_user_to_defaults
 from app.services.auth_service import (
     create_access_token,
     create_refresh_token,
@@ -96,7 +96,7 @@ async def register(
         )
         db.commit()
         user_id = cursor.lastrowid
-    except Exception as e:
+    except Exception:
         db.rollback()
         logger.error("Failed to create user", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again later.")
@@ -238,7 +238,7 @@ async def login(
             (datetime.now(timezone.utc).isoformat(), user_id),
         )
         db.commit()
-    except Exception as e:
+    except Exception:
         db.rollback()
         logger.error("Failed to create session", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again later.")
@@ -351,7 +351,7 @@ async def refresh(
         raise HTTPException(status_code=401, detail="Refresh token already used", headers={"WWW-Authenticate": "Bearer"})
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         try:
             db.execute("ROLLBACK")
         except Exception:
@@ -530,7 +530,7 @@ async def change_password(
             (user_id,),
         )
         db.commit()
-    except Exception as e:
+    except Exception:
         db.rollback()
         logger.error("Failed to change password", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again later.")
@@ -548,7 +548,7 @@ async def change_password(
             (user_id, refresh_token_hash, expires_at.isoformat()),
         )
         db.commit()
-    except Exception as e:
+    except Exception:
         db.rollback()
         logger.error("Failed to create new session", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again later.")
@@ -633,7 +633,7 @@ async def revoke_session(
             (session_id,),
         )
         db.commit()
-    except Exception as e:
+    except Exception:
         db.rollback()
         logger.error("Failed to revoke session", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again later.")
@@ -689,7 +689,7 @@ async def revoke_all_sessions(
             (new_refresh_token_hash, new_expires_at.isoformat(), current_session_id),
         )
         db.commit()
-    except Exception as e:
+    except Exception:
         db.rollback()
         logger.error("Failed to revoke all sessions", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again later.")

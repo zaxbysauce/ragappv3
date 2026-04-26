@@ -13,7 +13,11 @@ from fastapi import Cookie, Depends, Header, HTTPException, Request
 from app.config import Settings, settings
 from app.models.database import SQLiteConnectionPool, get_pool
 from app.security import get_csrf_manager  # noqa: F401
-from app.services.auth_service import TokenExpiredError, TokenInvalidError, decode_access_token
+from app.services.auth_service import (
+    TokenExpiredError,
+    TokenInvalidError,
+    decode_access_token,
+)
 
 
 class UserRole(IntEnum):

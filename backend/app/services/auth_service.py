@@ -4,7 +4,7 @@ import hashlib
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Tuple
+from typing import Tuple
 
 import jwt  # PyJWT
 from passlib.context import CryptContext
