@@ -27,8 +27,11 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { cn } from "@/lib/utils";
 import { MessageBubble } from "./MessageBubble";
 import { AssistantMessage } from "./AssistantMessage";
+import { WaitingIndicator } from "./WaitingIndicator";
 import { useChatStore } from "@/stores/useChatStore";
 import { useVaultStore } from "@/stores/useVaultStore";
+import { useAuthStore } from "@/stores/useAuthStore";
+import { useChatShellStore } from "@/stores/useChatShellStore";
 import { useSendMessage, MAX_INPUT_LENGTH } from "@/hooks/useSendMessage";
 import { useChatHistory } from "@/hooks/useChatHistory";
 import { forkChatSession } from "@/lib/api";
@@ -492,10 +495,17 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const navigate = useNavigate();
-  const { messages, isStreaming, setInput, setMessages, loadChat } = useChatStore();
+  const { messages, isStreaming, setInput, setMessages, loadChat, updateMessage } = useChatStore();
   const { getActiveVault } = useVaultStore();
   const activeVault = getActiveVault();
   const vaultId = useVaultStore((state) => state.activeVaultId);
+
+  // G-3: Compute userInitial once from auth store
+  const authUser = useAuthStore((state) => state.user);
+  const userInitial = (authUser?.full_name || authUser?.username || "U")[0].toUpperCase();
+
+  // D-2: Get active session ID from shell store
+  const activeSessionId = useChatShellStore((state) => state.activeSessionId);
 
   // Use chat history hook for refresh functionality
   const { refreshHistory } = useChatHistory(vaultId);
@@ -505,6 +515,9 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [showDebug, setShowDebug] = useState(false);
+
+  // E-1: highlighted message state for evidence:jump-to-answer
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
 
   // Check if vault has indexed documents (using file_count from Vault interface)
   const hasIndexedDocs = activeVault ? activeVault.file_count > 0 : false;
@@ -518,14 +531,22 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
     measureElement: (el) => el?.getBoundingClientRect().height ?? 0,
   });
 
-  // Auto-scroll to bottom on new messages/content if user is already at bottom
+  // G-2: Auto-scroll to bottom on new messages if user is already at bottom
+  // Uses messages.length (not messages) to avoid firing on content updates
   useEffect(() => {
     if (isAtBottom && messages.length > 0) {
       requestAnimationFrame(() => {
         virtualizer.scrollToIndex(messages.length - 1, { align: 'end', behavior: 'auto' });
       });
     }
-  }, [messages, isAtBottom, virtualizer]);
+  }, [messages.length, isAtBottom, virtualizer]);
+
+  // G-2: Separate effect for streaming scroll — fires on every content chunk
+  useEffect(() => {
+    if (isStreaming && isAtBottom) {
+      virtualizer.scrollToIndex(messages.length - 1, { align: 'end', behavior: 'auto' });
+    }
+  }, [isStreaming, messages.length, isAtBottom, virtualizer]);
 
   // Auto-focus chat input on mount (only if no dialog/modal is open)
   useEffect(() => {
@@ -533,6 +554,23 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
       composerRef.current?.focus();
     }
   }, []);
+
+  // E-1: evidence:jump-to-answer event listener
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const event = e as CustomEvent<{ sourceId: string }>;
+      const foundIndex = messages.findIndex(
+        (msg) => msg.sources?.some((s) => s.id === event.detail.sourceId)
+      );
+      if (foundIndex >= 0) {
+        virtualizer.scrollToIndex(foundIndex, { align: 'center', behavior: 'smooth' });
+        setHighlightedMessageId(messages[foundIndex].id);
+        setTimeout(() => setHighlightedMessageId(null), 1500);
+      }
+    };
+    window.addEventListener("evidence:jump-to-answer", handler);
+    return () => window.removeEventListener("evidence:jump-to-answer", handler);
+  }, [messages, virtualizer]);
 
   // Handle scroll events - track if user is near bottom (<100px)
   const handleScroll = () => {
@@ -570,9 +608,9 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
     navigate('/documents');
   };
 
-  // Handle retry - remove last assistant response and re-send the user message
-  // Preserves activeChatId so retry stays in the same session
+  // E-4: handleRetry streaming guard — bail immediately if streaming
   const handleRetry = () => {
+    if (isStreaming) return;
     const lastUserIdx = messages.map((m, i) => ({ m, i })).reverse().find(({ m }) => m.role === "user")?.i;
     if (lastUserIdx !== undefined) {
       setMessages(messages.slice(0, lastUserIdx));
@@ -587,11 +625,13 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
     if (!activeChatId) return;
     try {
       const forked = await forkChatSession(parseInt(activeChatId), messageIndex);
-      const forkMessages = forked.messages.map((m, i) => ({
-        id: String(i),
+      const forkMessages = forked.messages.map((m) => ({
+        id: m.id.toString(),
         role: m.role as "user" | "assistant",
         content: m.content,
         sources: m.sources ?? undefined,
+        created_at: m.created_at,
+        feedback: m.feedback ?? undefined,
       }));
       loadChat(String(forked.id), forkMessages);
       await refreshHistory();
@@ -605,6 +645,15 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
   // Handle debug toggle
   const handleDebugToggle = () => {
     setShowDebug((prev) => !prev);
+  };
+
+  // F-2: handleEdit — trim messages from index, restore content to composer
+  const handleEdit = (messageId: string, content: string) => {
+    const messageIndex = messages.findIndex((m) => m.id === messageId);
+    if (messageIndex === -1) return;
+    setMessages(messages.slice(0, messageIndex));
+    setInput(content);
+    composerRef.current?.focus();
   };
 
   return (
@@ -654,17 +703,40 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
                     const isLastMessage = virtualItem.index === messages.length - 1;
                     const isAssistantStreaming = isStreaming && isLastMessage && message.role === "assistant";
 
+                    // E-3: Render WaitingIndicator when streaming but no content yet
+                    const isStreamingPlaceholder = isStreaming && isLastMessage && message.role === "assistant" && !message.content;
+
+                    const itemStyle = {
+                      position: 'absolute' as const,
+                      top: virtualItem.start,
+                      left: 0,
+                      width: '100%',
+                    };
+
+                    if (isStreamingPlaceholder) {
+                      return (
+                        <div
+                          key={messageId}
+                          data-index={virtualItem.index}
+                          ref={virtualizer.measureElement}
+                          style={itemStyle}
+                        >
+                          <WaitingIndicator />
+                        </div>
+                      );
+                    }
+
                     return (
                       <div
                         key={messageId}
                         data-index={virtualItem.index}
                         ref={virtualizer.measureElement}
-                        style={{
-                          position: 'absolute',
-                          top: virtualItem.start,
-                          left: 0,
-                          width: '100%',
-                        }}
+                        style={itemStyle}
+                        className={cn(
+                          message.role === "assistant" && message.id === highlightedMessageId
+                            ? "ring-2 ring-primary ring-offset-1 rounded-lg transition-all"
+                            : undefined
+                        )}
                       >
                         {message.role === "assistant" ? (
                           <AssistantMessage
@@ -675,12 +747,17 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
                             onRetry={handleRetry}
                             onDebugToggle={handleDebugToggle}
                             onFork={!isStreaming ? () => handleFork(virtualItem.index) : undefined}
+                            sessionId={String(activeSessionId ?? "")}
+                            messageFeedback={message.feedback}
+                            onFeedback={(newFeedback) => updateMessage(message.id, { feedback: newFeedback })}
                           />
                         ) : (
                           <MessageBubble
                             message={message}
                             isStreaming={isAssistantStreaming}
                             onFork={!isStreaming ? () => handleFork(virtualItem.index) : undefined}
+                            userInitial={userInitial}
+                            onEdit={handleEdit}
                           />
                         )}
                       </div>
