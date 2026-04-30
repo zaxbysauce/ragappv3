@@ -9,6 +9,7 @@ interface ChatShellState {
   sessionRailOpen: boolean;
   rightPaneOpen: boolean;
   rightPaneWidth: number;
+  sessionRailWidth: number;
   activeSessionId: string | null;
   sessionSearchQuery: string;
   pinnedSessionIds: number[];
@@ -18,6 +19,7 @@ interface ChatShellState {
   toggleSessionRail: () => void;
   toggleRightPane: () => void;
   setRightPaneWidth: (width: number) => void;
+  setSessionRailWidth: (width: number) => void;
   setActiveSessionId: (id: string | null) => void;
   openSessionRail: () => void;
   closeSessionRail: () => void;
@@ -34,6 +36,10 @@ interface ChatShellState {
 const DEFAULT_RIGHT_PANE_WIDTH = 320;
 const MIN_RIGHT_PANE_WIDTH = 240;
 const MAX_RIGHT_PANE_WIDTH = 600;
+
+const MIN_SESSION_RAIL_WIDTH = 200;
+const MAX_SESSION_RAIL_WIDTH = 400;
+const DEFAULT_SESSION_RAIL_WIDTH = 260;
 
 const isMobile = () => {
   if (typeof window === "undefined") return false;
@@ -71,6 +77,7 @@ export const useChatShellStore = create<ChatShellState>((set, get) => ({
   sessionRailOpen: !isMobile(),
   rightPaneOpen: false,
   rightPaneWidth: DEFAULT_RIGHT_PANE_WIDTH,
+  sessionRailWidth: DEFAULT_SESSION_RAIL_WIDTH,
   activeSessionId: null,
   sessionSearchQuery: "",
   pinnedSessionIds: loadPinnedSessions(),
@@ -80,6 +87,7 @@ export const useChatShellStore = create<ChatShellState>((set, get) => ({
   toggleSessionRail: () => set((state) => ({ sessionRailOpen: !state.sessionRailOpen })),
   toggleRightPane: () => set((state) => ({ rightPaneOpen: !state.rightPaneOpen })),
   setRightPaneWidth: (width) => set({ rightPaneWidth: Math.max(MIN_RIGHT_PANE_WIDTH, Math.min(MAX_RIGHT_PANE_WIDTH, width)) }),
+  setSessionRailWidth: (width) => set({ sessionRailWidth: Math.max(MIN_SESSION_RAIL_WIDTH, Math.min(MAX_SESSION_RAIL_WIDTH, width)) }),
   setActiveSessionId: (id) => set({ activeSessionId: id }),
   openSessionRail: () => set({ sessionRailOpen: true }),
   closeSessionRail: () => set({ sessionRailOpen: false }),

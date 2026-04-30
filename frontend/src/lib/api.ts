@@ -493,6 +493,7 @@ export interface ChatSessionMessage {
   content: string;
   sources: Source[] | null;
   created_at: string;
+  feedback?: "up" | "down" | null;
 }
 
 export interface ChatSessionDetail extends ChatSession {
@@ -886,6 +887,18 @@ export async function createChatSession(request: CreateSessionRequest): Promise<
 
 export async function addChatMessage(sessionId: number, request: AddMessageRequest): Promise<ChatSessionMessage> {
   const response = await apiClient.post<ChatSessionMessage>(`/chat/sessions/${sessionId}/messages`, request);
+  return response.data;
+}
+
+export async function updateMessageFeedback(
+  sessionId: number,
+  messageId: number,
+  rating: "up" | "down" | null
+): Promise<ChatSessionMessage> {
+  const response = await apiClient.patch(
+    `/chat/sessions/${sessionId}/messages/${messageId}/feedback`,
+    { rating }
+  );
   return response.data;
 }
 
