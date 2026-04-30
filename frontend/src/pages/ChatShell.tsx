@@ -42,11 +42,13 @@ export default function ChatShell() {
     sessionRailOpen,
     rightPaneOpen,
     rightPaneWidth,
+    sessionRailWidth,
     activeSessionId,
     activeRightTab,
     toggleSessionRail,
     toggleRightPane,
     setRightPaneWidth,
+    setSessionRailWidth,
     setActiveSessionId,
     closeRightPane,
   } = useChatShellStore();
@@ -121,6 +123,8 @@ export default function ChatShell() {
           role: m.role as "user" | "assistant",
           content: m.content,
           sources: m.sources ?? undefined,
+          created_at: m.created_at,
+          feedback: m.feedback ?? undefined,
         }));
         useChatStore.getState().loadChat(sessionId, loadedMessages);
       } catch (err) {
@@ -152,6 +156,29 @@ export default function ChatShell() {
     window.addEventListener("blur", onMouseUp);
   };
 
+  const handleSessionRailResizeStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = sessionRailWidth;
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      const delta = moveEvent.clientX - startX;
+      const newWidth = Math.max(200, Math.min(400, startWidth + delta));
+      setSessionRailWidth(newWidth);
+    };
+    const onMouseUp = () => {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+      window.removeEventListener("blur", onMouseUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+    window.addEventListener("blur", onMouseUp);
+  };
+
   // Determine if workspace tab should open full-screen on mobile
   const isWorkspaceFullScreen = activeRightTab === "workspace" && rightPaneOpen;
 
@@ -160,13 +187,20 @@ export default function ChatShell() {
       {/* DESKTOP: Session Rail (persistent sidebar) */}
       <aside
         className={cn(
-          "hidden md:flex md:flex-col md:flex-shrink-0 md:border-r md:border-border md:bg-background md:transition-all md:duration-300 md:ease-in-out",
-          "w-[240px]",
+          "relative hidden md:flex md:flex-col md:flex-shrink-0 md:border-r md:border-border md:bg-background md:transition-all md:duration-300 md:ease-in-out",
           sessionRailOpen ? "md:translate-x-0 md:opacity-100" : "md:w-0 md:opacity-0 md:overflow-hidden"
         )}
+        style={{ width: sessionRailOpen ? `${sessionRailWidth}px` : "0px" }}
         aria-label="Chat sessions"
       >
         <SessionRail />
+        <div
+          className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-primary/20 active:bg-primary/40 transition-colors"
+          onMouseDown={handleSessionRailResizeStart}
+          role="separator"
+          aria-label="Resize session panel"
+          aria-orientation="vertical"
+        />
       </aside>
 
       {/* MOBILE: Session Rail Sheet (slides from left) */}
@@ -188,7 +222,7 @@ export default function ChatShell() {
           {/* Session rail toggle — mobile only */}
           <Button variant="ghost" size="icon" onClick={handleToggleSessionRail}
             aria-label={mobileSheetOpen ? "Hide sessions" : "Show sessions"}
-            aria-pressed={mobileSheetOpen} className="md:hidden">
+            aria-pressed={mobileSheetOpen}>
             <PanelLeft className="h-5 w-5" aria-hidden="true" />
           </Button>
           <div className="flex-1" />

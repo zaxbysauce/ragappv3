@@ -3,7 +3,9 @@ import { toast } from "sonner";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Dialog,
   DialogContent,
@@ -111,8 +113,18 @@ export default function VaultsPage() {
 
   if (loading && vaults.length === 0) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {[1, 2, 3].map((i) => (
+          <Card key={i} className="p-6 space-y-3">
+            <Skeleton className="h-5 w-3/4" />
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-2/3" />
+            <div className="flex gap-2 pt-2">
+              <Skeleton className="h-6 w-16 rounded-full" />
+              <Skeleton className="h-6 w-20 rounded-full" />
+            </div>
+          </Card>
+        ))}
       </div>
     );
   }
@@ -232,14 +244,18 @@ export default function VaultsPage() {
         </DialogHeader>
           <div className="space-y-4">
             <div>
+              <Label htmlFor="vault-name">Vault Name</Label>
               <Input
+                id="vault-name"
                 placeholder="Vault name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
               />
             </div>
             <div>
+              <Label htmlFor="vault-description">Description</Label>
               <Input
+                id="vault-description"
                 placeholder="Description (optional)"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
@@ -275,14 +291,18 @@ export default function VaultsPage() {
         </DialogHeader>
           <div className="space-y-4">
             <div>
+              <Label htmlFor="vault-name">Vault Name</Label>
               <Input
+                id="vault-name"
                 placeholder="Vault name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
               />
             </div>
             <div>
+              <Label htmlFor="vault-description">Description</Label>
               <Input
+                id="vault-description"
                 placeholder="Description (optional)"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}

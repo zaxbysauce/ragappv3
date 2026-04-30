@@ -558,7 +558,7 @@ export default function DocumentsPage() {
       )}
 
       {rejectedFiles.length > 0 && (
-        <div className="p-4 bg-amber-500/10 text-amber-700 rounded-lg">
+        <div className="p-4 bg-amber-500/10 text-amber-700 dark:text-amber-300 rounded-lg">
           <div className="flex items-center gap-2 mb-2">
             <AlertCircle className="w-5 h-5" />
             <span className="font-medium">Some files were rejected:</span>
@@ -709,7 +709,7 @@ export default function DocumentsPage() {
                 <table className="w-full" style={{ tableLayout: 'fixed' }}>
                   <caption className="sr-only">Documents List</caption>
                   <thead style={{ position: 'sticky', top: 0, zIndex: 10 }}>
-                    <tr className="border-b bg-muted" style={{ display: 'flex' }}>
+                    <tr role="row" className="border-b bg-muted" style={{ display: 'flex' }}>
                       <th scope="col" className="text-left p-4 font-medium flex-none w-12">
                         <Checkbox
                           checked={selectedIds.size > 0 && selectedIds.size === filteredDocuments.length}
@@ -738,7 +738,7 @@ export default function DocumentsPage() {
                       <th scope="col" className="text-right p-4 font-medium flex-none w-[60px]">Actions</th>
                     </tr>
                   </thead>
-                  <tbody style={{ height: `${tableVirtualizer.getTotalSize()}px`, position: 'relative' }}>
+                  <tbody role="rowgroup" style={{ height: `${tableVirtualizer.getTotalSize()}px`, position: 'relative' }}>
                     {tableVirtualizer.getVirtualItems().map((virtualItem) => {
                       const doc = filteredDocuments[virtualItem.index];
                       const docId = String(doc.id);
@@ -746,6 +746,7 @@ export default function DocumentsPage() {
                       return (
                         <tr
                           key={docId}
+                          role="row"
                           data-index={virtualItem.index}
                           ref={tableVirtualizer.measureElement}
                           style={{

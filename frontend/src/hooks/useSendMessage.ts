@@ -1,5 +1,5 @@
 import { useCallback, useRef } from "react";
-import { chatStream, createChatSession, addChatMessage, type ChatMessage } from "@/lib/api";
+import { chatStream, createChatSession, addChatMessage, type ChatMessage, type ChatSessionMessage } from "@/lib/api";
 import { useChatStore } from "@/stores/useChatStore";
 
 export const MAX_INPUT_LENGTH = 2000;
@@ -119,7 +119,8 @@ export function useSendMessage(
           try {
             const allMessages = useChatStore.getState().messages;
             const assistantMsg = allMessages.find((m) => m.id === assistantMessageId);
-            const saves: Promise<unknown>[] = [
+            const userClientId = userMessage.id;
+            const saves: Promise<ChatSessionMessage>[] = [
               addChatMessage(sessionId, { role: "user", content: userContent }),
             ];
             if (assistantMsg) {
@@ -131,7 +132,26 @@ export function useSendMessage(
                 })
               );
             }
-            await Promise.all(saves);
+            const [userSaveResult, assistantSaveResult] = await Promise.all(saves);
+
+            // Backfill real DB IDs onto client-generated timestamp IDs
+            const migrateId = (oldId: string, saveResult: ChatSessionMessage) => {
+              const dbId = String(saveResult.id);
+              if (dbId !== oldId) {
+                const feedbackKey = `chat_feedback_${oldId}`;
+                const feedbackValue = localStorage.getItem(feedbackKey);
+                if (feedbackValue !== null) {
+                  localStorage.setItem(`chat_feedback_${dbId}`, feedbackValue);
+                  localStorage.removeItem(feedbackKey);
+                }
+                updateMessage(oldId, { id: dbId, created_at: saveResult.created_at });
+              }
+            };
+
+            migrateId(userClientId, userSaveResult);
+            if (assistantSaveResult) {
+              migrateId(assistantMessageId, assistantSaveResult);
+            }
 
             // Refresh session list
             await refreshHistory();
