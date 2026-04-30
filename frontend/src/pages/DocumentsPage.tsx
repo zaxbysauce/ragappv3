@@ -18,6 +18,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { FileText, Upload, Search, Trash2, ScanLine, AlertCircle, Loader2, X, RotateCcw, Trash, Info } from "lucide-react";
+import { FileIcon } from "@/lib/fileIcon";
 import { listDocuments, scanDocuments, deleteDocument, deleteDocuments, deleteAllDocumentsInVault, getDocumentStats, type Document, type DocumentStatsResponse } from "@/lib/api";
 import { formatFileSize, formatDate } from "@/lib/formatters";
 import { useDebounce } from "@/hooks/useDebounce";
@@ -765,7 +766,7 @@ export default function DocumentsPage() {
                           </td>
                           <td className="p-4 flex-none" style={{ width: filenameColWidth, flexShrink: 0 }}>
                             <div className="flex items-center gap-2">
-                              <FileText className="w-4 h-4 text-muted-foreground" />
+                              <FileIcon filename={doc.filename} className="w-4 h-4 flex-shrink-0" />
                               <span className="font-medium truncate max-w-full" title={doc.filename}>{doc.filename}</span>
                             </div>
                           </td>
