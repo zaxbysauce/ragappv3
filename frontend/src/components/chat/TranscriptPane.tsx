@@ -16,6 +16,9 @@ import {
   GitCompare,
   Calendar,
   ListChecks,
+  TrendingUp,
+  AlignLeft,
+  CheckCircle2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -101,10 +104,10 @@ const SLASH_COMMANDS: SlashCommand[] = [
 ];
 
 const SUGGESTED_PROMPTS = [
-  "What are the key findings?",
-  "Summarize the main topics",
-  "What data sources were used?",
-  "What are the main conclusions?",
+  { text: "What are the key findings?", Icon: TrendingUp },
+  { text: "Summarize the main topics", Icon: AlignLeft },
+  { text: "What data sources were used?", Icon: Database },
+  { text: "What are the main conclusions?", Icon: CheckCircle2 },
 ];
 
 // =============================================================================
@@ -156,15 +159,15 @@ function EmptyTranscript({
             {SUGGESTED_PROMPTS.map((prompt, index) => (
               <button
                 key={index}
-                onClick={() => onPromptClick(prompt)}
+                onClick={() => onPromptClick(prompt.text)}
                 className="group flex items-start gap-3 rounded-lg border border-border bg-card p-4 text-left transition-all duration-200 hover:bg-accent hover:text-accent-foreground hover:border-accent hover:shadow-sm hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                aria-label={`Use prompt: ${prompt}`}
+                aria-label={`Use prompt: ${prompt.text}`}
               >
-                <Sparkles
+                <prompt.Icon
                   className="mt-0.5 h-4 w-4 flex-shrink-0 text-muted-foreground group-hover:text-accent-foreground"
                   aria-hidden="true"
                 />
-                <span className="text-sm">{prompt}</span>
+                <span className="text-sm">{prompt.text}</span>
               </button>
             ))}
           </div>
@@ -306,7 +309,7 @@ function Composer({ onSend, onStop, isStreaming, className, inputRef }: Composer
       )}
 
       {/* Composer container */}
-      <div className="relative rounded-xl border border-input bg-background shadow-sm">
+      <div className="relative rounded-xl border border-input bg-background shadow-sm focus-within:border-primary/60 transition-colors duration-150">
         {/* Textarea */}
         <Textarea
           ref={textareaRef as React.Ref<HTMLTextAreaElement>}
@@ -442,7 +445,7 @@ function Composer({ onSend, onStop, isStreaming, className, inputRef }: Composer
           {isStreaming ? (
             <Button
               variant="destructive"
-              size="sm"
+              size="default"
               onClick={onStop}
               className="gap-1.5"
               aria-label="Stop generating"
@@ -452,10 +455,10 @@ function Composer({ onSend, onStop, isStreaming, className, inputRef }: Composer
             </Button>
           ) : (
             <Button
-              size="sm"
+              size="default"
               onClick={handleSubmit}
               disabled={!input.trim() || input.length > MAX_INPUT_LENGTH}
-              className="gap-1.5"
+              className="gap-1.5 shadow-sm"
               aria-label="Send message"
             >
               <Send className="h-3.5 w-3.5" aria-hidden="true" />

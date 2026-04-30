@@ -62,7 +62,7 @@ export function MobileBottomNav({ activeItem, onItemSelect }: MobileBottomNavPro
               />
               <span
                 className={cn(
-                  "text-[10px] font-medium transition-colors",
+                  "text-xs font-medium transition-colors",
                   isActive ? "text-primary" : "text-muted-foreground"
                 )}
               >
@@ -92,7 +92,7 @@ export function MobileBottomNav({ activeItem, onItemSelect }: MobileBottomNavPro
               />
               <span
                 className={cn(
-                  "text-[10px] font-medium transition-colors",
+                  "text-xs font-medium transition-colors",
                   moreOpen ? "text-primary" : "text-muted-foreground"
                 )}
               >
