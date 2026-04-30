@@ -244,17 +244,17 @@ describe("ChatShell Mobile Layout", () => {
   });
 
   describe("test_panel_left_toggle_has_md_hidden", () => {
-    it("PanelLeft toggle button has md:hidden class", () => {
+    it("PanelLeft toggle button is visible on all screen sizes (no md:hidden)", () => {
       render(
         <BrowserRouter>
           <ChatShell />
         </BrowserRouter>
       );
 
-      // Find the toggle button with "Hide sessions" or "Show sessions" label
+      // md:hidden was intentionally removed so the toggle is visible on desktop too
       const sessionToggle = screen.getByLabelText(/Show sessions|Hide sessions/);
       expect(sessionToggle).toBeDefined();
-      expect(sessionToggle.className).toContain("md:hidden");
+      expect(sessionToggle.className).not.toContain("md:hidden");
     });
   });
 
