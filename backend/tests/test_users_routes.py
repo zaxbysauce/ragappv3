@@ -503,11 +503,11 @@ class TestUnauthenticatedAccess(TestUserRoutes):
         assert response.status_code == 401
 
     def test_list_users_invalid_token(self):
-        """GET /users/ with invalid token returns 403."""
+        """GET /users/ with invalid token returns 401."""
         response = self.client.get(
             "/users/", headers={"Authorization": "Bearer invalid_token"}
         )
-        assert response.status_code == 403
+        assert response.status_code == 401
 
     def test_get_user_no_token(self):
         """GET /users/{id} without token returns 401."""

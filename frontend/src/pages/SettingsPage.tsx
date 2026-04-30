@@ -12,7 +12,6 @@ import { useSettingsStore } from "@/stores/useSettingsStore";
 import { ConnectionStatusBadges } from "@/components/shared/ConnectionStatusBadges";
 import type { HealthStatus } from "@/types/health";
 import { useHealthCheck } from "@/hooks/useHealthCheck";
-import { APIKeySettings } from "@/components/settings/APIKeySettings";
 import { ConnectionSettings } from "@/components/settings/ConnectionSettings";
 import { DocumentProcessingSettings } from "@/components/settings/DocumentProcessingSettings";
 import { ModelConnectionSettings } from "@/components/settings/ModelConnectionSettings";
@@ -38,26 +37,6 @@ function SettingsPageContent() {
     validateForm,
     hasChanges,
   } = useSettingsStore();
-
-  const [apiKey, setApiKey] = useState(() => {
-    try {
-      return localStorage.getItem("kv_api_key") || "";
-    } catch {
-      return "";
-    }
-  });
-  const [apiKeySaved, setApiKeySaved] = useState(false);
-
-  const handleApiKeySave = () => {
-    try {
-      localStorage.setItem("kv_api_key", apiKey);
-      setApiKeySaved(true);
-      toast.success("API key saved");
-      setTimeout(() => setApiKeySaved(false), 2000);
-    } catch (err) {
-      toast.error("Failed to save API key");
-    }
-  };
 
   useEffect(() => {
     let mounted = true;
@@ -225,10 +204,9 @@ const handleInputChange = (field: keyof SettingsFormData, value: string | boolea
 
       {!loading && !error && (
         <Tabs defaultValue="ai" className="w-full">
-          <TabsList className="grid w-full max-w-md grid-cols-3">
+          <TabsList className="grid w-full max-w-md grid-cols-2">
             <TabsTrigger value="ai">AI</TabsTrigger>
             <TabsTrigger value="advanced">Advanced</TabsTrigger>
-            <TabsTrigger value="api-key">API Key</TabsTrigger>
           </TabsList>
 
           <TabsContent value="ai">
@@ -311,14 +289,6 @@ const handleInputChange = (field: keyof SettingsFormData, value: string | boolea
             </div>
           </TabsContent>
 
-          <TabsContent value="api-key">
-            <APIKeySettings
-              apiKey={apiKey}
-              onApiKeyChange={setApiKey}
-              onSave={handleApiKeySave}
-              isSaved={apiKeySaved}
-            />
-          </TabsContent>
         </Tabs>
       )}
     </>

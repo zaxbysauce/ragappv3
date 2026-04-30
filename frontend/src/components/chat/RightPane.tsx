@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { FileText, Table, Code, ExternalLink } from "lucide-react";
+import { FileText, Table, Code, ExternalLink, BookOpen, Layers } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -9,6 +9,7 @@ import { useChatStore, type Message } from "@/stores/useChatStore";
 import { useChatShellStore } from "@/stores/useChatShellStore";
 import type { Source } from "@/lib/api";
 import { getRelevanceLabel, type ScoreType } from "@/lib/relevance";
+import { EmptyState } from "@/components/shared/EmptyState";
 
 interface StructuredOutput {
   id: string;
@@ -216,8 +217,7 @@ function SourceListItem({
           </div>
           {source.snippet && (
             <div className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
-              {source.snippet.slice(0, 60)}
-              {source.snippet.length > 60 ? "..." : ""}
+              {source.snippet}
             </div>
           )}
           {relevance && (
@@ -259,8 +259,7 @@ function SourcePreview({ source, query, onJumpToAnswer }: SourcePreviewProps) {
 
       {source.snippet && (
         <div className="text-xs text-muted-foreground italic truncate flex-shrink-0">
-          {source.snippet.slice(0, 100)}
-          {source.snippet.length > 100 ? "..." : ""}
+          {source.snippet}
         </div>
       )}
 
@@ -328,15 +327,24 @@ export function RightPane() {
     }
   }, [activeRightTab]);
 
-  // Get sources from the last assistant message
+  // Get sources from the clicked message's sources when selectedEvidenceSource is set,
+  // otherwise fall back to the last assistant message's sources.
   const sources = useMemo(() => {
+    if (selectedEvidenceSource) {
+      for (let i = 0; i < messages.length; i++) {
+        const msgSources = messages[i].sources;
+        if (msgSources && msgSources.some((s) => s != null && s.id === selectedEvidenceSource.id)) {
+          return msgSources.filter((s): s is Source => s != null);
+        }
+      }
+    }
     for (let i = messages.length - 1; i >= 0; i--) {
       if (messages[i].role === "assistant" && messages[i].sources) {
         return (messages[i].sources || []).filter((s): s is Source => s != null);
       }
     }
     return [];
-  }, [messages]);
+  }, [messages, selectedEvidenceSource]);
 
   // Get query from the last user message
   const query = useMemo(() => {
@@ -448,9 +456,11 @@ export function RightPane() {
 
         <TabsContent value="sources" className="flex-1 min-h-0 mt-4">
           {!hasSources ? (
-            <div className="text-sm text-muted-foreground italic p-4 text-center">
-              No sources available. Send a message to see retrieved sources.
-            </div>
+            <EmptyState
+              icon={BookOpen}
+              title="No sources yet"
+              description="Send a message to see retrieved sources."
+            />
           ) : shouldVirtualizeSources ? (
             <div
               ref={sourcesScrollRef}
@@ -506,9 +516,11 @@ export function RightPane() {
 
         <TabsContent value="preview" className="flex-1 min-h-0 mt-4">
           {!selectedSource ? (
-            <div className="text-sm text-muted-foreground italic p-4 text-center">
-              Select a source from the Sources tab to preview it here.
-            </div>
+            <EmptyState
+              icon={FileText}
+              title="No preview available"
+              description="Select a source to preview it here."
+            />
           ) : (
             <SourcePreview
               source={selectedSource}
@@ -521,9 +533,11 @@ export function RightPane() {
         <TabsContent value="extracted" className="flex-1 min-h-0 mt-4">
           <ScrollArea className="h-full">
             {!hasStructuredOutputs ? (
-              <div className="text-sm text-muted-foreground italic p-4 text-center">
-                No structured outputs found in the conversation.
-              </div>
+              <EmptyState
+                icon={Layers}
+                title="Nothing extracted yet"
+                description="Extracted content will appear here."
+              />
             ) : (
               <div className="space-y-2 pr-4">
                 {structuredOutputs.map((output) => (

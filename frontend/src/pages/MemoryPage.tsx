@@ -1,3 +1,5 @@
+import { useRef } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -31,6 +33,16 @@ export default function MemoryPage() {
     handleKeyDown,
     handleDeleteMemory,
   } = useMemoryCrud(activeVaultId, handleSearch);
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const virtualizer = useVirtualizer({
+    count: memories?.length ?? 0,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 120,
+    measureElement: (el) => el?.getBoundingClientRect().height ?? 120,
+    overscan: 5,
+  });
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
@@ -166,45 +178,57 @@ export default function MemoryPage() {
           </CardContent>
         </Card>
       ) : (
-        <div className="space-y-4">
-          {memories?.map((memory) => (
-            <Card key={memory.id}>
-              <CardContent className="p-4">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="flex-1 space-y-2">
-                    <p className="text-sm whitespace-pre-wrap">{memory.content}</p>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge variant="outline">{getCategoryFromMetadata(memory.metadata)}</Badge>
-                      {getTagsFromMetadata(memory.metadata).map((tag, index) => (
-                        <Badge key={index} variant="secondary" className="text-xs">
-                          {tag}
-                        </Badge>
-                      ))}
-                      {getSourceFromMetadata(memory.metadata) && (
-                        <span className="text-xs text-muted-foreground">
-                          Source: {getSourceFromMetadata(memory.metadata)}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 shrink-0"
-                    onClick={() => handleDeleteMemory(memory.id)}
-                    disabled={isDeleting === memory.id}
-                    aria-label="Delete memory"
-                  >
-                    {isDeleting === memory.id ? (
-                      <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" aria-hidden="true" />
-                    ) : (
-                      <Trash2 className="w-4 h-4 text-destructive" aria-hidden="true" />
-                    )}
-                  </Button>
+        <div ref={scrollRef} className="overflow-y-auto flex-1" style={{ maxHeight: '70vh', contain: 'strict' }}>
+          <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+            {virtualizer.getVirtualItems().map((virtualItem) => {
+              const memory = memories[virtualItem.index];
+              return (
+                <div
+                  key={virtualItem.key}
+                  data-index={virtualItem.index}
+                  ref={virtualizer.measureElement}
+                  style={{ position: 'absolute', top: virtualItem.start, left: 0, right: 0, paddingBottom: '1rem' }}
+                >
+                  <Card>
+                    <CardContent className="p-4">
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex-1 space-y-2">
+                          <p className="text-sm whitespace-pre-wrap">{memory.content}</p>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Badge variant="outline">{getCategoryFromMetadata(memory.metadata)}</Badge>
+                            {getTagsFromMetadata(memory.metadata).map((tag, index) => (
+                              <Badge key={index} variant="secondary" className="text-xs">
+                                {tag}
+                              </Badge>
+                            ))}
+                            {getSourceFromMetadata(memory.metadata) && (
+                              <span className="text-xs text-muted-foreground">
+                                Source: {getSourceFromMetadata(memory.metadata)}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 shrink-0"
+                          onClick={() => handleDeleteMemory(memory.id)}
+                          disabled={isDeleting === memory.id}
+                          aria-label="Delete memory"
+                        >
+                          {isDeleting === memory.id ? (
+                            <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" aria-hidden="true" />
+                          ) : (
+                            <Trash2 className="w-4 h-4 text-destructive" aria-hidden="true" />
+                          )}
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
                 </div>
-              </CardContent>
-            </Card>
-          ))}
+              );
+            })}
+          </div>
         </div>
       )}
     </div>

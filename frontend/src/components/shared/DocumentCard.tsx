@@ -3,7 +3,8 @@
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { FileText, Trash2, MoreVertical } from "lucide-react";
+import { Trash2, MoreVertical } from "lucide-react";
+import { FileIcon } from "@/lib/fileIcon";
 import { StatusBadge } from "./StatusBadge";
 import { formatFileSize, formatDate } from "@/lib/formatters";
 import {
@@ -78,7 +79,7 @@ export function DocumentCard({
               className="flex-shrink-0 p-2 bg-muted rounded-md"
               aria-hidden="true"
             >
-              <FileText className="w-5 h-5 text-muted-foreground" />
+              <FileIcon filename={document.filename} className="w-5 h-5" />
             </div>
             <div className="min-w-0">
               <h3

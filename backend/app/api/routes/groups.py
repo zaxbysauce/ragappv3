@@ -46,7 +46,7 @@ class GroupCreateRequest(BaseModel):
     """Request model for creating a group."""
 
     name: str = Field(..., min_length=1)
-    description: str = Field(..., min_length=1)
+    description: Optional[str] = None
     org_id: Optional[int] = None
 
 
@@ -85,6 +85,7 @@ class GroupVaultsUpdateRequest(BaseModel):
 
 
 
+@router.get("", response_model=GroupListResponse, include_in_schema=False)
 @router.get("/", response_model=GroupListResponse)
 async def list_groups(
     page: int = 1,
@@ -168,6 +169,7 @@ async def list_groups(
     return GroupListResponse(groups=groups, total=total, page=page, per_page=per_page)
 
 
+@router.post("", response_model=GroupResponse, include_in_schema=False)
 @router.post("/", response_model=GroupResponse)
 async def create_group(
     request: GroupCreateRequest,

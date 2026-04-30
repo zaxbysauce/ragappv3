@@ -701,8 +701,8 @@ describe("SessionRail ADVERSARIAL TESTS", () => {
       );
 
       await waitFor(() => {
+        // Session renders in flat list (no group headings since virtualization refactor)
         expect(screen.getByText("Future")).toBeInTheDocument();
-        expect(screen.getByText("Today")).toBeInTheDocument();
       });
     });
 

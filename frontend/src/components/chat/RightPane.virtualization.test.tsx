@@ -178,9 +178,8 @@ describe("RightPane virtualization", () => {
 
       render(<RightPane />);
 
-      expect(
-        screen.getByText("No sources available. Send a message to see retrieved sources.")
-      ).toBeInTheDocument();
+      expect(screen.getByText("No sources yet")).toBeInTheDocument();
+      expect(screen.getByText("Send a message to see retrieved sources.")).toBeInTheDocument();
     });
 
     it("should not render ScrollArea or virtualized container when no sources", () => {
@@ -467,9 +466,8 @@ describe("RightPane virtualization", () => {
 
       render(<RightPane />);
 
-      expect(
-        screen.getByText("No sources available. Send a message to see retrieved sources.")
-      ).toBeInTheDocument();
+      expect(screen.getByText("No sources yet")).toBeInTheDocument();
+      expect(screen.getByText("Send a message to see retrieved sources.")).toBeInTheDocument();
     });
 
     it("should handle sources with undefined/null values filtered out", () => {

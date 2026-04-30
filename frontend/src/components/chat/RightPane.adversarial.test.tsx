@@ -545,7 +545,7 @@ double closed
       render(<RightPane />);
 
       await waitFor(() => {
-        expect(screen.getByText(/No sources available/)).toBeInTheDocument();
+        expect(screen.getByText("No sources yet")).toBeInTheDocument();
       });
 
       expect(screen.getByText("Details")).toBeInTheDocument();
@@ -562,7 +562,7 @@ double closed
       render(<RightPane />);
 
       await waitFor(() => {
-        expect(screen.getByText(/No sources available/)).toBeInTheDocument();
+        expect(screen.getByText("No sources yet")).toBeInTheDocument();
       });
     });
 
@@ -577,7 +577,7 @@ double closed
       render(<RightPane />);
 
       await waitFor(() => {
-        expect(screen.getByText(/No sources available/)).toBeInTheDocument();
+        expect(screen.getByText("No sources yet")).toBeInTheDocument();
       });
     });
 
@@ -589,7 +589,7 @@ double closed
       render(<RightPane />);
 
       await waitFor(() => {
-        expect(screen.getByText(/No sources available/)).toBeInTheDocument();
+        expect(screen.getByText("No sources yet")).toBeInTheDocument();
       });
     });
 
@@ -1132,7 +1132,7 @@ Normal text
       render(<RightPane />);
 
       await waitFor(() => {
-        expect(screen.getByText(/No sources available/)).toBeInTheDocument();
+        expect(screen.getByText("No sources yet")).toBeInTheDocument();
       });
     });
 

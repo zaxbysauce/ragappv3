@@ -1,5 +1,4 @@
 import { MessageSquare, FileText, Brain, Settings, Database, Users, UserCog, Building2, UserCircle, Sun, Moon } from "lucide-react";
-import { motion } from "framer-motion";
 import { useThemeStore } from "@/stores/useThemeStore";
 import { cn } from "@/lib/utils";
 import { NavLink, useLocation } from "react-router-dom";
@@ -76,10 +75,8 @@ export function NavigationRail({ healthStatus }: NavigationRailProps) {
   return (
     <nav className="w-20 min-h-screen bg-card border-r border-border flex flex-col items-center py-6 gap-2" aria-label="Main navigation">
       {/* App Logo */}
-      <div className="mb-8 p-3 rounded-xl bg-primary/10">
-        <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
-          <span className="text-primary-foreground font-bold text-sm">KV</span>
-        </div>
+      <div className="mb-8 mx-auto w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
+        <span className="text-primary-foreground font-bold text-sm">KV</span>
       </div>
 
       {/* Navigation Items */}
@@ -110,15 +107,6 @@ export function NavigationRail({ healthStatus }: NavigationRailProps) {
                 )}
               >
                 <Icon className="w-5 h-5" />
-
-                {/* Active Indicator — animated sliding pill */}
-                {isActive && (
-                  <motion.span
-                    layoutId="nav-active-indicator"
-                    className="absolute -right-1 top-1/2 -translate-y-1/2 w-1 h-4 bg-primary rounded-full"
-                    transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                  />
-                )}
               </div>
 
               {/* Label */}

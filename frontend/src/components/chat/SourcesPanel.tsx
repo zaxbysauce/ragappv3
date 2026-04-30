@@ -10,6 +10,7 @@ import {
 import { FileText, ChevronDown, ChevronRight, BookOpen } from "lucide-react";
 import type { Source } from "@/lib/api";
 import { getRelevanceLabel } from "@/lib/relevance";
+import { FileIcon } from "@/lib/fileIcon";
 
 interface SourcesPanelProps {
   sources: Source[] | undefined;
@@ -74,10 +75,10 @@ function DesktopSourcesContent({
             : "Sources will appear here after the AI responds"}
         </CardDescription>
       </CardHeader>
-      <CardContent className="flex-1">
+      <CardContent className="flex-1 min-h-0 p-0">
         {hasSources ? (
-          <ScrollArea className="h-[400px] pr-4">
-            <div className="space-y-3" role="list" aria-label="Document sources">
+          <ScrollArea className="h-full pr-4">
+            <div className="space-y-3 p-4" role="list" aria-label="Document sources">
               {sources!.map((source: Source, index: number) => (
                 <SourceCard
                   key={source.id}
@@ -157,7 +158,7 @@ function SourceCard({ source, isExpanded, onToggle, index }: SourceCardProps) {
       >
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <FileText className="w-4 h-4 text-muted-foreground" />
+            <FileIcon filename={source.filename} className="w-4 h-4 flex-shrink-0" />
             <span className="text-sm font-medium truncate max-w-[180px] lg:max-w-[180px] max-w-[200px]">
               {source.filename}
             </span>
@@ -195,7 +196,7 @@ function SourceCard({ source, isExpanded, onToggle, index }: SourceCardProps) {
 // Empty Sources State
 function EmptySourcesState() {
   return (
-    <div className="flex flex-col items-center justify-center h-[200px] text-center">
+    <div className="flex flex-col items-center justify-center min-h-[120px] flex-1 text-center">
       <FileText className="w-8 h-8 text-muted-foreground/50 mb-2" />
       <p className="text-sm text-muted-foreground">No sources available</p>
       <p className="text-xs text-muted-foreground/70 mt-1">
