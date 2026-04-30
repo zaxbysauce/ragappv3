@@ -386,6 +386,7 @@ def run_migrations(sqlite_path: str) -> None:
     migrate_vault_paths(sqlite_path)
     migrate_add_org_slug_column(sqlite_path)
     migrate_add_fork_columns(sqlite_path)
+    migrate_add_feedback_column(sqlite_path)
 
     # Add partial unique index for duplicate hash detection (HIGH-10)
     # Wrapped in IntegrityError handler: existing databases may have duplicate
@@ -714,6 +715,18 @@ def migrate_add_fork_columns(sqlite_path: str) -> None:
             conn.execute(
                 "ALTER TABLE chat_sessions ADD COLUMN fork_message_index INTEGER"
             )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def migrate_add_feedback_column(sqlite_path: str) -> None:
+    """Migration: Add feedback column to chat_messages table."""
+    conn = sqlite3.connect(sqlite_path)
+    try:
+        existing_cols = [row[1] for row in conn.execute("PRAGMA table_info(chat_messages)").fetchall()]
+        if "feedback" not in existing_cols:
+            conn.execute("ALTER TABLE chat_messages ADD COLUMN feedback TEXT")
         conn.commit()
     finally:
         conn.close()

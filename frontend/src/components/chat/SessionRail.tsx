@@ -2,6 +2,7 @@
 // SessionRail component with full business logic for chat session management
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, forwardRef } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useNavigate } from "react-router-dom";
 import {
@@ -18,14 +19,15 @@ import {
   ChevronDown,
   ChevronRight,
   GitBranch,
+  AlertCircle,
 } from "lucide-react";
+import { formatRelativeTime } from "@/lib/formatters";
 import { useChatShellStore } from "@/stores/useChatShellStore";
 import { useChatStore } from "@/stores/useChatStore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Tooltip,
   TooltipContent,
@@ -120,24 +122,6 @@ function getTimeGroup(dateStr: string): "Today" | "Yesterday" | "This Week" | "O
   if (date >= yesterday) return "Yesterday";
   if (date >= weekAgo) return "This Week";
   return "Older";
-}
-
-/**
- * Format relative timestamp for display
- */
-function formatRelativeTime(dateString: string): string {
-  const date = new Date(dateString);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
-  if (diffMins < 1) return "just now";
-  if (diffMins < 60) return `${diffMins}m ago`;
-  const diffHours = Math.floor(diffMins / 60);
-  if (diffHours < 24) return `${diffHours}h ago`;
-  const diffDays = Math.floor(diffHours / 24);
-  if (diffDays === 1) return "Yesterday";
-  if (diffDays < 7) return `${diffDays}d ago`;
-  return date.toLocaleDateString();
 }
 
 /**
@@ -328,7 +312,7 @@ export const SessionItem = forwardRef<HTMLDivElement, SessionItemProps>(
           group relative flex items-center gap-2 rounded-md px-2 py-2 text-sm
           cursor-pointer transition-all duration-150
           border border-transparent
-          ${isActive ? "bg-accent/50 border-border/30" : "hover:bg-muted hover:border-border/50"}
+          ${isActive ? "bg-primary/10 border-l-2 border-primary" : "hover:bg-muted hover:border-border/50"}
           focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2
         `}
         onClick={() => !isEditing && onClick()}
@@ -392,7 +376,7 @@ export const SessionItem = forwardRef<HTMLDivElement, SessionItemProps>(
             </div>
           ) : (
             <div className="flex items-center gap-2">
-              <span className="truncate font-medium">{truncatedTitle}</span>
+              <span className={`truncate font-medium${isActive ? " text-foreground" : ""}`}>{truncatedTitle}</span>
               {session.forked_from_session_id != null && (
                 <span title="Branched conversation"><GitBranch className="h-3 w-3 text-muted-foreground flex-shrink-0" aria-hidden="true" /></span>
               )}
@@ -577,14 +561,6 @@ export const SessionItem = forwardRef<HTMLDivElement, SessionItemProps>(
 // =============================================================================
 // COMPONENT: SessionGroup
 // =============================================================================
-
-const GROUP_LABELS: Record<TimeGroupKey, string> = {
-  pinned: "Pinned",
-  today: "Today",
-  yesterday: "Yesterday",
-  thisWeek: "This Week",
-  older: "Older",
-};
 
 export function SessionGroup({
   label,
@@ -796,7 +772,6 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
     const fetchSessionDetails = async () => {
       if (!debouncedSearchQuery.trim()) {
         setSessionDetails(new Map());
-        fetchedIdsRef.current.clear();
         return;
       }
 
@@ -856,6 +831,16 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
     () => groupSessionsByTime(filteredSessions, pinnedSessionIds),
     [filteredSessions, pinnedSessionIds]
   );
+
+  // H-1: Virtualizer refs and setup
+  const listRef = useRef<HTMLDivElement>(null);
+  const sessionVirtualizer = useVirtualizer({
+    count: filteredSessions.length,
+    getScrollElement: () => listRef.current,
+    estimateSize: () => 64,
+    measureElement: (el) => el?.getBoundingClientRect().height ?? 64,
+    overscan: 5,
+  });
 
   // Handle new chat
   const handleNewChat = useCallback(() => {
@@ -954,7 +939,7 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
         <Skeleton className="h-9 w-full mb-4" />
         <div className="space-y-4 flex-1">
           {[...Array(5)].map((_, i) => (
-            <div key={i} className="flex items-center gap-3 px-2">
+            <div key={i} className="flex items-center gap-3 px-2 h-16">
               <Skeleton className="h-4 w-4 flex-shrink-0" />
               <div className="flex-1 space-y-2">
                 <Skeleton className="h-4 w-[150px]" />
@@ -972,12 +957,12 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
     return (
       <div className={`flex h-full flex-col ${className || ""}`}>
         <div className="flex flex-col items-center justify-center py-8 text-center flex-1">
-          <MessageSquare className="w-10 h-10 text-muted-foreground mb-3" aria-hidden="true" />
+          <AlertCircle className="w-10 h-10 mb-3 text-destructive" aria-hidden="true" />
           <p className="text-sm text-muted-foreground">Failed to load sessions</p>
           <p className="text-xs text-muted-foreground/70 mt-1">{error}</p>
-          <Button variant="outline" size="sm" className="mt-4" onClick={handleRetry}>
+          <button onClick={handleRetry} className="text-sm text-primary underline mt-2">
             Retry
-          </Button>
+          </button>
         </div>
       </div>
     );
@@ -1037,7 +1022,7 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
       />
 
       {/* Sessions List */}
-      <ScrollArea className="flex-1 -mx-2 px-2">
+      <div ref={listRef} className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-muted-foreground/20 scrollbar-track-transparent">
         {!hasSearchResults ? (
           <div className="flex flex-col items-center justify-center py-8 text-center">
             <Search className="w-10 h-10 text-muted-foreground mb-3" aria-hidden="true" />
@@ -1054,95 +1039,62 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
               Clear search
             </Button>
           </div>
-        ) : (
-          <div className="space-y-4 pb-4">
-            {/* Pinned Section */}
-            {groupedSessions.pinned.length > 0 && (
-              <SessionGroup
-                label={GROUP_LABELS.pinned}
-                sessions={groupedSessions.pinned}
-                activeSessionId={activeSessionId}
-                onSessionClick={handleSessionClick}
-                onSessionRename={handleSessionRename}
-                onSessionPinToggle={togglePinSession}
-                onSessionDelete={handleSessionDelete}
-                isSessionPinned={isSessionPinned}
-                focusedIndex={focusedSessionIndex}
-                onFocusedIndexChange={setFocusedSessionIndex}
-                indexOffset={0}
-              />
-            )}
-
-            {/* Today Section */}
-            {groupedSessions.today.length > 0 && (
-              <SessionGroup
-                label={GROUP_LABELS.today}
-                sessions={groupedSessions.today}
-                activeSessionId={activeSessionId}
-                onSessionClick={handleSessionClick}
-                onSessionRename={handleSessionRename}
-                onSessionPinToggle={togglePinSession}
-                onSessionDelete={handleSessionDelete}
-                isSessionPinned={isSessionPinned}
-                focusedIndex={focusedSessionIndex}
-                onFocusedIndexChange={setFocusedSessionIndex}
-                indexOffset={groupedSessions.pinned.length}
-              />
-            )}
-
-            {/* Yesterday Section */}
-            {groupedSessions.yesterday.length > 0 && (
-              <SessionGroup
-                label={GROUP_LABELS.yesterday}
-                sessions={groupedSessions.yesterday}
-                activeSessionId={activeSessionId}
-                onSessionClick={handleSessionClick}
-                onSessionRename={handleSessionRename}
-                onSessionPinToggle={togglePinSession}
-                onSessionDelete={handleSessionDelete}
-                isSessionPinned={isSessionPinned}
-                focusedIndex={focusedSessionIndex}
-                onFocusedIndexChange={setFocusedSessionIndex}
-                indexOffset={groupedSessions.pinned.length + groupedSessions.today.length}
-              />
-            )}
-
-            {/* This Week Section */}
-            {groupedSessions.thisWeek.length > 0 && (
-              <SessionGroup
-                label={GROUP_LABELS.thisWeek}
-                sessions={groupedSessions.thisWeek}
-                activeSessionId={activeSessionId}
-                onSessionClick={handleSessionClick}
-                onSessionRename={handleSessionRename}
-                onSessionPinToggle={togglePinSession}
-                onSessionDelete={handleSessionDelete}
-                isSessionPinned={isSessionPinned}
-                focusedIndex={focusedSessionIndex}
-                onFocusedIndexChange={setFocusedSessionIndex}
-                indexOffset={groupedSessions.pinned.length + groupedSessions.today.length + groupedSessions.yesterday.length}
-              />
-            )}
-
-            {/* Older Section */}
-            {groupedSessions.older.length > 0 && (
-              <SessionGroup
-                label={GROUP_LABELS.older}
-                sessions={groupedSessions.older}
-                activeSessionId={activeSessionId}
-                onSessionClick={handleSessionClick}
-                onSessionRename={handleSessionRename}
-                onSessionPinToggle={togglePinSession}
-                onSessionDelete={handleSessionDelete}
-                isSessionPinned={isSessionPinned}
-                focusedIndex={focusedSessionIndex}
-                onFocusedIndexChange={setFocusedSessionIndex}
-                indexOffset={groupedSessions.pinned.length + groupedSessions.today.length + groupedSessions.yesterday.length + groupedSessions.thisWeek.length}
-              />
-            )}
-          </div>
-        )}
-      </ScrollArea>
+        ) : (() => {
+          const virtualItems = sessionVirtualizer.getVirtualItems();
+          const shouldUseVirtualizer = virtualItems.length > 0;
+          return shouldUseVirtualizer ? (
+            <div style={{ height: sessionVirtualizer.getTotalSize(), position: 'relative' }}>
+              {virtualItems.map((virtualItem) => {
+                const session = filteredSessions[virtualItem.index];
+                return (
+                  <div
+                    key={virtualItem.key}
+                    data-index={virtualItem.index}
+                    ref={sessionVirtualizer.measureElement}
+                    style={{ position: 'absolute', top: virtualItem.start, left: 0, right: 0 }}
+                  >
+                    <SessionItem
+                      session={session}
+                      isActive={String(session.id) === activeSessionId}
+                      isPinned={isSessionPinned(session.id)}
+                      onClick={() => {
+                        handleSessionClick(session);
+                        setFocusedSessionIndex(virtualItem.index);
+                      }}
+                      onRename={(newTitle) => handleSessionRename(session, newTitle)}
+                      onPinToggle={() => togglePinSession(session.id)}
+                      onDelete={() => handleSessionDelete(session)}
+                      tabIndex={virtualItem.index === focusedSessionIndex ? 0 : -1}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            // Fallback: render all items directly (used in JSDOM/test env where
+            // scroll container has 0 height and getVirtualItems() returns [])
+            <div>
+              {filteredSessions.map((session, index) => (
+                <div key={session.id}>
+                  <SessionItem
+                    session={session}
+                    isActive={String(session.id) === activeSessionId}
+                    isPinned={isSessionPinned(session.id)}
+                    onClick={() => {
+                      handleSessionClick(session);
+                      setFocusedSessionIndex(index);
+                    }}
+                    onRename={(newTitle) => handleSessionRename(session, newTitle)}
+                    onPinToggle={() => togglePinSession(session.id)}
+                    onDelete={() => handleSessionDelete(session)}
+                    tabIndex={index === focusedSessionIndex ? 0 : -1}
+                  />
+                </div>
+              ))}
+            </div>
+          );
+        })()}
+      </div>
     </div>
   );
 }

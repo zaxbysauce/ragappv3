@@ -94,6 +94,12 @@ class ForkSessionRequest(BaseModel):
     message_index: int = Field(..., ge=0, description="Index of the last message to include in the fork (0-based)")
 
 
+class FeedbackRequest(BaseModel):
+    """Request model for setting feedback on a chat message."""
+
+    rating: Optional[str] = None
+
+
 def stream_chat_response(
     message: str,
     history: List[Dict[str, Any]],
@@ -410,7 +416,7 @@ async def get_session(
         raise HTTPException(status_code=403, detail="No read access to this vault")
 
     # Get messages
-    messages_query = "SELECT id, role, content, sources, created_at FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC, id ASC"
+    messages_query = "SELECT id, role, content, sources, created_at, feedback FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC, id ASC"
     messages_result = await asyncio.to_thread(
         conn.execute, messages_query, (session_id,)
     )
@@ -433,6 +439,7 @@ async def get_session(
                 "content": msg_row[2],
                 "sources": sources,
                 "created_at": msg_row[4],
+                "feedback": msg_row[5],
             }
         )
 
@@ -783,6 +790,83 @@ async def add_message(
         "content": row[2],
         "sources": sources,
         "created_at": row[4],
+    }
+
+
+@router.patch("/chat/sessions/{session_id}/messages/{message_id}/feedback")
+async def set_message_feedback(
+    session_id: int,
+    message_id: int,
+    request: FeedbackRequest,
+    conn: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_active_user),
+):
+    """
+    Set or clear feedback (thumbs up/down) on a chat message.
+
+    Validates the message belongs to the session, then updates the feedback field.
+    Returns the full updated message row.
+    """
+    # Validate rating value
+    if request.rating not in ("up", "down", None):
+        raise HTTPException(
+            status_code=422,
+            detail="rating must be 'up', 'down', or null",
+        )
+
+    # Verify session exists and get vault_id for authorization
+    session_result = await asyncio.to_thread(
+        conn.execute,
+        "SELECT id, vault_id FROM chat_sessions WHERE id = ?",
+        (session_id,),
+    )
+    session_row = await asyncio.to_thread(session_result.fetchone)
+    if session_row is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if not await evaluate_policy(user, "vault", session_row[1], "write"):
+        raise HTTPException(status_code=403, detail="No write access to this vault")
+
+    # Verify message belongs to session
+    check_result = await asyncio.to_thread(
+        conn.execute,
+        "SELECT id FROM chat_messages WHERE id = ? AND session_id = ?",
+        (message_id, session_id),
+    )
+    check_row = await asyncio.to_thread(check_result.fetchone)
+    if check_row is None:
+        raise HTTPException(status_code=404, detail="Message not found in this session")
+
+    # Update feedback
+    await asyncio.to_thread(
+        conn.execute,
+        "UPDATE chat_messages SET feedback = ? WHERE id = ?",
+        (request.rating, message_id),
+    )
+    await asyncio.to_thread(conn.commit)
+
+    # Return updated message
+    result = await asyncio.to_thread(
+        conn.execute,
+        "SELECT id, role, content, sources, created_at, feedback FROM chat_messages WHERE id = ?",
+        (message_id,),
+    )
+    row = await asyncio.to_thread(result.fetchone)
+
+    sources = None
+    if row[3]:
+        try:
+            sources = json.loads(row[3])
+        except json.JSONDecodeError:
+            sources = []
+
+    return {
+        "id": row[0],
+        "role": row[1],
+        "content": row[2],
+        "sources": sources,
+        "created_at": row[4],
+        "feedback": row[5],
     }
 
 

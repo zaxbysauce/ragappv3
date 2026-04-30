@@ -136,9 +136,8 @@ describe("RightPane", () => {
 
       render(<RightPane />);
 
-      expect(
-        screen.getByText("No sources available. Send a message to see retrieved sources.")
-      ).toBeInTheDocument();
+      expect(screen.getByText("No sources yet")).toBeInTheDocument();
+      expect(screen.getByText("Send a message to see retrieved sources.")).toBeInTheDocument();
     });
 
     it("should show empty state when no assistant messages with sources", () => {
@@ -152,9 +151,8 @@ describe("RightPane", () => {
 
       render(<RightPane />);
 
-      expect(
-        screen.getByText("No sources available. Send a message to see retrieved sources.")
-      ).toBeInTheDocument();
+      expect(screen.getByText("No sources yet")).toBeInTheDocument();
+      expect(screen.getByText("Send a message to see retrieved sources.")).toBeInTheDocument();
     });
 
     it("should show empty state when user message exists but no assistant", () => {
@@ -167,9 +165,8 @@ describe("RightPane", () => {
 
       render(<RightPane />);
 
-      expect(
-        screen.getByText("No sources available. Send a message to see retrieved sources.")
-      ).toBeInTheDocument();
+      expect(screen.getByText("No sources yet")).toBeInTheDocument();
+      expect(screen.getByText("Send a message to see retrieved sources.")).toBeInTheDocument();
     });
   });
 
@@ -242,9 +239,8 @@ describe("RightPane", () => {
 
       render(<RightPane />);
 
-      // Snippet should be truncated to ~60 chars + "..."
-      // The actual truncation is done in the component
-      const snippetText = screen.getByText(/^[A]{60}\.\.\.$/);
+      // Truncation is handled by CSS (line-clamp), so the full snippet text is in the DOM
+      const snippetText = screen.getByText(longSnippet);
       expect(snippetText).toBeInTheDocument();
     });
 
@@ -355,7 +351,8 @@ describe("RightPane", () => {
       render(<RightPane />);
 
       // The preview tab should show the empty state message
-      expect(screen.getByText("Select a source from the Sources tab to preview it here.")).toBeInTheDocument();
+      expect(screen.getByText("No preview available")).toBeInTheDocument();
+      expect(screen.getByText("Select a source to preview it here.")).toBeInTheDocument();
     });
 
     it("should show correct empty state message when sources exist but none selected", () => {
@@ -370,7 +367,8 @@ describe("RightPane", () => {
       render(<RightPane />);
 
       // Preview should show empty state
-      expect(screen.getByText("Select a source from the Sources tab to preview it here.")).toBeInTheDocument();
+      expect(screen.getByText("No preview available")).toBeInTheDocument();
+      expect(screen.getByText("Select a source to preview it here.")).toBeInTheDocument();
     });
   });
 
@@ -894,7 +892,8 @@ print("hello")
       render(<RightPane />);
 
       // Preview tab should show empty state message since no source is selected
-      expect(screen.getByText("Select a source from the Sources tab to preview it here.")).toBeInTheDocument();
+      expect(screen.getByText("No preview available")).toBeInTheDocument();
+      expect(screen.getByText("Select a source to preview it here.")).toBeInTheDocument();
     });
 
     it("should enable Preview tab after selecting a source", async () => {
