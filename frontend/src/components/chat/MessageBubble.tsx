@@ -1,10 +1,11 @@
 import { motion } from "framer-motion";
-import { User, Bot, AlertCircle, GitBranch } from "lucide-react";
+import { Bot, AlertCircle, GitBranch } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MessageContent } from "./MessageContent";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Message } from "@/stores/useChatStore";
+import { useAuthStore } from "@/stores/useAuthStore";
 
 interface MessageBubbleProps {
   message: Message;
@@ -14,6 +15,8 @@ interface MessageBubbleProps {
 
 export function MessageBubble({ message, isStreaming, onFork }: MessageBubbleProps) {
   const isUser = message.role === "user";
+  const user = useAuthStore((state) => state.user);
+  const userInitial = (user?.full_name || user?.username || "U")[0].toUpperCase();
 
   return (
     <motion.div
@@ -22,7 +25,9 @@ export function MessageBubble({ message, isStreaming, onFork }: MessageBubblePro
       transition={{ duration: 0.3 }}
       className={cn(
         "group flex gap-3 p-4",
-        isUser ? "bg-primary/10" : "bg-muted/30"
+        isUser
+          ? "bg-primary/[0.12] border-l-2 border-primary/40"
+          : "bg-muted/30"
       )}
     >
       <div
@@ -32,7 +37,7 @@ export function MessageBubble({ message, isStreaming, onFork }: MessageBubblePro
         )}
       >
         {isUser ? (
-          <User className="h-4 w-4" />
+          <span className="text-xs font-semibold leading-none">{userInitial}</span>
         ) : (
           <Bot className="h-4 w-4" />
         )}

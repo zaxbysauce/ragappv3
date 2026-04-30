@@ -410,7 +410,7 @@ describe("AssistantMessage - Citations and Sources", () => {
     render(<AssistantMessage message={message} />);
 
     // View all only shows when sources.length > 3
-    expect(screen.getByLabelText("View all sources")).toBeInTheDocument();
+    expect(screen.getByLabelText("View all 4 sources")).toBeInTheDocument();
   });
 
   it("should open right pane when '+N more' is clicked", () => {
@@ -493,8 +493,8 @@ describe("AssistantMessage - Hover Actions", () => {
 
     const messageContainer = screen.getByLabelText("Assistant message");
 
-    // Initially action bar should be hidden (opacity-30 from group-hover pattern)
-    const actionBar = messageContainer.querySelector('[class*="opacity-30"]');
+    // Initially action bar should be hidden (opacity-60 from group-hover pattern)
+    const actionBar = messageContainer.querySelector('[class*="opacity-60"]');
     expect(actionBar).toBeInTheDocument();
 
     // After mouse enter, action buttons should be in the DOM
@@ -516,7 +516,7 @@ describe("AssistantMessage - Hover Actions", () => {
       <AssistantMessage message={message} onViewAllSources={onViewAllSources} />
     );
 
-    const viewAllButton = screen.getByLabelText("View all sources");
+    const viewAllButton = screen.getByLabelText("View all 4 sources");
     fireEvent.click(viewAllButton);
 
     expect(mockSetActiveRightTab).toHaveBeenCalledWith("evidence");

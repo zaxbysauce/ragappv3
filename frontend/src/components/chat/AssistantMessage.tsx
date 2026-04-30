@@ -3,7 +3,7 @@
 
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { motion } from "framer-motion";
-import { Bot, Copy, Check, RotateCcw, Bug, ChevronRight, FileText, ThumbsUp, ThumbsDown, AlertCircle, GitBranch } from "lucide-react";
+import { Bot, Copy, Check, RotateCcw, Bug, FileText, ThumbsUp, ThumbsDown, AlertCircle, GitBranch } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +15,7 @@ import { getRelevanceLabel, type ScoreType } from "@/lib/relevance";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSanitize from "rehype-sanitize";
+import { CopyButton } from "@/components/shared/CopyButton";
 
 // =============================================================================
 // TYPES & INTERFACES
@@ -194,19 +195,30 @@ function CitationChip({ source, index, onClick, variant = "strip" }: CitationChi
   }
 
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs",
-        "bg-primary/10 text-primary hover:bg-primary/25 active:scale-95 transition-all duration-150",
-        "border border-primary/20 hover:border-primary/40 hover:shadow-sm"
-      )}
-      aria-label={label}
-    >
-      <FileText className="h-3 w-3" />
-      <span className="truncate max-w-[120px]">{source.filename}</span>
-    </button>
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            onClick={onClick}
+            className={cn(
+              "inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs",
+              "bg-primary/10 text-primary hover:bg-primary/25 active:scale-95 transition-all duration-150",
+              "border border-primary/20 hover:border-primary/40 hover:shadow-sm"
+            )}
+            aria-label={label}
+          >
+            <FileText className="h-3 w-3" />
+            <span className="truncate max-w-[120px]">{source.filename}</span>
+          </button>
+        </TooltipTrigger>
+        {source.snippet && (
+          <TooltipContent className="max-w-[250px] text-xs">
+            <p>{source.snippet.slice(0, 100)}{source.snippet.length > 100 ? '…' : ''}</p>
+          </TooltipContent>
+        )}
+      </Tooltip>
+    </TooltipProvider>
   );
 }
 
@@ -248,16 +260,6 @@ function EvidenceStrip({ sources, onSourceClick, onViewAll }: EvidenceStripProps
           aria-label={`View all ${sources.length} sources`}
         >
           +{remainingCount} more
-        </button>
-      )}
-      {sources.length > 3 && (
-        <button
-          onClick={onViewAll}
-          className="inline-flex items-center gap-0.5 text-xs text-primary hover:underline ml-1"
-          aria-label="View all sources"
-        >
-          View all
-          <ChevronRight className="h-3 w-3" />
         </button>
       )}
     </div>
@@ -393,7 +395,7 @@ function ActionBar({
   }, [feedback, externalFeedback, onFeedback, saveFeedbackToStorage]);
 
   return (
-    <div className="flex items-center gap-1 mt-3 opacity-30 group-hover:opacity-100 focus-within:opacity-100 transition-opacity duration-200">
+    <div className="flex items-center gap-1 mt-3 opacity-60 group-hover:opacity-100 focus-within:opacity-100 [@media(pointer:coarse)]:opacity-100 transition-opacity duration-200">
       <TooltipProvider>
         {showCopy && (
           <Tooltip>
@@ -576,6 +578,10 @@ export function AssistantMessage({
 
   // Render content with inline citation chips
   const renderContent = () => {
+    // TECH DEBT: This creates one ReactMarkdown + rehypeSanitize parse cycle per
+    // text segment (N segments = N parse cycles for N citations). Fix: replace
+    // citation markers with unique tokens before rendering, run a single markdown
+    // pass, then post-process the output to swap tokens for React elements.
     return segments.map((segment, index) => {
       if (segment.type === "citation") {
         // Resolve by source_label first, then by filename (legacy), then by index
@@ -620,6 +626,38 @@ export function AssistantMessage({
           components={{
             // Override to prevent nesting issues
             p: ({ children }) => <>{children}</>,
+            // Prevent double-wrapping: block code renders its own <pre>
+            pre: ({ children }) => <>{children}</>,
+            code: ({ className, children, ...props }) => {
+              const isBlock = Boolean(className?.startsWith("language-"));
+              if (!isBlock) {
+                return (
+                  <code
+                    className="bg-muted px-1 py-0.5 rounded text-sm font-mono"
+                    {...props}
+                  >
+                    {children}
+                  </code>
+                );
+              }
+              const language = className?.replace("language-", "") ?? "";
+              const codeText = String(children).replace(/\n$/, "");
+              return (
+                <pre className="rounded-lg bg-muted p-4 overflow-x-auto text-sm font-mono my-3 relative group/code">
+                  {language && (
+                    <span className="absolute top-2 left-3 text-[10px] text-muted-foreground select-none">
+                      {language}
+                    </span>
+                  )}
+                  <CopyButton
+                    text={codeText}
+                    label="Copy code"
+                    className="absolute top-1.5 right-1.5 opacity-0 group-hover/code:opacity-100 focus:opacity-100 transition-opacity"
+                  />
+                  <code className={className}>{children}</code>
+                </pre>
+              );
+            },
           }}
         >
           {segment.content}
