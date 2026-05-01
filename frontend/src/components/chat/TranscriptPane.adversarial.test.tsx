@@ -27,7 +27,45 @@ Element.prototype.scrollIntoView = vi.fn();
 // MOCKS
 // =============================================================================
 
-vi.mock("@/stores/useChatStore");
+// Shared mock state — must be hoisted so vi.mock factories can close over it
+const mockChatState = vi.hoisted(() => ({
+  messageIds: [] as string[],
+  messagesById: {} as Record<string, any>,
+  input: "",
+  isStreaming: false,
+  streamingMessageId: null as string | null,
+  inputError: null as string | null,
+  expandedSources: new Set<string>(),
+  activeChatId: null as string | null,
+  abortFn: null,
+  setInput: vi.fn(),
+  setIsStreaming: vi.fn(),
+  setAbortFn: vi.fn(),
+  setInputError: vi.fn(),
+  addMessage: vi.fn(),
+  updateMessage: vi.fn(),
+  appendToMessage: vi.fn(),
+  removeMessagesFrom: vi.fn(),
+  stopStreaming: vi.fn(),
+  loadChat: vi.fn(),
+  newChat: vi.fn(),
+}));
+
+vi.mock("@/stores/useChatStore", () => ({
+  useChatStore: vi.fn((selector?: (s: typeof mockChatState) => unknown) =>
+    typeof selector === "function" ? selector(mockChatState) : mockChatState
+  ),
+  useMessageIds: vi.fn(() => mockChatState.messageIds),
+  useMessage: vi.fn((id: string) => mockChatState.messagesById[id]),
+  useChatMessages: vi.fn(() =>
+    mockChatState.messageIds.map((id) => mockChatState.messagesById[id])
+  ),
+  useChatInput: vi.fn(() => mockChatState.input),
+  useChatIsStreaming: vi.fn(() => mockChatState.isStreaming),
+  useChatInputError: vi.fn(() => mockChatState.inputError),
+  useChatActiveChatId: vi.fn(() => mockChatState.activeChatId),
+  useChatStreamingId: vi.fn(() => mockChatState.streamingMessageId),
+}));
 vi.mock("@/stores/useVaultStore");
 vi.mock("@/hooks/useSendMessage");
 vi.mock("@/hooks/useChatHistory");
@@ -100,22 +138,20 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
     vi.clearAllMocks();
     _mockMessageCount = 0;
 
-    // Default mock implementations for useChatStore
-    (useChatStore as unknown as ReturnType<typeof vi.fn>).mockImplementation((selector) => {
-      const state = {
-        messages: [],
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      };
-      return selector ? selector(state) : state;
-    });
+    // Reset shared mock state
+    mockChatState.messageIds = [];
+    mockChatState.messagesById = {};
+    mockChatState.input = "";
+    mockChatState.isStreaming = false;
+    mockChatState.streamingMessageId = null;
+    mockChatState.inputError = null;
+    mockChatState.setInput = mockSetInput;
+    mockChatState.setIsStreaming = vi.fn();
+    mockChatState.setAbortFn = vi.fn();
+    mockChatState.setInputError = vi.fn();
+    mockChatState.addMessage = vi.fn();
+    mockChatState.updateMessage = vi.fn();
+    mockChatState.stopStreaming = vi.fn();
 
     // Mock useVaultStore with selector support
     (useVaultStore as unknown as ReturnType<typeof vi.fn>).mockImplementation((selector) => {
@@ -145,18 +181,36 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
   // Helper to set chat store messages AND sync virtualizer count
   const withMessages = (messages: any[]) => {
     _mockMessageCount = messages.length;
-    (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-      messages,
-      input: "",
-      isStreaming: false,
-      setInput: mockSetInput,
-      setIsStreaming: vi.fn(),
-      setAbortFn: vi.fn(),
-      setInputError: vi.fn(),
-      addMessage: vi.fn(),
-      updateMessage: vi.fn(),
-      inputError: null,
-    });
+    mockChatState.messageIds = messages.map((m: any) => m.id ?? String(Math.random()));
+    mockChatState.messagesById = Object.fromEntries(
+      messages.map((m: any, i: number) => [m.id ?? String(i), m])
+    );
+  };
+
+  // Helper to replace old-style mockReturnValue calls with normalized state updates
+  const setMockChatState = (state: {
+    messages?: any[];
+    input?: string;
+    isStreaming?: boolean;
+    inputError?: string | null;
+    [key: string]: any;
+  }) => {
+    if (state.messages !== undefined) {
+      _mockMessageCount = state.messages.length;
+      mockChatState.messageIds = state.messages.map((m: any, i: number) => m.id ?? String(i));
+      mockChatState.messagesById = Object.fromEntries(
+        state.messages.map((m: any, i: number) => [m.id ?? String(i), m])
+      );
+    }
+    if (state.input !== undefined) mockChatState.input = state.input;
+    if (state.isStreaming !== undefined) mockChatState.isStreaming = state.isStreaming;
+    if (state.inputError !== undefined) mockChatState.inputError = state.inputError;
+    if (state.setInput !== undefined) mockChatState.setInput = state.setInput;
+    if (state.setIsStreaming !== undefined) mockChatState.setIsStreaming = state.setIsStreaming;
+    if (state.setAbortFn !== undefined) mockChatState.setAbortFn = state.setAbortFn;
+    if (state.setInputError !== undefined) mockChatState.setInputError = state.setInputError;
+    if (state.addMessage !== undefined) mockChatState.addMessage = state.addMessage;
+    if (state.updateMessage !== undefined) mockChatState.updateMessage = state.updateMessage;
   };
 
   // ===========================================================================
@@ -181,18 +235,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
     it.each(xssPayloads)("should NOT execute XSS payload in message content: %s", async (payload) => {
       const messages = [{ id: "msg-1", role: "assistant", content: payload }];
       _mockMessageCount = messages.length;
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages,
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages, input: "", isStreaming: false, inputError: null });
 
       render(<TranscriptPane />);
 
@@ -218,18 +261,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
         }],
       }];
       _mockMessageCount = messages.length;
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages,
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages, input: "", isStreaming: false, inputError: null });
 
       render(<TranscriptPane />);
 
@@ -248,18 +280,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
         content: '<script>alert("bad")</script>Hello',
       }];
       _mockMessageCount = messages.length;
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages,
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages, input: "", isStreaming: false, inputError: null });
 
       render(<TranscriptPane />);
 
@@ -283,18 +304,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
         content: "A".repeat(10000),
       }];
       _mockMessageCount = messages.length;
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages,
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages, input: "", isStreaming: false, inputError: null });
 
       expect(() => {
         render(<TranscriptPane />);
@@ -306,22 +316,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
     });
 
     it("should handle 50000 character message", async () => {
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [{
-          id: "msg-1",
-          role: "assistant",
-          content: "Lorem ipsum ".repeat(5000),
-        }],
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: [{ id: "msg-1", role: "assistant", content: "Lorem ipsum ".repeat(5000) }], input: "", isStreaming: false, inputError: null });
 
       expect(() => {
         render(<TranscriptPane />);
@@ -335,18 +330,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
         content: "AAAAAAAAAA".repeat(1000),
       }];
       _mockMessageCount = messages.length;
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages,
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages, input: "", isStreaming: false, inputError: null });
 
       render(<TranscriptPane />);
 
@@ -356,22 +340,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
     });
 
     it("should handle message with multiple newlines and whitespace", async () => {
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [{
-          id: "msg-1",
-          role: "assistant",
-          content: "\n\n\n".repeat(1000) + "   ".repeat(1000) + "text",
-        }],
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: [{ id: "msg-1", role: "assistant", content: "\n\n\n".repeat(1000) + "   ".repeat(1000) + "text" }], input: "", isStreaming: false, inputError: null });
 
       expect(() => {
         render(<TranscriptPane />);
@@ -394,18 +363,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
       }
       _mockMessageCount = messages.length;
 
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages,
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages, input: "", isStreaming: false, inputError: null });
 
       render(<TranscriptPane />);
 
@@ -416,21 +374,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
 
     it("should handle streaming state changes rapidly", async () => {
       let streamingState = false;
-      
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => {
-        return {
-          messages: [],
-          input: "",
-          isStreaming: streamingState,
-          setInput: mockSetInput,
-          setIsStreaming: vi.fn((v: boolean) => { streamingState = v; }),
-          setAbortFn: vi.fn(),
-          setInputError: vi.fn(),
-          addMessage: vi.fn(),
-          updateMessage: vi.fn(),
-          inputError: null,
-        };
-      });
+      mockChatState.isStreaming = streamingState;
 
       render(<TranscriptPane />);
 
@@ -438,6 +382,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
       await act(async () => {
         for (let i = 0; i < 20; i++) {
           streamingState = i % 2 === 0;
+          mockChatState.isStreaming = streamingState;
         }
       });
 
@@ -461,18 +406,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
       }
       _mockMessageCount = interleavedMessages.length;
 
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: interleavedMessages,
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: interleavedMessages, input: "", isStreaming: false, inputError: null });
 
       render(<TranscriptPane />);
 
@@ -496,18 +430,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
     ];
 
     it.each(injectionPayloads)("should handle potentially malicious slash input: %s", async (payload) => {
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [],
-        input: payload,
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: [], input: payload, isStreaming: false, inputError: null });
 
       render(<TranscriptPane />);
 
@@ -528,18 +451,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
     it("should handle slash command with very long query", async () => {
       const longSlash = "/" + "a".repeat(500);
 
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [],
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: [], input: "", isStreaming: false, inputError: null });
 
       render(<TranscriptPane />);
 
@@ -551,18 +463,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
     });
 
     it("should handle rapid slash menu open/close with Escape", async () => {
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [],
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: [], input: "", isStreaming: false, inputError: null });
 
       render(<TranscriptPane />);
 
@@ -591,18 +492,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
     });
 
     it("should handle keyboard navigation in slash menu rapidly", async () => {
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [],
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: [], input: "", isStreaming: false, inputError: null });
 
       render(<TranscriptPane />);
 
@@ -629,18 +519,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
   // ===========================================================================
   describe("Textarea overflow (5000+ characters)", () => {
     it("should respect max height with 5000 character input", async () => {
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [],
-        input: "A".repeat(5000),
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: [], input: "A".repeat(5000), isStreaming: false, inputError: null });
 
       render(<TranscriptPane />);
 
@@ -652,18 +531,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
     });
 
     it("should handle input exceeding MAX_INPUT_LENGTH", async () => {
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [],
-        input: "A".repeat(3000), // MAX is 2000
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: [], input: "A".repeat(3000), isStreaming: false, inputError: null }); // input exceeds MAX_INPUT_LENGTH of 2000
 
       render(<TranscriptPane />);
 
@@ -679,18 +547,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
     it("should handle very long single word (no spaces)", async () => {
       const singleWord = "A".repeat(10000);
 
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [],
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: [], input: "", isStreaming: false, inputError: null });
 
       render(<TranscriptPane />);
 
@@ -703,18 +560,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
     });
 
     it("should handle rapid input changes", async () => {
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [],
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: [], input: "", isStreaming: false, inputError: null });
 
       render(<TranscriptPane />);
 
@@ -732,18 +578,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
     it("should handle textarea with newlines that exceed max-height", async () => {
       const manyNewlines = "\n".repeat(50) + "text";
 
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [],
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: [], input: "", isStreaming: false, inputError: null });
 
       render(<TranscriptPane />);
 
@@ -776,18 +611,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
         return selector ? selector(state) : state;
       });
 
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [],
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: [], input: "", isStreaming: false, inputError: null });
 
       // This could crash if code tries to do activeVault.file_count > 0
       expect(() => {
@@ -811,18 +635,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
         return selector ? selector(state) : state;
       });
 
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [],
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: [], input: "", isStreaming: false, inputError: null });
 
       expect(() => {
         render(<TranscriptPane />);
@@ -845,18 +658,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
         return selector ? selector(state) : state;
       });
 
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [],
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: [], input: "", isStreaming: false, inputError: null });
 
       expect(() => {
         render(<TranscriptPane />);
@@ -879,18 +681,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
         return selector ? selector(state) : state;
       });
 
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [],
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: [], input: "", isStreaming: false, inputError: null });
 
       expect(() => {
         render(<TranscriptPane />);
@@ -913,18 +704,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
         return selector ? selector(state) : state;
       });
 
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [],
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: [], input: "", isStreaming: false, inputError: null });
 
       expect(() => {
         render(<TranscriptPane />);
@@ -947,18 +727,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
         return selector ? selector(state) : state;
       });
 
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [],
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: [], input: "", isStreaming: false, inputError: null });
 
       render(<TranscriptPane />);
 
@@ -974,18 +743,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
   // ===========================================================================
   describe("Rapid slash menu open/close", () => {
     it("should handle concurrent slash command trigger and Escape", async () => {
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [],
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: [], input: "", isStreaming: false, inputError: null });
 
       render(<TranscriptPane />);
 
@@ -1007,18 +765,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
     });
 
     it("should handle slash menu state race condition", async () => {
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [],
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: [], input: "", isStreaming: false, inputError: null });
 
       render(<TranscriptPane />);
 
@@ -1037,18 +784,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
     });
 
     it("should handle rapid command selection", async () => {
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [],
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: [], input: "", isStreaming: false, inputError: null });
 
       render(<TranscriptPane />);
 
@@ -1076,18 +812,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
     });
 
     it("should handle mouse/keyboard interleaving on slash menu", async () => {
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [],
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: [], input: "", isStreaming: false, inputError: null });
 
       render(<TranscriptPane />);
 
@@ -1145,18 +870,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
         return selector ? selector(state) : state;
       });
 
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [],
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: [], input: "", isStreaming: false, inputError: null });
 
       render(<TranscriptPane />);
 
@@ -1184,18 +898,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
         return selector ? selector(state) : state;
       });
 
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [],
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: [], input: "", isStreaming: false, inputError: null });
 
       render(<TranscriptPane />);
 
@@ -1220,18 +923,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
         return selector ? selector(state) : state;
       });
 
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [],
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: [], input: "", isStreaming: false, inputError: null });
 
       expect(() => {
         render(<TranscriptPane />);
@@ -1254,18 +946,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
         return selector ? selector(state) : state;
       });
 
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [],
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: [], input: "", isStreaming: false, inputError: null });
 
       expect(() => {
         render(<TranscriptPane />);
@@ -1287,18 +968,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
         return selector ? selector(state) : state;
       });
 
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [],
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: [], input: "", isStreaming: false, inputError: null });
 
       expect(() => {
         render(<TranscriptPane />);
@@ -1321,18 +991,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
         return selector ? selector(state) : state;
       });
 
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [],
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: [], input: "", isStreaming: false, inputError: null });
 
       render(<TranscriptPane />);
 
@@ -1357,18 +1016,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
         return selector ? selector(state) : state;
       });
 
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [],
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: [], input: "", isStreaming: false, inputError: null });
 
       render(<TranscriptPane />);
 
@@ -1388,18 +1036,8 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
       // BUG: Component tries to access messages.length without checking if messages exists
       // Expected behavior: Should handle undefined gracefully, maybe default to []
       // Actual behavior: Crashes with TypeError
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: undefined,
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      } as any);
+      mockChatState.messageIds = undefined as any;
+      mockChatState.messagesById = undefined as any;
 
       expect(() => {
         render(<TranscriptPane />);
@@ -1407,21 +1045,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
     });
 
     it("should handle null message content", async () => {
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [
-          { id: "1", role: "user", content: null },
-          { id: "2", role: "assistant", content: null },
-        ],
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      } as any);
+      setMockChatState({ messages: [{ id: "1", role: "user", content: null }, { id: "2", role: "assistant", content: null }], input: "", isStreaming: false, inputError: null });
 
       expect(() => {
         render(<TranscriptPane />);
@@ -1433,18 +1057,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
         { id: "1", role: "assistant", content: "test", sources: undefined },
       ];
       _mockMessageCount = messages.length;
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages,
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages, input: "", isStreaming: false, inputError: null });
 
       render(<TranscriptPane />);
 
@@ -1461,18 +1074,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
       }));
       _mockMessageCount = messages.length;
 
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages,
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages, input: "", isStreaming: false, inputError: null });
 
       render(<TranscriptPane />);
 
@@ -1492,25 +1094,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
       const circularObj: any = { id: 1, filename: "test" };
       circularObj.self = circularObj; // Circular reference
 
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [
-          { 
-            id: "1", 
-            role: "assistant", 
-            content: "test",
-            sources: [circularObj],
-          },
-        ],
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: [{ id: "1", role: "assistant", content: "test", sources: [circularObj] }], input: "", isStreaming: false, inputError: null });
 
       expect(() => {
         render(<TranscriptPane />);
@@ -1518,18 +1102,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
     });
 
     it("should handle empty message array with streaming true", async () => {
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [],
-        input: "",
-        isStreaming: true,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: [], input: "", isStreaming: true, inputError: null });
 
       render(<TranscriptPane />);
 
@@ -1540,28 +1113,15 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
     });
 
     it("should handle message with malformed source data", async () => {
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [
-          {
-            id: "1",
-            role: "assistant",
-            content: "test",
-            sources: [
-              { id: 1 }, // Missing required fields
-              { filename: 123, score: "invalid" }, // Wrong types
-              undefined, // Undefined entry
-              null, // Null entry
-            ] as any,
-          },
-        ],
+      setMockChatState({
+        messages: [{
+          id: "1",
+          role: "assistant",
+          content: "test",
+          sources: [{ id: 1 }, { filename: 123, score: "invalid" }, undefined, null] as any,
+        }],
         input: "",
         isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
         inputError: null,
       });
 
@@ -1586,22 +1146,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
       // Create deeply nested markdown that could cause issues
       const deepNested = "# ".repeat(50) + "Title\n" + "> ".repeat(50) + "Quote";
 
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [{
-          id: "1",
-          role: "assistant",
-          content: deepNested,
-        }],
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: [{ id: "1", role: "assistant", content: deepNested }], input: "", isStreaming: false, inputError: null });
 
       expect(() => {
         render(<TranscriptPane />);
@@ -1614,22 +1159,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
   // ===========================================================================
   describe("Boundary violations", () => {
     it("should handle messages at Number.MAX_SAFE_INTEGER index", async () => {
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [{
-          id: String(Number.MAX_SAFE_INTEGER),
-          role: "assistant",
-          content: "Boundary test",
-        }],
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: [{ id: String(Number.MAX_SAFE_INTEGER), role: "assistant", content: "Boundary test" }], input: "", isStreaming: false, inputError: null });
 
       expect(() => {
         render(<TranscriptPane />);
@@ -1637,22 +1167,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
     });
 
     it("should handle negative message indices", async () => {
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [{
-          id: "-1",
-          role: "assistant",
-          content: "Negative ID message",
-        }],
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: [{ id: "-1", role: "assistant", content: "Negative ID message" }], input: "", isStreaming: false, inputError: null });
 
       expect(() => {
         render(<TranscriptPane />);
@@ -1660,22 +1175,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
     });
 
     it("should handle NaN in message indices", async () => {
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [{
-          id: String(NaN),
-          role: "assistant",
-          content: "NaN ID message",
-        }],
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: [{ id: String(NaN), role: "assistant", content: "NaN ID message" }], input: "", isStreaming: false, inputError: null });
 
       expect(() => {
         render(<TranscriptPane />);
@@ -1690,21 +1190,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
     it("should handle streaming state flipping during render", async () => {
       let streamingState = false;
       _mockMessageCount = 1;
-
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => {
-        return {
-          messages: [{ id: "1", role: "assistant", content: "test" }],
-          input: "",
-          isStreaming: streamingState,
-          setInput: mockSetInput,
-          setIsStreaming: vi.fn((v: boolean) => { streamingState = v; }),
-          setAbortFn: vi.fn(),
-          setInputError: vi.fn(),
-          addMessage: vi.fn(),
-          updateMessage: vi.fn(),
-          inputError: null,
-        };
-      });
+      setMockChatState({ messages: [{ id: "1", role: "assistant", content: "test" }], input: "", isStreaming: false, inputError: null });
 
       render(<TranscriptPane />);
 
@@ -1712,6 +1198,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
       await act(async () => {
         for (let i = 0; i < 10; i++) {
           streamingState = i % 2 === 0;
+          mockChatState.isStreaming = streamingState;
         }
       });
 
@@ -1726,18 +1213,7 @@ describe("TranscriptPane ADVERSARIAL TESTS", () => {
         getActiveVault: () => undefined,
       });
 
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [],
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockChatState({ messages: [], input: "", isStreaming: false, inputError: null });
 
       render(<TranscriptPane />);
 

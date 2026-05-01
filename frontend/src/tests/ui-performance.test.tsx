@@ -59,19 +59,43 @@ vi.mock("@tanstack/react-virtual", () => ({
 // MOCK STORES
 // =============================================================================
 
+const mockChatState = vi.hoisted(() => ({
+  messageIds: [] as string[],
+  messagesById: {} as Record<string, { id: string; role: string; content: string }>,
+  input: "",
+  isStreaming: false,
+  streamingMessageId: null as string | null,
+  inputError: null as string | null,
+  expandedSources: new Set<string>(),
+  activeChatId: null as string | null,
+  abortFn: null,
+  setInput: vi.fn(),
+  setIsStreaming: vi.fn(),
+  setAbortFn: vi.fn(),
+  setInputError: vi.fn(),
+  addMessage: vi.fn(),
+  updateMessage: vi.fn(),
+  appendToMessage: vi.fn(),
+  removeMessagesFrom: vi.fn(),
+  stopStreaming: vi.fn(),
+  loadChat: vi.fn(),
+  newChat: vi.fn(),
+}));
+
 vi.mock("@/stores/useChatStore", () => ({
-  useChatStore: vi.fn(() => ({
-    messages: [],
-    input: "",
-    isStreaming: false,
-    setInput: vi.fn(),
-    setIsStreaming: vi.fn(),
-    setAbortFn: vi.fn(),
-    setInputError: vi.fn(),
-    addMessage: vi.fn(),
-    updateMessage: vi.fn(),
-    inputError: null,
-  })),
+  useChatStore: vi.fn((selector?: (s: typeof mockChatState) => unknown) =>
+    typeof selector === "function" ? selector(mockChatState) : mockChatState
+  ),
+  useMessageIds: vi.fn(() => mockChatState.messageIds),
+  useMessage: vi.fn((id: string) => mockChatState.messagesById[id]),
+  useChatMessages: vi.fn(() =>
+    mockChatState.messageIds.map((id) => mockChatState.messagesById[id])
+  ),
+  useChatInput: vi.fn(() => mockChatState.input),
+  useChatIsStreaming: vi.fn(() => mockChatState.isStreaming),
+  useChatInputError: vi.fn(() => mockChatState.inputError),
+  useChatActiveChatId: vi.fn(() => mockChatState.activeChatId),
+  useChatStreamingId: vi.fn(() => mockChatState.streamingMessageId),
 }));
 
 vi.mock("@/stores/useVaultStore", () => ({
@@ -86,6 +110,7 @@ vi.mock("@/hooks/useSendMessage", () => ({
   useSendMessage: vi.fn(() => ({
     handleSend: vi.fn(),
     handleStop: vi.fn(),
+    sendDirect: vi.fn(),
   })),
   MAX_INPUT_LENGTH: 2000,
 }));
@@ -99,14 +124,20 @@ vi.mock("@/hooks/useChatHistory", () => ({
 }));
 
 vi.mock("@/stores/useChatShellStore", () => ({
-  useChatShellStore: vi.fn(() => ({
-    openRightPane: vi.fn(),
-    closeRightPane: vi.fn(),
-    setActiveRightTab: vi.fn(),
-    activeRightTab: "evidence",
-    selectedEvidenceSource: null,
-    setSelectedEvidenceSource: vi.fn(),
-  })),
+  useChatShellStore: vi.fn((selector?: (s: any) => any) => {
+    const state = {
+      openRightPane: vi.fn(),
+      closeRightPane: vi.fn(),
+      setActiveRightTab: vi.fn(),
+      activeRightTab: "evidence",
+      selectedEvidenceSource: null,
+      setSelectedEvidenceSource: vi.fn(),
+      activeSessionId: null,
+      activeSessionTitle: null,
+      setActiveSessionId: vi.fn(),
+    };
+    return typeof selector === "function" ? selector(state) : state;
+  }),
 }));
 
 // =============================================================================
@@ -145,7 +176,11 @@ vi.mock("./AssistantMessage", () => ({
 // =============================================================================
 
 import { TranscriptPane } from "@/components/chat/TranscriptPane";
-import { useChatStore } from "@/stores/useChatStore";
+
+function setMockMessages(messages: Array<{ id: string; role: string; content: string; [k: string]: unknown }>) {
+  mockChatState.messageIds = messages.map((m) => m.id);
+  mockChatState.messagesById = Object.fromEntries(messages.map((m) => [m.id, m])) as Record<string, { id: string; role: string; content: string }>;
+}
 
 // =============================================================================
 // SC-001: TranscriptPane Virtualization
@@ -158,26 +193,12 @@ describe("SC-001: TranscriptPane Virtualization", () => {
   });
 
   it("calls useVirtualizer with count=200 when rendering 200 messages", async () => {
-    // Create 200 mock messages
     const messages = Array.from({ length: 200 }, (_, i) => ({
       id: String(i + 1),
       role: i % 2 === 0 ? "user" : "assistant",
       content: `Message ${i + 1} content`,
     }));
-
-    // Mock the store to return 200 messages
-    (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-      messages,
-      input: "",
-      isStreaming: false,
-      setInput: vi.fn(),
-      setIsStreaming: vi.fn(),
-      setAbortFn: vi.fn(),
-      setInputError: vi.fn(),
-      addMessage: vi.fn(),
-      updateMessage: vi.fn(),
-      inputError: null,
-    });
+    setMockMessages(messages);
 
     await act(async () => {
       render(<TranscriptPane />);
@@ -197,19 +218,7 @@ describe("SC-001: TranscriptPane Virtualization", () => {
       role: "user" as const,
       content: `Message ${i + 1}`,
     }));
-
-    (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-      messages,
-      input: "",
-      isStreaming: false,
-      setInput: vi.fn(),
-      setIsStreaming: vi.fn(),
-      setAbortFn: vi.fn(),
-      setInputError: vi.fn(),
-      addMessage: vi.fn(),
-      updateMessage: vi.fn(),
-      inputError: null,
-    });
+    setMockMessages(messages);
 
     // Clear previous calls
     virtualizerCalls = [];
@@ -232,19 +241,7 @@ describe("SC-001: TranscriptPane Virtualization", () => {
       role: "user" as const,
       content: `Message ${i + 1}`,
     }));
-
-    (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-      messages,
-      input: "",
-      isStreaming: false,
-      setInput: vi.fn(),
-      setIsStreaming: vi.fn(),
-      setAbortFn: vi.fn(),
-      setInputError: vi.fn(),
-      addMessage: vi.fn(),
-      updateMessage: vi.fn(),
-      inputError: null,
-    });
+    setMockMessages(messages);
 
     await act(async () => {
       render(<TranscriptPane />);
