@@ -515,8 +515,6 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [showDebug, setShowDebug] = useState(false);
-
-  // E-1: highlighted message state for evidence:jump-to-answer
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
 
   // Check if vault has indexed documents (using file_count from Vault interface)
@@ -547,6 +545,22 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
       virtualizer.scrollToIndex(messages.length - 1, { align: 'end', behavior: 'auto' });
     }
   }, [isStreaming, messages.length, isAtBottom, virtualizer]);
+
+  // Wire evidence:jump-to-answer event from RightPane "Jump to answer" button
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { sourceId } = (e as CustomEvent<{ sourceId: string }>).detail;
+      const msgIndex = messages.findIndex(m => m.sources?.some(s => s.id === sourceId));
+      if (msgIndex >= 0) {
+        virtualizer.scrollToIndex(msgIndex, { align: 'start' });
+        const msgId = String(messages[msgIndex].id);
+        setHighlightedMessageId(msgId);
+        setTimeout(() => setHighlightedMessageId(null), 1500);
+      }
+    };
+    window.addEventListener('evidence:jump-to-answer', handler);
+    return () => window.removeEventListener('evidence:jump-to-answer', handler);
+  }, [messages, virtualizer]);
 
   // Auto-focus chat input on mount (only if no dialog/modal is open)
   useEffect(() => {
@@ -703,9 +717,7 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
                     const isLastMessage = virtualItem.index === messages.length - 1;
                     const isAssistantStreaming = isStreaming && isLastMessage && message.role === "assistant";
 
-                    // E-3: Render WaitingIndicator when streaming but no content yet
-                    const isStreamingPlaceholder = isStreaming && isLastMessage && message.role === "assistant" && !message.content;
-
+                    const isHighlighted = highlightedMessageId === messageId;
                     const itemStyle = {
                       position: 'absolute' as const,
                       top: virtualItem.start,
@@ -713,44 +725,34 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
                       width: '100%',
                     };
 
-                    if (isStreamingPlaceholder) {
-                      return (
-                        <div
-                          key={messageId}
-                          data-index={virtualItem.index}
-                          ref={virtualizer.measureElement}
-                          style={itemStyle}
-                        >
-                          <WaitingIndicator />
-                        </div>
-                      );
-                    }
-
                     return (
                       <div
                         key={messageId}
                         data-index={virtualItem.index}
                         ref={virtualizer.measureElement}
                         style={itemStyle}
-                        className={cn(
-                          message.role === "assistant" && message.id === highlightedMessageId
-                            ? "ring-2 ring-primary ring-offset-1 rounded-lg transition-all"
-                            : undefined
-                        )}
+                        className={isHighlighted ? "ring-2 ring-primary/60 rounded-lg transition-all duration-500" : undefined}
                       >
                         {message.role === "assistant" ? (
-                          <AssistantMessage
-                            message={message}
-                            isStreaming={isAssistantStreaming}
-                            showDebug={showDebug}
-                            onCopy={undefined}
-                            onRetry={handleRetry}
-                            onDebugToggle={handleDebugToggle}
-                            onFork={!isStreaming ? () => handleFork(virtualItem.index) : undefined}
-                            sessionId={String(activeSessionId ?? "")}
-                            messageFeedback={message.feedback}
-                            onFeedback={(newFeedback) => updateMessage(message.id, { feedback: newFeedback })}
-                          />
+                          <AnimatePresence mode="wait">
+                            {isAssistantStreaming && !message.content ? (
+                              <WaitingIndicator key="waiting" />
+                            ) : (
+                              <AssistantMessage
+                                key="message"
+                                message={message}
+                                isStreaming={isAssistantStreaming}
+                                showDebug={showDebug}
+                                onCopy={undefined}
+                                onRetry={handleRetry}
+                                onDebugToggle={handleDebugToggle}
+                                onFork={!isStreaming ? () => handleFork(virtualItem.index) : undefined}
+                                sessionId={String(activeSessionId ?? "")}
+                                messageFeedback={message.feedback}
+                                onFeedback={(newFeedback) => updateMessage(message.id, { feedback: newFeedback })}
+                              />
+                            )}
+                          </AnimatePresence>
                         ) : (
                           <MessageBubble
                             message={message}
