@@ -11,7 +11,7 @@ import {
   CardTitle,
   CardDescription,
 } from "@/components/ui/card";
-import { KeyRound, LogIn, Loader2, Lock, User } from "lucide-react";
+import { KeyRound, LogIn, Loader2, Lock, User, Eye, EyeOff } from "lucide-react";
 
 export default function LoginPage() {
   const [credentials, setCredentials] = useState({
@@ -20,6 +20,7 @@ export default function LoginPage() {
   });
 
   const [error, setError] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
 
   const { login, needsSetup, isLoading } = useAuthStore();
 
@@ -36,8 +37,11 @@ export default function LoginPage() {
   // Show loading while checking setup status
   if (needsSetup === null) {
     return (
-      <div className="flex h-screen items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin" />
+      <div className="flex min-h-screen items-center justify-center bg-background p-4">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" aria-hidden="true" />
+          <p className="text-sm text-muted-foreground">Loading KnowledgeVault…</p>
+        </div>
       </div>
     );
   }
@@ -111,7 +115,7 @@ export default function LoginPage() {
                 <Lock className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   id="login-password"
-                  type="password"
+                  type={showPassword ? "text" : "password"}
                   placeholder="Password"
                   value={credentials.password}
                   onChange={handleCredentialsChange("password")}
@@ -119,8 +123,16 @@ export default function LoginPage() {
                   aria-required="true"
                   aria-describedby={error ? "login-error" : undefined}
                   aria-invalid={!!error}
-                  className="pl-10"
+                  className="pl-10 pr-10"
                 />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                >
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
               </div>
             </div>
 

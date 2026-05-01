@@ -56,7 +56,7 @@ class RetrievalEvaluator:
                 {
                     "role": "user",
                     "content": (
-                        f"Query: {query}\n\nDocuments:\n{chunks_str}\n\nClassification:"
+                        f"Query: <user_query>{query}</user_query>\n\nDocuments:\n{chunks_str}\n\nClassification:"
                     ),
                 },
             ]

@@ -67,14 +67,14 @@ export default function ChatShell() {
   const handleExportChat = useCallback(() => {
     if (messages.length === 0) return;
     const chatText = messages
-      .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`)
-      .join("\n\n");
-    const blob = new Blob([chatText], { type: "text/plain" });
+      .map((m) => `### ${m.role === "user" ? "User" : "Assistant"}\n\n${m.content}`)
+      .join("\n\n---\n\n");
+    const blob = new Blob([chatText], { type: "text/markdown" });
     const url = URL.createObjectURL(blob);
     try {
       const link = document.createElement("a");
       link.href = url;
-      link.download = `chat-${new Date().toISOString().slice(0, 10)}.txt`;
+      link.download = `chat-${new Date().toISOString().slice(0, 10)}.md`;
       link.style.display = "none";
       document.body.appendChild(link);
       link.click();

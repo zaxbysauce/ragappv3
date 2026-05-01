@@ -556,6 +556,8 @@ Upload restrictions are configured in the application. Monitor for:
 - Executable file uploads
 - Path traversal attempts
 
+Binary formats (`.pdf`, `.docx`, `.xlsx`, `.xls`) are validated against their magic byte signatures at upload time. A file with a mismatched extension (e.g. a renamed executable with a `.pdf` extension) is rejected with HTTP 400 before being written to disk.
+
 ### Data Encryption
 
 **At Rest:**

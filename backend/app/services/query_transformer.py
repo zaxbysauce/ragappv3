@@ -159,7 +159,7 @@ class QueryTransformer:
                     "content": (
                         f"Generate a broader, more general version of this question that "
                         f"captures the underlying concept:\n"
-                        f"Original: {query}\n"
+                        f"Original: <user_query>{query}</user_query>\n"
                         f"Step-back:"
                     ),
                 },
@@ -258,7 +258,7 @@ class QueryTransformer:
             "contains the answer. Be specific and use domain-appropriate language. Do not hedge "
             "or say 'I think' — write as a confident factual passage."
         )
-        user_prompt = f"Question: {query}\n\nPassage:"
+        user_prompt = f"Question: <user_query>{query}</user_query>\n\nPassage:"
         try:
             messages = [
                 {"role": "system", "content": system_prompt},
