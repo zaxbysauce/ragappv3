@@ -106,7 +106,29 @@ export function useSendMessage(
         },
         onError: (error) => {
           console.error("Chat stream error:", error);
-          updateMessage(assistantMessageId, { error: error.message });
+          // Distinguish error categories for better recovery UX:
+          // - AbortError: user pressed Stop. stopStreaming() already marks the
+          //   message with stopped:true, so we skip the error block to avoid
+          //   showing both a "Stopped" pill AND a red error card.
+          // - Network/fetch errors: surface a recovery hint instead of the
+          //   raw "TypeError: Failed to fetch" message.
+          // - Everything else: show the underlying message verbatim.
+          const isAbort =
+            error.name === "AbortError" || /aborted|abort/i.test(error.message);
+          if (isAbort) {
+            setIsStreaming(false);
+            setAbortFn(null);
+            sendingRef.current = false;
+            return;
+          }
+          const isNetworkError =
+            /failed to fetch|networkerror|network request failed|load failed/i.test(
+              error.message
+            );
+          const friendlyMessage = isNetworkError
+            ? "Connection lost. Check your network and try again."
+            : error.message;
+          updateMessage(assistantMessageId, { error: friendlyMessage });
           setIsStreaming(false);
           setAbortFn(null);
           sendingRef.current = false;
