@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.0.4] - 2026-05-01
+
+### Security
+
+- Prompt injection defense (CWE-1333): all untrusted content (document chunks, memory records, user queries, title-generation inputs, synthesis source passages) is now wrapped in named XML tags (`<document>`, `<memory>`, `<user_query>`, `<user_message>`, `<source_passages>`) before LLM injection; system prompts include an explicit SECURITY BOUNDARY directive
+- Role allowlist: `ChatMessage` and `AddMessageRequest` Pydantic models now use `Literal["user", "assistant"]` for the `role` field; any other value (e.g. `"system"`, `"admin"`) is rejected at deserialization with `ValidationError`
+- Magic byte validation on file upload: binary formats (`.pdf`, `.docx`, `.xlsx`, `.xls`) are validated against their magic byte signatures before being written to disk; mismatched or empty files return HTTP 400
+
+### Added
+
+- 15 automated tests in `backend/tests/test_prompt_injection.py` verifying role allowlist enforcement, XML boundary wrapping for chunks and memory, and SECURITY BOUNDARY directive presence in system prompts
+- Password visibility toggle (Eye/EyeOff) on LoginPage, RegisterPage, and SetupPage
+- Live password requirements checklist on RegisterPage (8+ chars, 1 digit, 1 uppercase) matching backend `password_strength_check()`
+- Profile and Organizations entries added to MobileBottomNav "More" drawer
+- Branded loading state on LoginPage: `text-primary` spinner with "Loading KnowledgeVault…" label
+
+### Changed
+
+- RegisterPage: authenticated users now redirect to `/` (was `/login`)
+- RegisterPage and SetupPage: API errors on submit are surfaced in the UI via `role="alert"` paragraph; 409 conflict → "Username already registered"
+- Chat export now produces `.md` files with `text/markdown` MIME type; messages formatted with `### User` / `### Assistant` headers and `---` separators
+
 ## [1.0.3] - 2026-04-30
 
 ### Added
