@@ -51,6 +51,7 @@ const createMockStore = (overrides = {}) => ({
   toggleRightPane: vi.fn(),
   setRightPaneWidth: vi.fn(),
   setActiveSessionId: mockSetActiveSessionId,
+  setActiveSessionTitle: vi.fn(),
   openSessionRail: vi.fn(),
   closeSessionRail: vi.fn(),
   openRightPane: vi.fn(),

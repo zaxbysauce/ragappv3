@@ -11,6 +11,7 @@ interface ChatShellState {
   rightPaneWidth: number;
   sessionRailWidth: number;
   activeSessionId: string | null;
+  activeSessionTitle: string | null;
   sessionSearchQuery: string;
   pinnedSessionIds: number[];
   // Evidence pane state
@@ -21,6 +22,7 @@ interface ChatShellState {
   setRightPaneWidth: (width: number) => void;
   setSessionRailWidth: (width: number) => void;
   setActiveSessionId: (id: string | null) => void;
+  setActiveSessionTitle: (title: string | null) => void;
   openSessionRail: () => void;
   closeSessionRail: () => void;
   openRightPane: () => void;
@@ -79,6 +81,7 @@ export const useChatShellStore = create<ChatShellState>((set, get) => ({
   rightPaneWidth: DEFAULT_RIGHT_PANE_WIDTH,
   sessionRailWidth: DEFAULT_SESSION_RAIL_WIDTH,
   activeSessionId: null,
+  activeSessionTitle: null,
   sessionSearchQuery: "",
   pinnedSessionIds: loadPinnedSessions(),
   // Evidence pane state
@@ -89,6 +92,7 @@ export const useChatShellStore = create<ChatShellState>((set, get) => ({
   setRightPaneWidth: (width) => set({ rightPaneWidth: Math.max(MIN_RIGHT_PANE_WIDTH, Math.min(MAX_RIGHT_PANE_WIDTH, width)) }),
   setSessionRailWidth: (width) => set({ sessionRailWidth: Math.max(MIN_SESSION_RAIL_WIDTH, Math.min(MAX_SESSION_RAIL_WIDTH, width)) }),
   setActiveSessionId: (id) => set({ activeSessionId: id }),
+  setActiveSessionTitle: (title) => set({ activeSessionTitle: title }),
   openSessionRail: () => set({ sessionRailOpen: true }),
   closeSessionRail: () => set({ sessionRailOpen: false }),
   openRightPane: () => set({ rightPaneOpen: true }),

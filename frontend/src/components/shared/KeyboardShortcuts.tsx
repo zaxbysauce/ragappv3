@@ -12,6 +12,8 @@ const shortcuts = [
   { key: "Enter", description: "Send message" },
   { key: "Shift + Enter", description: "New line in message" },
   { key: "Ctrl/Cmd + Enter", description: "Send message (alternative)" },
+  { key: "Ctrl/Cmd + K", description: "Focus session search" },
+  { key: "↑ / ↓", description: "Navigate sessions (when search focused)" },
   { key: "?", description: "Show keyboard shortcuts" },
   { key: "Esc", description: "Close dialogs / Stop streaming" },
 ];

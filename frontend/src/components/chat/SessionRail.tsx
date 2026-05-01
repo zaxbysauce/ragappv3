@@ -717,6 +717,7 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
     togglePinSession,
     isSessionPinned,
     setActiveSessionId,
+    setActiveSessionTitle,
   } = useChatShellStore();
 
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -783,7 +784,7 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
       const newDetails = new Map(sessionDetails);
 
       await Promise.all(
-        sessionsNeedingDetails.slice(0, 10).map(async (session) => {
+        sessionsNeedingDetails.slice(0, 50).map(async (session) => {
           try {
             const detail = await getChatSession(session.id);
             newDetails.set(session.id, detail);
@@ -846,16 +847,20 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
   const handleNewChat = useCallback(() => {
     useChatStore.getState().newChat();
     setActiveSessionId(null);
+    setActiveSessionTitle(null);
+    setSessionSearchQuery("");
     navigate("/chat");
-  }, [navigate, setActiveSessionId]);
+  }, [navigate, setActiveSessionId, setActiveSessionTitle, setSessionSearchQuery]);
 
   // Handle session click
   const handleSessionClick = useCallback(
     (session: ChatSession) => {
       setActiveSessionId(String(session.id));
+      setActiveSessionTitle(session.title || null);
+      setSessionSearchQuery("");
       navigate(`/chat/${session.id}`);
     },
-    [navigate, setActiveSessionId]
+    [navigate, setActiveSessionId, setActiveSessionTitle, setSessionSearchQuery]
   );
 
   // Handle rename with API call (optimistic update with revert on failure)
