@@ -24,6 +24,7 @@ import {
 import { formatRelativeTime } from "@/lib/formatters";
 import { useChatShellStore } from "@/stores/useChatShellStore";
 import { useChatStore } from "@/stores/useChatStore";
+import { useVaultStore } from "@/stores/useVaultStore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -719,6 +720,8 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
     setActiveSessionId,
     setActiveSessionTitle,
   } = useChatShellStore();
+  const { getActiveVault: _getActiveVault } = useVaultStore();
+  const activeVault = _getActiveVault();
 
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [sessionDetails, setSessionDetails] = useState<Map<number, ChatSessionDetail>>(new Map());
@@ -965,16 +968,23 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
           <AlertCircle className="w-10 h-10 mb-3 text-destructive" aria-hidden="true" />
           <p className="text-sm text-muted-foreground">Failed to load sessions</p>
           <p className="text-xs text-muted-foreground/70 mt-1">{error}</p>
-          <button onClick={handleRetry} className="text-sm text-primary underline mt-2">
+          <p className="text-xs text-muted-foreground/60 mt-2 max-w-[200px]">
+            Check your network connection, then retry. If this persists, the
+            chat service may be temporarily unavailable.
+          </p>
+          <Button variant="outline" size="sm" onClick={handleRetry} className="mt-3">
             Retry
-          </button>
+          </Button>
         </div>
       </div>
     );
   }
 
-  // Empty state (no sessions at all)
+  // Empty state (no sessions at all). Branch on whether the active vault has
+  // any indexed documents — if not, the more useful next step is uploading
+  // documents, not opening another empty chat.
   if (sessions.length === 0) {
+    const hasIndexedDocs = activeVault ? activeVault.file_count > 0 : false;
     return (
       <div className={`flex h-full flex-col ${className || ""}`}>
         <div className="flex items-center justify-between mb-4">
@@ -986,16 +996,40 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
             New Chat
           </Button>
         </div>
-        <div className="flex flex-col items-center justify-center py-12 text-center flex-1">
+        <div className="flex flex-col items-center justify-center py-12 text-center flex-1 px-3">
           <MessageSquare className="w-12 h-12 text-muted-foreground mb-4" aria-hidden="true" />
           <p className="text-sm text-muted-foreground">No sessions yet</p>
-          <p className="text-xs text-muted-foreground/70 mt-1">
-            Start a new chat to begin a conversation
-          </p>
-          <Button variant="outline" className="mt-4" onClick={handleNewChat}>
-            <Plus className="mr-1.5 h-4 w-4" aria-hidden="true" />
-            New Chat
-          </Button>
+          {hasIndexedDocs ? (
+            <>
+              <p className="text-xs text-muted-foreground/70 mt-1">
+                Start a new chat to begin a conversation
+              </p>
+              <Button variant="outline" className="mt-4" onClick={handleNewChat}>
+                <Plus className="mr-1.5 h-4 w-4" aria-hidden="true" />
+                New Chat
+              </Button>
+            </>
+          ) : (
+            <>
+              <p className="text-xs text-muted-foreground/70 mt-1 max-w-[220px]">
+                Upload documents first so the assistant has something to ground
+                its answers in.
+              </p>
+              <Button
+                variant="outline"
+                className="mt-4"
+                onClick={() => navigate("/documents")}
+              >
+                Go to Documents
+              </Button>
+              <button
+                onClick={handleNewChat}
+                className="mt-3 text-xs text-muted-foreground/70 underline hover:text-muted-foreground"
+              >
+                Start a new chat anyway
+              </button>
+            </>
+          )}
         </div>
       </div>
     );

@@ -84,8 +84,11 @@ export default function SetupPage() {
       <div className="flex min-h-screen items-center justify-center bg-background p-4">
         <Card className="w-full max-w-md">
           <CardContent className="flex flex-col items-center justify-center py-12">
-            <Loader2 className="h-8 w-8 animate-spin text-primary" />
-            <p className="mt-4 text-muted-foreground">Checking setup status...</p>
+            <Loader2 className="h-8 w-8 animate-spin text-primary" aria-hidden="true" />
+            <p className="mt-4 font-medium text-foreground">Verifying your instance</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Checking whether the database has been initialized.
+            </p>
           </CardContent>
         </Card>
       </div>
