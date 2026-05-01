@@ -110,9 +110,9 @@ export function ModelConnectionSettings({
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 p-3 flex items-start gap-2">
-            <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" aria-hidden="true" />
-            <p className="text-sm text-amber-800 dark:text-amber-200">
+          <div className="rounded-lg border border-warning/30 bg-warning/10 p-3 flex items-start gap-2">
+            <AlertCircle className="w-4 h-4 text-warning mt-0.5 shrink-0" aria-hidden="true" />
+            <p className="text-sm text-foreground/90">
               Changing model names takes effect immediately. Ensure the specified models are
               available at the configured endpoints.
             </p>

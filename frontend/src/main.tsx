@@ -5,14 +5,31 @@ import { Toaster } from 'sonner'
 import App from './App.tsx'
 import './index.css'
 // Initialize theme from persisted preference before first paint
-import '@/stores/useThemeStore'
+import { useThemeStore } from '@/stores/useThemeStore'
 
 const queryClient = new QueryClient()
+
+// ThemedToaster keeps sonner's color scheme aligned with our user-overridable
+// theme toggle. We pass "system" through directly so OS-level preference
+// changes propagate without an extra effect; explicit "light" / "dark" wins
+// over the OS setting.
+function ThemedToaster() {
+  const theme = useThemeStore((s) => s.theme)
+  return (
+    <Toaster
+      position="bottom-right"
+      theme={theme}
+      toastOptions={{ className: 'max-w-[90vw] sm:max-w-sm' }}
+      richColors
+      closeButton
+    />
+  )
+}
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <Toaster position="bottom-right" toastOptions={{ className: 'max-w-[90vw] sm:max-w-sm' }} richColors />
+      <ThemedToaster />
       <App />
     </QueryClientProvider>
   </React.StrictMode>,

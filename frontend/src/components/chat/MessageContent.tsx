@@ -33,7 +33,7 @@ interface MemoizedMarkdownProps {
 const MemoizedMarkdown = React.memo<MemoizedMarkdownProps>(
   function MemoizedMarkdown({ content, isStreaming }) {
     return (
-      <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:font-semibold prose-headings:mt-4 prose-headings:mb-1 prose-strong:font-medium prose-p:leading-relaxed prose-p:mb-3 prose-p:mt-0 prose-li:my-0.5 prose-ul:my-2 prose-ol:my-2">
+      <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:font-semibold prose-headings:mt-4 prose-headings:mb-1 prose-strong:font-medium prose-p:leading-relaxed prose-p:mb-3 prose-p:mt-0 prose-li:my-0.5 prose-ul:my-2 prose-ol:my-2 prose-code:bg-primary/10 prose-code:text-primary prose-code:rounded prose-code:px-1 prose-code:py-0.5 dark:prose-code:bg-primary/20">
         <ReactMarkdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS}>{content}</ReactMarkdown>
         {isStreaming && (
           <span className="inline-block w-2 h-4 ml-1 bg-foreground animate-pulse" role="status" aria-live="polite" aria-label="Message streaming" />
