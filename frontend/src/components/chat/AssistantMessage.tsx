@@ -176,27 +176,33 @@ function CitationChip({ source, index, onClick, variant = "strip" }: CitationChi
 
   if (variant === "inline") {
     return (
-      <button
-        type="button"
-        onClick={onClick}
-        className={cn(
-          "inline-flex items-center justify-center align-middle mx-0.5",
-          // Baseline compact look for sighted users...
-          "min-w-[22px] h-[22px] px-1.5 rounded",
-          "text-[11px] font-medium leading-none",
-          "bg-primary/10 text-primary hover:bg-primary/20 active:scale-95",
-          "border border-primary/15 hover:border-primary/30 transition-colors duration-150",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
-          // ...with a 24x24 touch target on coarse pointers (mobile/tablet)
-          // to clear WCAG-AA's minimum target size without enlarging the
-          // visible pill in prose.
-          "[@media(pointer:coarse)]:min-w-[28px] [@media(pointer:coarse)]:h-[28px]"
-        )}
-        aria-label={label}
-        title={source.filename}
-      >
-        {index + 1}
-      </button>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={onClick}
+              className={cn(
+                "inline-flex items-center justify-center align-middle mx-1 cursor-pointer",
+                // Baseline compact look for sighted users...
+                "min-w-[22px] h-[22px] px-1.5 rounded",
+                "text-[11px] font-medium leading-none",
+                "bg-primary/10 text-primary hover:bg-primary/20 active:scale-95",
+                "border border-primary/15 hover:border-primary/30 transition-colors duration-150",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
+                // ...with a 24x24 touch target on coarse pointers (mobile/tablet)
+                "[@media(pointer:coarse)]:min-w-[28px] [@media(pointer:coarse)]:h-[28px]"
+              )}
+              aria-label={label}
+            >
+              {index + 1}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="top">
+            <p className="max-w-[200px] truncate">{source.filename}</p>
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
     );
   }
 
@@ -722,14 +728,14 @@ export function AssistantMessage({
       </div>
 
       {/* Content */}
-      <div className="flex-1 min-w-0">
+      <div className="flex-1 min-w-0 max-w-[72ch]">
         {/* Header */}
         <div className="flex items-center gap-2 mb-1">
           <span className="font-semibold text-sm">Assistant</span>
         </div>
 
         {/* Message Body */}
-        <div className="prose prose-sm dark:prose-invert max-w-none">
+        <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:font-semibold prose-headings:mt-4 prose-headings:mb-1 prose-strong:font-medium prose-p:leading-relaxed prose-p:mb-3 prose-p:mt-0 prose-li:my-0.5 prose-ul:my-2 prose-ol:my-2 prose-code:bg-primary/10 prose-code:text-primary prose-code:rounded prose-code:px-1 prose-code:py-0.5">
           {renderedContent}
           {isStreaming && (
             <span className="inline-block w-2 h-4 ml-1 bg-foreground animate-pulse" />

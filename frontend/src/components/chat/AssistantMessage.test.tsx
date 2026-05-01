@@ -238,21 +238,22 @@ describe("AssistantMessage", () => {
     expect(screen.getByText(/italic/)).toBeInTheDocument();
   });
 
-  it("should render message container without bounce dots when isStreaming is true and content is empty", () => {
+  it("should not render bounce dots inline when isStreaming is true and content is empty (WaitingIndicator is at TranscriptPane level)", () => {
     const message = createMessage({ content: "" });
     render(<AssistantMessage message={message} isStreaming={true} />);
 
-    // The component renders the message wrapper but no inline bounce dots (those
-    // are now handled at TranscriptPane level). The ActionBar must be absent.
+    // The component renders the message wrapper but inline bounce dots were removed
+    // (WaitingIndicator is at TranscriptPane level). ActionBar must be absent while streaming.
     expect(screen.getByLabelText("Assistant message")).toBeInTheDocument();
     expect(screen.queryByLabelText("Copy message")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Retry")).not.toBeInTheDocument();
   });
 
-  it("should not show streaming indicator when isStreaming is false", () => {
+  it("should not show Thinking text when isStreaming is false", () => {
     const message = createMessage({ content: "" });
     render(<AssistantMessage message={message} isStreaming={false} />);
 
+    // No inline streaming indicator expected in either state
     expect(screen.queryByText("Thinking")).not.toBeInTheDocument();
   });
 
