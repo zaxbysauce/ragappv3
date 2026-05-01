@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { Database, ChevronDown, Globe } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -19,6 +20,7 @@ interface VaultSelectorProps {
 export function VaultSelector({ className }: VaultSelectorProps) {
   const { vaults, activeVaultId, setActiveVault, fetchVaults, getActiveVault } = useVaultStore();
   const activeVault = getActiveVault();
+  const totalFiles = (vaults ?? []).reduce((sum, v) => sum + (v.file_count ?? 0), 0);
 
   useEffect(() => {
     if (!vaults || vaults.length === 0) {
@@ -30,10 +32,24 @@ export function VaultSelector({ className }: VaultSelectorProps) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="sm" className={cn("gap-2", className)}>
-          <Database className="h-4 w-4" />
+        <Button
+          variant="outline"
+          size="sm"
+          className={cn("gap-2", className)}
+          aria-label={
+            activeVault
+              ? `Active vault: ${activeVault.name} (${activeVault.file_count} files)`
+              : `All vaults (${totalFiles} files total)`
+          }
+        >
+          <Database className="h-4 w-4" aria-hidden="true" />
           <span className="truncate max-w-[150px]">{activeVault?.name ?? "All Vaults"}</span>
-          <ChevronDown className="h-3 w-3 opacity-50" />
+          {/* Inline file-count badge so users can gauge corpus size at a glance
+              without opening the dropdown. */}
+          <Badge variant="secondary" className="px-1.5 py-0 text-[10px] font-normal">
+            {activeVault ? activeVault.file_count : totalFiles}
+          </Badge>
+          <ChevronDown className="h-3 w-3 opacity-50" aria-hidden="true" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-56">
@@ -43,8 +59,11 @@ export function VaultSelector({ className }: VaultSelectorProps) {
           onClick={() => setActiveVault(null)}
           className={cn(activeVaultId === null && "font-semibold bg-accent")}
         >
-          <Globe className="mr-2 h-4 w-4" />
-          All Vaults
+          <Globe className="mr-2 h-4 w-4" aria-hidden="true" />
+          <div className="flex flex-1 items-center justify-between">
+            <span>All Vaults</span>
+            <span className="text-xs text-muted-foreground">{totalFiles} files</span>
+          </div>
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         {vaults?.map((vault) => (
@@ -53,10 +72,12 @@ export function VaultSelector({ className }: VaultSelectorProps) {
             onClick={() => setActiveVault(vault.id)}
             className={cn(vault.id === activeVaultId && "font-semibold bg-accent")}
           >
-            <Database className="mr-2 h-4 w-4" />
-            <div className="flex flex-col">
-              <span>{vault.name}</span>
-              <span className="text-xs text-muted-foreground">{vault.file_count} files</span>
+            <Database className="mr-2 h-4 w-4" aria-hidden="true" />
+            <div className="flex flex-1 items-center justify-between min-w-0">
+              <span className="truncate">{vault.name}</span>
+              <span className="text-xs text-muted-foreground ml-2 flex-shrink-0">
+                {vault.file_count} {vault.file_count === 1 ? "file" : "files"}
+              </span>
             </div>
           </DropdownMenuItem>
         ))}

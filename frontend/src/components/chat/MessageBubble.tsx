@@ -1,4 +1,4 @@
-import { motion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 import { Bot, AlertCircle, GitBranch, Pencil } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MessageContent } from "./MessageContent";
@@ -17,12 +17,13 @@ interface MessageBubbleProps {
 
 export function MessageBubble({ message, isStreaming, onFork, userInitial, onEdit }: MessageBubbleProps) {
   const isUser = message.role === "user";
+  const prefersReducedMotion = useReducedMotion();
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3 }}
+      initial={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, y: 10 }}
+      animate={prefersReducedMotion ? { opacity: 1 } : { opacity: 1, y: 0 }}
+      transition={{ duration: prefersReducedMotion ? 0.1 : 0.3 }}
       className={cn(
         "group flex gap-3 p-4",
         isUser

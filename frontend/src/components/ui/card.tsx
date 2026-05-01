@@ -10,7 +10,10 @@ const cardVariants = cva(
       variant: {
         default: "bg-card shadow-sm",
         elevated: "bg-card shadow-md hover:shadow-lg transition-shadow",
-        glass: "bg-white/5 backdrop-blur-xl border-white/10 shadow-lg",
+        // Theme-aware glass: derives from the foreground token instead of
+        // hard-coded white so dark-mode stays subtle and light-mode keeps
+        // the same frosted look without leaking white-on-white.
+        glass: "bg-foreground/5 backdrop-blur-xl border-foreground/10 shadow-lg",
         inset: "bg-muted/50 border-border/50 shadow-inner",
       },
     },

@@ -18,6 +18,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { FileText, Upload, Search, Trash2, ScanLine, AlertCircle, Loader2, X, RotateCcw, Trash, Info } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { FileIcon } from "@/lib/fileIcon";
 import { listDocuments, scanDocuments, deleteDocument, deleteDocuments, deleteAllDocumentsInVault, getDocumentStats, type Document, type DocumentStatsResponse } from "@/lib/api";
 import { formatFileSize, formatDate } from "@/lib/formatters";
@@ -50,7 +51,28 @@ export default function DocumentsPage() {
     onConfirm: () => void;
     variant?: "destructive" | "default";
   }>({ open: false, title: "", description: "", onConfirm: () => {} });
-  const [filenameColWidth, setFilenameColWidth] = useState<number>(250);
+  // Persist the resizable filename column width across reloads.
+  const FILENAME_COL_WIDTH_KEY = "ragapp_doc_table_filename_col";
+  const FILENAME_COL_WIDTH_DEFAULT = 250;
+  const [filenameColWidth, setFilenameColWidth] = useState<number>(() => {
+    if (typeof window === "undefined") return FILENAME_COL_WIDTH_DEFAULT;
+    try {
+      const stored = window.localStorage.getItem(FILENAME_COL_WIDTH_KEY);
+      const parsed = stored ? parseInt(stored, 10) : NaN;
+      if (Number.isFinite(parsed) && parsed >= 120 && parsed <= 600) return parsed;
+    } catch {
+      // ignore
+    }
+    return FILENAME_COL_WIDTH_DEFAULT;
+  });
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(FILENAME_COL_WIDTH_KEY, String(filenameColWidth));
+    } catch {
+      // ignore (quota / private mode)
+    }
+  }, [filenameColWidth]);
   const dragState = useRef<{ startX: number; startWidth: number }>({ startX: 0, startWidth: 0 });
   const pollIntervalMsRef = useRef(2_000);
   const tableScrollRef = useRef<HTMLDivElement>(null);
@@ -558,14 +580,33 @@ export default function DocumentsPage() {
       )}
 
       {rejectedFiles.length > 0 && (
-        <div className="p-4 bg-amber-500/10 text-amber-700 dark:text-amber-300 rounded-lg">
-          <div className="flex items-center gap-2 mb-2">
-            <AlertCircle className="w-5 h-5" />
-            <span className="font-medium">Some files were rejected:</span>
+        <div
+          className="rounded-lg border border-warning/30 bg-warning/10 p-4 text-warning-foreground"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="h-5 w-5 text-warning" aria-hidden="true" />
+              <span className="font-medium text-foreground">
+                {rejectedFiles.length === 1
+                  ? "1 file was rejected"
+                  : `${rejectedFiles.length} files were rejected`}
+              </span>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setRejectedFiles([])}
+              aria-label="Dismiss rejected files list"
+              className="h-7 text-xs"
+            >
+              Dismiss
+            </Button>
           </div>
-          <ul className="list-disc pl-5 space-y-1">
+          <ul className="list-disc space-y-1 pl-5 text-sm text-foreground/80">
             {rejectedFiles.map((file, index) => (
-              <li key={index} className="text-sm">{file}</li>
+              <li key={index}>{file}</li>
             ))}
           </ul>
         </div>
@@ -772,7 +813,33 @@ export default function DocumentsPage() {
                             </div>
                           </td>
                           <td className="p-4 flex-none w-[120px]"><StatusBadge status={doc.metadata?.status as string} /></td>
-                          <td className="p-4 flex-none w-20">{String(doc.metadata?.chunk_count ?? 0)}</td>
+                          <td className="p-4 flex-none w-20">
+                            {(() => {
+                              const count = Number(doc.metadata?.chunk_count ?? 0);
+                              const status = doc.metadata?.status;
+                              const isIndexed = status === "indexed";
+                              const isFailed = status === "error" || status === "failed";
+                              return (
+                                <span
+                                  title={
+                                    isFailed
+                                      ? `${count} chunks · indexing failed`
+                                      : isIndexed
+                                        ? `${count} chunks indexed`
+                                        : count > 0
+                                          ? `${count} chunks · indexing in progress`
+                                          : "Awaiting chunking"
+                                  }
+                                  className={cn(
+                                    isFailed && "text-destructive",
+                                    !isIndexed && !isFailed && count > 0 && "text-muted-foreground italic"
+                                  )}
+                                >
+                                  {count}
+                                </span>
+                              );
+                            })()}
+                          </td>
                           <td className="p-4 flex-none w-[100px]">{formatFileSize(doc.size)}</td>
                           <td className="p-4 flex-none w-[140px] text-muted-foreground">{formatDate(doc.created_at)}</td>
                           <td className="p-4 flex-none w-[60px] text-right">

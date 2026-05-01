@@ -45,6 +45,7 @@ vi.mock("framer-motion", () => ({
     ),
   },
   AnimatePresence: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  useReducedMotion: () => false,
 }));
 
 // Mock @tanstack/react-virtual
@@ -209,7 +210,7 @@ describe("TranscriptPane", () => {
   describe("4. Composer renders textarea with placeholder", () => {
     it("renders textarea with correct placeholder text", () => {
       renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
-      expect(screen.getByPlaceholderText(/Message\.\.\. \(type \/ for commands/i)).toBeInTheDocument();
+      expect(screen.getByPlaceholderText(/Message\.\.\..*Enter to send.*Shift\+Enter.*newline.*\/ for commands/i)).toBeInTheDocument();
     });
 
     it("textarea has correct aria-label", () => {
@@ -541,20 +542,15 @@ describe("TranscriptPane", () => {
     });
   });
 
-  describe("14. Composer attachment button is disabled", () => {
-    it("attachment button is present and disabled", () => {
+  describe("14. Composer attachment affordance", () => {
+    it("does not render an attachment button until file upload is wired up", () => {
+      // The "Coming soon" disabled paperclip button was removed in Round 4
+      // because a permanently-disabled affordance creates friction without
+      // value. When attachment lands, this test should flip to assert the
+      // enabled control.
       renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
 
-      const attachmentButton = screen.getByLabelText(/attach file/i);
-      expect(attachmentButton).toBeInTheDocument();
-      expect(attachmentButton).toBeDisabled();
-    });
-
-    it("attachment button has correct tooltip", () => {
-      renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
-
-      const attachmentButton = screen.getByLabelText(/attach file/i);
-      expect(attachmentButton).toHaveAttribute("aria-label", "Attach file (coming soon)");
+      expect(screen.queryByLabelText(/attach file/i)).not.toBeInTheDocument();
     });
   });
 
@@ -697,11 +693,12 @@ describe("TranscriptPane", () => {
   });
 
   describe("Additional coverage", () => {
-    it("textarea is disabled when streaming", () => {
+    it("textarea is readOnly (not disabled) when streaming so users can still scroll their draft", () => {
       renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: true });
 
       const textarea = screen.getByLabelText("Message input");
-      expect(textarea).toBeDisabled();
+      expect(textarea).toHaveAttribute("readonly");
+      expect(textarea).not.toBeDisabled();
     });
 
     it("shows error message when inputError is set", () => {

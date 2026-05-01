@@ -81,8 +81,9 @@ export function MobileBottomNav({ activeItem, onItemSelect }: MobileBottomNavPro
                 "hover:bg-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 moreOpen && "bg-primary/10"
               )}
-              aria-label="More options"
+              aria-label="More navigation options"
               aria-expanded={moreOpen}
+              aria-haspopup="menu"
             >
               <MoreHorizontal
                 className={cn(

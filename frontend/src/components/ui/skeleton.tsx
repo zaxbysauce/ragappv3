@@ -6,7 +6,10 @@ function Skeleton({
 }: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div
-      className={cn("animate-pulse rounded-md bg-muted", className)}
+      // bg-muted alone reads heavy in dark mode; lower the opacity in dark
+      // and slightly soften light so skeletons read as scaffolding rather
+      // than filled content.
+      className={cn("animate-pulse rounded-md bg-muted/60 dark:bg-muted/40", className)}
       role="status"
       aria-label="Loading..."
       aria-hidden="false"

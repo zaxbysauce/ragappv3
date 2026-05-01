@@ -51,7 +51,8 @@ function highlightQueryTerms(text: string, query: string): React.ReactNode[] {
       return (
         <mark
           key={index}
-          className="bg-amber-200 dark:bg-amber-800 rounded px-0.5"
+          className="bg-amber-200/80 dark:bg-amber-500/30 rounded px-0.5"
+          aria-label={`Search match: ${part}`}
         >
           {part}
         </mark>
@@ -215,6 +216,11 @@ function SourceListItem({
               {source.filename}
             </span>
           </div>
+          {source.section && (
+            <div className="text-[11px] text-muted-foreground/80 mt-0.5 truncate">
+              <span className="font-medium">§</span> {source.section}
+            </div>
+          )}
           {source.snippet && (
             <div className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
               {source.snippet}

@@ -88,7 +88,7 @@ describe("SetupPage", () => {
       </BrowserRouter>
     );
 
-    expect(screen.getByText("Checking setup status...")).toBeInTheDocument();
+    expect(screen.getByText("Verifying your instance")).toBeInTheDocument();
   });
 
   it("validates username minimum length", async () => {

@@ -41,6 +41,12 @@ export function useSendMessage(
 
     const userContent = currentInput.trim();
 
+    // Flip isStreaming on immediately so the composer Stop affordance
+    // appears during the session-creation roundtrip (otherwise users see
+    // no feedback for several hundred ms on slow networks). If session
+    // creation fails we'll flip it back below.
+    setIsStreaming(true);
+
     // Get or create session
     const currentState = useChatStore.getState();
     let sessionId: number;
@@ -60,6 +66,7 @@ export function useSendMessage(
         } else {
           setInputError("Failed to start chat session. Please check your connection.");
         }
+        setIsStreaming(false);
         sendingRef.current = false;
         return;
       }
@@ -70,8 +77,6 @@ export function useSendMessage(
       role: "user" as const,
       content: userContent,
     };
-
-    setIsStreaming(true);
 
     const assistantMessageId = (Date.now() + 1).toString();
     const assistantMessage = {
@@ -106,7 +111,29 @@ export function useSendMessage(
         },
         onError: (error) => {
           console.error("Chat stream error:", error);
-          updateMessage(assistantMessageId, { error: error.message });
+          // Distinguish error categories for better recovery UX:
+          // - AbortError: user pressed Stop. stopStreaming() already marks the
+          //   message with stopped:true, so we skip the error block to avoid
+          //   showing both a "Stopped" pill AND a red error card.
+          // - Network/fetch errors: surface a recovery hint instead of the
+          //   raw "TypeError: Failed to fetch" message.
+          // - Everything else: show the underlying message verbatim.
+          const isAbort =
+            error.name === "AbortError" || /aborted|abort/i.test(error.message);
+          if (isAbort) {
+            setIsStreaming(false);
+            setAbortFn(null);
+            sendingRef.current = false;
+            return;
+          }
+          const isNetworkError =
+            /failed to fetch|networkerror|network request failed|load failed/i.test(
+              error.message
+            );
+          const friendlyMessage = isNetworkError
+            ? "Connection lost. Check your network and try again."
+            : error.message;
+          updateMessage(assistantMessageId, { error: friendlyMessage });
           setIsStreaming(false);
           setAbortFn(null);
           sendingRef.current = false;
