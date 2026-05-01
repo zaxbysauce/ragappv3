@@ -45,7 +45,6 @@ export default function ChatShell() {
     sessionRailWidth,
     activeSessionId,
     activeSessionTitle,
-    activeRightTab,
     toggleSessionRail,
     toggleRightPane,
     setRightPaneWidth,
@@ -180,9 +179,6 @@ export default function ChatShell() {
     window.addEventListener("blur", onMouseUp);
   };
 
-  // Determine if workspace tab should open full-screen on mobile
-  const isWorkspaceFullScreen = activeRightTab === "workspace" && rightPaneOpen;
-
   return (
     <div className="flex h-full w-full overflow-hidden">
       {/* DESKTOP: Session Rail (persistent sidebar) */}
@@ -269,7 +265,7 @@ export default function ChatShell() {
       </aside>
 
       {/* MOBILE: Right Pane Sheet (slides from bottom, 75vh) */}
-      {!isWorkspaceFullScreen && isBelowLg && (
+      {isBelowLg && (
         <Sheet open={rightPaneOpen} onOpenChange={(open) => !open && closeRightPane()}>
           <SheetContent side="bottom" className="h-[75vh] rounded-t-xl p-0 lg:hidden" aria-describedby="evidence-sources-desc">
             <SheetHeader className="sr-only">
@@ -279,28 +275,6 @@ export default function ChatShell() {
             <div className="absolute right-4 top-4 z-10">
               <SheetClose asChild>
                 <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Close details panel">
-                  <X className="h-4 w-4" aria-hidden="true" />
-                </Button>
-              </SheetClose>
-            </div>
-            <div className="flex h-full flex-col p-4 pt-12">
-              <RightPane />
-            </div>
-          </SheetContent>
-        </Sheet>
-      )}
-
-      {/* MOBILE: Workspace Full-Screen Sheet */}
-      {isWorkspaceFullScreen && isBelowLg && (
-        <Sheet open={rightPaneOpen} onOpenChange={(open) => !open && closeRightPane()}>
-          <SheetContent side="bottom" className="h-[95vh] rounded-t-xl p-0 lg:hidden" aria-describedby="workspace-desc">
-            <SheetHeader className="sr-only">
-              <SheetTitle id="workspace-title">Workspace</SheetTitle>
-              <SheetDescription id="workspace-desc">Interactive workspace for document analysis</SheetDescription>
-            </SheetHeader>
-            <div className="absolute right-4 top-4 z-10">
-              <SheetClose asChild>
-                <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Close workspace">
                   <X className="h-4 w-4" aria-hidden="true" />
                 </Button>
               </SheetClose>

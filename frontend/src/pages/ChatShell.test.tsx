@@ -30,7 +30,7 @@ let mockStoreState = {
   rightPaneWidth: 320,
   activeSessionId: null as string | null,
   activeSessionTitle: null as string | null,
-  activeRightTab: "evidence" as "evidence" | "preview" | "workspace",
+  activeRightTab: "evidence" as "evidence" | "preview",
   sessionSearchQuery: "",
   pinnedSessionIds: [] as number[],
   selectedEvidenceSource: null,
@@ -190,27 +190,6 @@ describe("ChatShell Mobile Layout", () => {
     });
   });
 
-  describe("test_right_pane_sheet_renders_95vh_for_workspace", () => {
-    it("right pane Sheet renders at 95vh on below-lg viewports when activeRightTab === workspace and rightPaneOpen", () => {
-      mockStoreState.rightPaneOpen = true;
-      mockStoreState.activeRightTab = "workspace";
-      // Simulate below-lg viewport (tablet/mobile)
-      matchMediaMatches = true;
-
-      render(
-        <BrowserRouter>
-          <ChatShell />
-        </BrowserRouter>
-      );
-
-      // Find the Sheet content with side="bottom" and 95vh height
-      const sheetContents = document.querySelectorAll('[data-testid="sheet-content"]');
-      const bottomSheets = Array.from(sheetContents).filter((el) => el.getAttribute("data-side") === "bottom");
-      const has95vh = bottomSheets.some((el) => el.className.includes("h-[95vh]"));
-      expect(has95vh).toBe(true);
-    });
-  });
-
   describe("test_right_pane_sheet_not_mounted_on_desktop", () => {
     it("right pane Sheet (side=bottom) is NOT mounted on desktop (lg+) so the Radix SheetPortal overlay does not dim the viewport", () => {
       mockStoreState.rightPaneOpen = true;
@@ -230,21 +209,6 @@ describe("ChatShell Mobile Layout", () => {
       expect(bottomSheets.length).toBe(0);
     });
 
-    it("workspace full-screen Sheet is NOT mounted on desktop (lg+)", () => {
-      mockStoreState.rightPaneOpen = true;
-      mockStoreState.activeRightTab = "workspace";
-      // Default matchMediaMatches=false simulates desktop
-
-      render(
-        <BrowserRouter>
-          <ChatShell />
-        </BrowserRouter>
-      );
-
-      const sheetContents = document.querySelectorAll('[data-testid="sheet-content"]');
-      const bottomSheets = Array.from(sheetContents).filter((el) => el.getAttribute("data-side") === "bottom");
-      expect(bottomSheets.length).toBe(0);
-    });
   });
 
   describe("test_panel_left_toggle_visible_on_all_screens", () => {
