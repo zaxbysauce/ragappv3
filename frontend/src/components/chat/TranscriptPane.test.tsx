@@ -697,11 +697,12 @@ describe("TranscriptPane", () => {
   });
 
   describe("Additional coverage", () => {
-    it("textarea is disabled when streaming", () => {
+    it("textarea is readOnly (not disabled) when streaming so users can still scroll their draft", () => {
       renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: true });
 
       const textarea = screen.getByLabelText("Message input");
-      expect(textarea).toBeDisabled();
+      expect(textarea).toHaveAttribute("readonly");
+      expect(textarea).not.toBeDisabled();
     });
 
     it("shows error message when inputError is set", () => {

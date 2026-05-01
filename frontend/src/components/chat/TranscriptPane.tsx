@@ -66,6 +66,10 @@ interface EmptyTranscriptProps {
   hasIndexedDocs: boolean;
   /** Callback to navigate to documents page */
   onNavigateToDocuments?: () => void;
+  /** Active vault name (shown for context when documents are present) */
+  vaultName?: string | null;
+  /** Number of indexed documents in the active vault */
+  documentCount?: number;
 }
 
 interface SlashCommand {
@@ -121,6 +125,8 @@ function EmptyTranscript({
   onPromptClick,
   hasIndexedDocs,
   onNavigateToDocuments,
+  vaultName,
+  documentCount,
 }: EmptyTranscriptProps) {
   return (
     <div
@@ -145,6 +151,16 @@ function EmptyTranscript({
         <h2 className="mb-2 text-xl font-semibold text-foreground">
           {hasIndexedDocs ? "What would you like to know?" : "Upload documents to get started"}
         </h2>
+
+        {/* Vault context line — grounds the user in which corpus they are querying */}
+        {hasIndexedDocs && vaultName && (
+          <p className="mb-2 text-xs text-muted-foreground">
+            {documentCount !== undefined && documentCount > 0
+              ? `Searching ${documentCount} document${documentCount === 1 ? "" : "s"} in `
+              : "Searching "}
+            <span className="font-medium text-foreground/80">{vaultName}</span>
+          </p>
+        )}
 
         <p className="mb-8 text-sm text-muted-foreground">
           {hasIndexedDocs
@@ -194,10 +210,18 @@ function EmptyTranscript({
 // COMPONENT: Composer
 // =============================================================================
 
+// localStorage key for in-progress message draft. Keyed by active session so
+// switching between sessions doesn't bleed drafts. New chats use the "new" key.
+const DRAFT_STORAGE_KEY_PREFIX = "ragapp_chat_draft_";
+
+function getDraftKey(sessionId: string | null): string {
+  return `${DRAFT_STORAGE_KEY_PREFIX}${sessionId ?? "new"}`;
+}
+
 function Composer({ onSend, onStop, isStreaming, className, inputRef }: ComposerProps) {
   const internalRef = useRef<HTMLTextAreaElement>(null);
   const textareaRef = inputRef || internalRef;
-  const { input, setInput, inputError } = useChatStore();
+  const { input, setInput, inputError, activeChatId } = useChatStore();
   const { getActiveVault } = useVaultStore();
   const activeVault = getActiveVault();
 
@@ -205,6 +229,44 @@ function Composer({ onSend, onStop, isStreaming, className, inputRef }: Composer
   const [showSlashMenu, setShowSlashMenu] = useState(false);
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
   const [slashQuery, setSlashQuery] = useState("");
+
+  // Draft persistence — restore unsent draft on session change. Saves happen
+  // inside handleInputChange / insertCommand / handleSubmit (below) so the
+  // localStorage write only fires on real user actions, not on every render.
+  // This avoids a race where a save effect triggered by the same activeChatId
+  // change as a load effect would clobber the new session's draft with the
+  // previous session's stale input.
+  const lastLoadedSessionRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const sessionKey = activeChatId ?? "new";
+    if (lastLoadedSessionRef.current === sessionKey) return;
+    lastLoadedSessionRef.current = sessionKey;
+    try {
+      const draft = localStorage.getItem(getDraftKey(activeChatId)) ?? "";
+      setInput(draft);
+    } catch {
+      // localStorage may throw in private mode / quota issues — silently ignore
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeChatId]);
+
+  const persistDraft = useCallback(
+    (value: string) => {
+      if (typeof window === "undefined") return;
+      try {
+        const key = getDraftKey(activeChatId);
+        if (value) {
+          localStorage.setItem(key, value);
+        } else {
+          localStorage.removeItem(key);
+        }
+      } catch {
+        // ignore
+      }
+    },
+    [activeChatId]
+  );
 
   // Filter commands based on query
   const filteredCommands = SLASH_COMMANDS.filter((cmd) =>
@@ -230,6 +292,7 @@ function Composer({ onSend, onStop, isStreaming, className, inputRef }: Composer
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
     setInput(value);
+    persistDraft(value);
 
     // Check for slash command trigger
     const lines = value.split("\n");
@@ -283,7 +346,9 @@ function Composer({ onSend, onStop, isStreaming, className, inputRef }: Composer
   const insertCommand = (command: SlashCommand) => {
     const lines = input.split("\n");
     lines[lines.length - 1] = command.label + " ";
-    setInput(lines.join("\n"));
+    const next = lines.join("\n");
+    setInput(next);
+    persistDraft(next);
     setShowSlashMenu(false);
     textareaRef.current?.focus();
   };
@@ -292,6 +357,9 @@ function Composer({ onSend, onStop, isStreaming, className, inputRef }: Composer
   const handleSubmit = () => {
     if (!input.trim() || isStreaming) return;
     if (input.length > MAX_INPUT_LENGTH) return;
+    // Clear persisted draft now that the user has committed the message.
+    // useSendMessage will clear the in-memory input via setInput("").
+    persistDraft("");
     onSend();
   };
 
@@ -321,7 +389,9 @@ function Composer({ onSend, onStop, isStreaming, className, inputRef }: Composer
           onKeyDown={handleKeyDown}
           placeholder="Message... (type / for commands, Enter to send, Shift+Enter for new line)"
           className="min-h-[44px] max-h-[200px] resize-none border-0 bg-transparent px-4 py-3 text-sm placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
-          disabled={isStreaming}
+          // readOnly (not disabled) during streaming so users can still scroll
+          // through their draft and the textarea remains in tab order.
+          readOnly={isStreaming}
           aria-label="Message input"
           aria-describedby={inputError ? "input-error" : undefined}
           aria-expanded={showSlashMenu}
@@ -690,6 +760,8 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
                   onPromptClick={handlePromptClick}
                   hasIndexedDocs={hasIndexedDocs}
                   onNavigateToDocuments={handleNavigateToDocuments}
+                  vaultName={activeVault?.name ?? null}
+                  documentCount={activeVault?.file_count}
                 />
               ) : (
                 <>
