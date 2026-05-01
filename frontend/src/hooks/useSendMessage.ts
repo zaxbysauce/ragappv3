@@ -41,6 +41,12 @@ export function useSendMessage(
 
     const userContent = currentInput.trim();
 
+    // Flip isStreaming on immediately so the composer Stop affordance
+    // appears during the session-creation roundtrip (otherwise users see
+    // no feedback for several hundred ms on slow networks). If session
+    // creation fails we'll flip it back below.
+    setIsStreaming(true);
+
     // Get or create session
     const currentState = useChatStore.getState();
     let sessionId: number;
@@ -60,6 +66,7 @@ export function useSendMessage(
         } else {
           setInputError("Failed to start chat session. Please check your connection.");
         }
+        setIsStreaming(false);
         sendingRef.current = false;
         return;
       }
@@ -70,8 +77,6 @@ export function useSendMessage(
       role: "user" as const,
       content: userContent,
     };
-
-    setIsStreaming(true);
 
     const assistantMessageId = (Date.now() + 1).toString();
     const assistantMessage = {
