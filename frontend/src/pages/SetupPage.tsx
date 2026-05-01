@@ -4,7 +4,7 @@ import { useAuthStore } from "@/stores/useAuthStore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Database, Shield, User, Loader2 } from "lucide-react";
+import { Database, Shield, User, Loader2, Eye, EyeOff } from "lucide-react";
 
 export default function SetupPage() {
   const [formData, setFormData] = useState({
@@ -14,6 +14,9 @@ export default function SetupPage() {
     confirmPassword: "",
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [error, setError] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const { register, needsSetup, isLoading } = useAuthStore();
   const navigate = useNavigate();
 
@@ -73,8 +76,9 @@ export default function SetupPage() {
       );
       // Navigate to home page on success (user is already authenticated)
       navigate("/");
-    } catch {
-      // Error is handled by the store, we just prevent navigation
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "";
+      setError(msg || "Setup failed. Please try again.");
     }
   };
 
@@ -157,7 +161,7 @@ export default function SetupPage() {
                 <Shield className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   id="setup-password"
-                  type="password"
+                  type={showPassword ? "text" : "password"}
                   placeholder="Password (min 8 characters)"
                   value={formData.password}
                   onChange={handleChange("password")}
@@ -165,8 +169,16 @@ export default function SetupPage() {
                   aria-required="true"
                   aria-describedby={errors.password ? "setup-password-error" : undefined}
                   aria-invalid={!!errors.password}
-                  className="pl-10"
+                  className="pl-10 pr-10"
                 />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                >
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
               </div>
               {errors.password && (
                 <p id="setup-password-error" className="text-sm text-destructive">{errors.password}</p>
@@ -179,7 +191,7 @@ export default function SetupPage() {
                 <Shield className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   id="setup-confirm-password"
-                  type="password"
+                  type={showConfirmPassword ? "text" : "password"}
                   placeholder="Confirm password"
                   value={formData.confirmPassword}
                   onChange={handleChange("confirmPassword")}
@@ -187,13 +199,25 @@ export default function SetupPage() {
                   aria-required="true"
                   aria-describedby={errors.confirmPassword ? "setup-confirm-password-error" : undefined}
                   aria-invalid={!!errors.confirmPassword}
-                  className="pl-10"
+                  className="pl-10 pr-10"
                 />
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmPassword((v) => !v)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  aria-label={showConfirmPassword ? "Hide confirm password" : "Show confirm password"}
+                >
+                  {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
               </div>
               {errors.confirmPassword && (
                 <p id="setup-confirm-password-error" className="text-sm text-destructive">{errors.confirmPassword}</p>
               )}
             </div>
+
+            {error && (
+              <p role="alert" className="text-sm text-destructive text-center">{error}</p>
+            )}
 
             <Button
               type="submit"

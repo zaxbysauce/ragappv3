@@ -58,6 +58,24 @@ from app.services.secret_manager import SecretManager
 from app.services.upload_path import UploadPathProvider
 from app.services.vector_store import VectorStore
 
+# Magic byte signatures for file types where extension spoofing is high-risk.
+# Text-based formats (txt, md, csv, json, yaml, etc.) have no fixed binary header
+# and are intentionally excluded from this check.
+_MAGIC_BYTES: dict[str, bytes] = {
+    ".pdf": b"%PDF",
+    ".docx": b"PK\x03\x04",
+    ".xlsx": b"PK\x03\x04",
+    ".xls": b"\xd0\xcf\x11\xe0",  # OLE Compound File
+}
+
+
+def _check_magic_bytes(extension: str, header: bytes) -> bool:
+    """Return True if header matches expected magic bytes for the extension."""
+    magic = _MAGIC_BYTES.get(extension)
+    if magic is None:
+        return True
+    return header[: len(magic)] == magic
+
 
 def secure_filename(filename: str) -> str:
     """
@@ -600,10 +618,23 @@ async def _do_upload(
 
     temp_file_path = None
     try:
+        # Read first 8 bytes for magic byte validation before streaming the rest.
+        header_bytes = await file.read(8)
+        if not header_bytes:
+            file_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=400, detail="File is empty")
+        if not _check_magic_bytes(file_suffix, header_bytes):
+            file_path.unlink(missing_ok=True)
+            raise HTTPException(
+                status_code=400,
+                detail=f"File content does not match the declared extension '{file_suffix}'",
+            )
+
         # Save file using aiofiles with chunked reading and size validation
-        total_bytes = 0
+        total_bytes = len(header_bytes)
         temp_file_path = file_path
         async with aiofiles.open(temp_file_path, "wb") as f:
+            await f.write(header_bytes)
             while chunk := await file.read(1024 * 1024):  # Read 1MB chunks
                 total_bytes += len(chunk)
                 if total_bytes > max_size_bytes:
