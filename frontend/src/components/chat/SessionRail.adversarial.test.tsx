@@ -187,7 +187,7 @@ describe("SessionRail ADVERSARIAL TESTS", () => {
       expect(document.querySelector("script")).toBeNull();
     });
 
-    it("should escape HTML entities in delete confirmation dialog", async () => {
+    it("should escape HTML entities and optimistically remove session on delete", async () => {
       const maliciousSession = {
         id: 1,
         vault_id: 1,
@@ -209,17 +209,20 @@ describe("SessionRail ADVERSARIAL TESTS", () => {
         expect(screen.getByText(/Test Session/)).toBeInTheDocument();
       });
 
+      // Verify no script element was created (XSS check)
+      expect(document.querySelector("script")).toBeNull();
+
       const sessionItem = await screen.findByRole("button", { name: /chat session/i });
       fireEvent.mouseEnter(sessionItem);
       fireEvent.click(within(sessionItem).getByLabelText("Delete session"));
 
+      // With the toast-undo flow, clicking delete immediately removes the session (optimistic removal)
       await waitFor(() => {
-        expect(screen.getByRole("dialog")).toBeInTheDocument();
+        expect(screen.queryByText(/Test Session/)).not.toBeInTheDocument();
       });
 
-      const dialog = screen.getByRole("dialog");
-      expect(dialog.textContent).toContain("Test Session");
-      expect(dialog.innerHTML).not.toContain("<script>");
+      // No script elements should ever appear
+      expect(document.querySelector("script")).toBeNull();
     });
   });
 
@@ -631,26 +634,22 @@ describe("SessionRail ADVERSARIAL TESTS", () => {
         expect(screen.getByText("Session 1")).toBeInTheDocument();
       });
 
-      // Delete session 1
+      // Delete session 1 - with the toast-undo flow, clicking delete immediately
+      // removes the session optimistically (no confirmation dialog).
       const session1 = screen.getByText("Session 1").closest('[role="button"]');
       fireEvent.mouseEnter(session1!);
       fireEvent.click(within(session1!).getByLabelText("Delete session"));
-      fireEvent.click(screen.getByRole("button", { name: /delete$/i }));
 
-      // Click session 2 while delete is pending
+      // Session 1 should be optimistically removed from the UI immediately
+      await waitFor(() => {
+        expect(screen.queryByText("Session 1")).not.toBeInTheDocument();
+      });
+
+      // Click session 2 while delete API call is still pending
       const session2 = screen.getByText("Session 2").closest('[role="button"]');
       fireEvent.click(session2!);
 
       expect(mockSetActiveSessionId).toHaveBeenCalledWith("2");
-
-      // Resolve deletion
-      await act(async () => {
-        resolveDelete!();
-      });
-
-      await waitFor(() => {
-        expect(screen.queryByText("Session 1")).not.toBeInTheDocument();
-      });
     });
   });
 
