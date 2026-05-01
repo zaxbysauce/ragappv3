@@ -29,6 +29,7 @@ let mockStoreState = {
   rightPaneOpen: false,
   rightPaneWidth: 320,
   activeSessionId: null as string | null,
+  activeSessionTitle: null as string | null,
   activeRightTab: "evidence" as "evidence" | "preview" | "workspace",
   sessionSearchQuery: "",
   pinnedSessionIds: [] as number[],
@@ -37,6 +38,7 @@ let mockStoreState = {
   toggleRightPane: vi.fn(),
   setRightPaneWidth: vi.fn(),
   setActiveSessionId: vi.fn(),
+  setActiveSessionTitle: vi.fn(),
   openSessionRail: vi.fn(),
   closeSessionRail: vi.fn(),
   openRightPane: vi.fn(),
@@ -90,6 +92,7 @@ describe("ChatShell Mobile Layout", () => {
       rightPaneOpen: false,
       rightPaneWidth: 320,
       activeSessionId: null,
+      activeSessionTitle: null,
       activeRightTab: "evidence",
       sessionSearchQuery: "",
       pinnedSessionIds: [],
@@ -98,6 +101,7 @@ describe("ChatShell Mobile Layout", () => {
       toggleRightPane: vi.fn(),
       setRightPaneWidth: vi.fn(),
       setActiveSessionId: vi.fn(),
+      setActiveSessionTitle: vi.fn(),
       openSessionRail: vi.fn(),
       closeSessionRail: vi.fn(),
       openRightPane: vi.fn(),
@@ -243,7 +247,7 @@ describe("ChatShell Mobile Layout", () => {
     });
   });
 
-  describe("test_panel_left_toggle_has_md_hidden", () => {
+  describe("test_panel_left_toggle_visible_on_all_screens", () => {
     it("PanelLeft toggle button is visible on all screen sizes (no md:hidden)", () => {
       render(
         <BrowserRouter>
@@ -251,7 +255,7 @@ describe("ChatShell Mobile Layout", () => {
         </BrowserRouter>
       );
 
-      // md:hidden was intentionally removed so the toggle is visible on desktop too
+      // md:hidden was removed so the toggle is visible on desktop too
       const sessionToggle = screen.getByLabelText(/Show sessions|Hide sessions/);
       expect(sessionToggle).toBeDefined();
       expect(sessionToggle.className).not.toContain("md:hidden");

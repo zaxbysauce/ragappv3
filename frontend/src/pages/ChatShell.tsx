@@ -44,6 +44,7 @@ export default function ChatShell() {
     rightPaneWidth,
     sessionRailWidth,
     activeSessionId,
+    activeSessionTitle,
     activeRightTab,
     toggleSessionRail,
     toggleRightPane,
@@ -218,14 +219,20 @@ export default function ChatShell() {
 
       {/* MAIN TRANSCRIPT AREA */}
       <main className="flex flex-1 flex-col min-w-0 bg-background">
-        <header className="flex h-14 items-center justify-between border-b border-border px-4">
-          {/* Session rail toggle — mobile only */}
+        <header className="flex h-14 items-center gap-2 border-b border-border px-4">
+          {/* Session rail toggle — visible on all screen sizes */}
           <Button variant="ghost" size="icon" onClick={handleToggleSessionRail}
-            aria-label={mobileSheetOpen ? "Hide sessions" : "Show sessions"}
-            aria-pressed={mobileSheetOpen}>
+            aria-label={isMobile ? (mobileSheetOpen ? "Hide sessions" : "Show sessions") : (sessionRailOpen ? "Hide sessions" : "Show sessions")}
+            aria-pressed={isMobile ? mobileSheetOpen : sessionRailOpen}>
             <PanelLeft className="h-5 w-5" aria-hidden="true" />
           </Button>
-          <div className="flex-1" />
+          {/* Active session title */}
+          {activeSessionTitle && (
+            <span className="flex-1 truncate text-sm font-medium text-foreground/80" title={activeSessionTitle}>
+              {activeSessionTitle}
+            </span>
+          )}
+          {!activeSessionTitle && <div className="flex-1" />}
           <Button variant="ghost" size="icon" onClick={handleExportChat}
             disabled={messages.length === 0}
             aria-label="Export chat">
