@@ -1,6 +1,6 @@
 import { ReactNode } from "react";
 import { useLocation } from "react-router-dom";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { Navigation } from "./Navigation";
 import { UploadIndicator } from "@/components/shared/UploadIndicator";
 import type { HealthStatus } from "@/types/health";
@@ -13,17 +13,26 @@ interface PageShellProps {
   healthStatus: HealthStatus;
 }
 
-const pageVariants = {
-  initial: { opacity: 0, y: 8 },
-  animate: { opacity: 1, y: 0 },
-  exit: { opacity: 0, y: -8 },
-};
-
 export function PageShell({ children, activeItem, onItemSelect, healthStatus }: PageShellProps) {
   const location = useLocation();
+  const prefersReducedMotion = useReducedMotion();
 
   // Chat pages get edge-to-edge layout (no padding)
   const isChat = location.pathname.startsWith("/chat");
+
+  // Suppress translate when user prefers reduced motion; keep a brief opacity
+  // cross-fade so the page transition still has perceptible feedback.
+  const pageVariants = prefersReducedMotion
+    ? {
+        initial: { opacity: 0 },
+        animate: { opacity: 1 },
+        exit: { opacity: 0 },
+      }
+    : {
+        initial: { opacity: 0, y: 8 },
+        animate: { opacity: 1, y: 0 },
+        exit: { opacity: 0, y: -8 },
+      };
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -48,7 +57,7 @@ export function PageShell({ children, activeItem, onItemSelect, healthStatus }: 
               initial="initial"
               animate="animate"
               exit="exit"
-              transition={{ duration: 0.15, ease: "easeOut" }}
+              transition={{ duration: prefersReducedMotion ? 0.1 : 0.15, ease: "easeOut" }}
               className="h-full"
             >
               {children}

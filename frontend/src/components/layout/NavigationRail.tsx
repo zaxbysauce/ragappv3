@@ -33,7 +33,7 @@ function StatusIndicator({ isUp, label, loading }: { isUp: boolean; label: strin
       <div
         className={cn(
           "w-2 h-2 rounded-full",
-          loading ? "bg-yellow-500 animate-pulse" : isUp ? "bg-success" : "bg-destructive"
+          loading ? "bg-warning animate-pulse" : isUp ? "bg-success" : "bg-destructive"
         )}
       />
       <span className="text-xs text-muted-foreground truncate">
