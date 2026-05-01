@@ -91,6 +91,7 @@ class TestRoleAllowlist(unittest.TestCase):
 
     def test_chat_message_rejects_system_role(self):
         from pydantic import ValidationError
+
         from app.api.routes.chat import ChatMessage
 
         with self.assertRaises(ValidationError):
@@ -98,6 +99,7 @@ class TestRoleAllowlist(unittest.TestCase):
 
     def test_chat_message_rejects_arbitrary_role(self):
         from pydantic import ValidationError
+
         from app.api.routes.chat import ChatMessage
 
         with self.assertRaises(ValidationError):
@@ -117,6 +119,7 @@ class TestRoleAllowlist(unittest.TestCase):
 
     def test_add_message_request_rejects_system_role(self):
         from pydantic import ValidationError
+
         from app.api.routes.chat import AddMessageRequest
 
         with self.assertRaises(ValidationError):
@@ -124,6 +127,7 @@ class TestRoleAllowlist(unittest.TestCase):
 
     def test_add_message_request_rejects_arbitrary_role(self):
         from pydantic import ValidationError
+
         from app.api.routes.chat import AddMessageRequest
 
         with self.assertRaises(ValidationError):
