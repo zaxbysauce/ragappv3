@@ -1,9 +1,9 @@
+import { memo } from "react";
 import { motion, useReducedMotion } from "framer-motion";
-import { Bot, AlertCircle, GitBranch, Pencil } from "lucide-react";
+import { AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { MessageContent } from "./MessageContent";
-import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { MarkdownMessage } from "./MarkdownMessage";
+import { UserMessageActions } from "./MessageActions";
 import type { Message } from "@/stores/useChatStore";
 import { formatRelativeTime } from "@/lib/formatters";
 
@@ -15,109 +15,99 @@ interface MessageBubbleProps {
   onEdit?: (messageId: string, content: string) => void;
 }
 
-export function MessageBubble({ message, isStreaming, onFork, userInitial, onEdit }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({
+  message,
+  isStreaming,
+  onFork,
+  userInitial,
+  onEdit,
+}: MessageBubbleProps) {
   const isUser = message.role === "user";
   const prefersReducedMotion = useReducedMotion();
 
   return (
     <motion.div
-      initial={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, y: 10 }}
+      initial={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, y: 8 }}
       animate={prefersReducedMotion ? { opacity: 1 } : { opacity: 1, y: 0 }}
-      transition={{ duration: prefersReducedMotion ? 0.1 : 0.3 }}
+      transition={{ duration: prefersReducedMotion ? 0.1 : 0.25 }}
       className={cn(
-        "group flex gap-3 p-4",
-        isUser
-          ? "bg-primary/[0.12] border-l-2 border-primary/40"
-          : "bg-muted/30"
+        "group flex gap-3 px-4 py-5",
+        isUser && "justify-end"
       )}
+      role="article"
+      aria-label={isUser ? "Your message" : "Assistant message"}
     >
-      <div
-        className={cn(
-          "flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center",
-          isUser ? "bg-primary text-primary-foreground" : "bg-primary/10 text-primary"
-        )}
-      >
-        {isUser ? (
-          <span className="text-xs font-semibold leading-none">{userInitial}</span>
-        ) : (
-          <Bot className="h-4 w-4" />
-        )}
-      </div>
-
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 mb-1">
-          <span className="font-semibold text-sm">
-            {isUser ? "You" : "Assistant"}
-          </span>
-        </div>
-
-        <MessageContent
-          content={message.content}
-          sources={message.sources}
-          isStreaming={isStreaming && !isUser}
-        />
-
-        {message.created_at && (
-          <time
-            className="text-[10px] text-muted-foreground/60 opacity-0 group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100 transition-opacity mt-1 block"
-            dateTime={message.created_at}
-            title={new Date(message.created_at).toLocaleString()}
-          >
-            {formatRelativeTime(message.created_at)}
-          </time>
-        )}
-
-        {message.error && (
-          <div className="mt-3 flex items-start gap-2 rounded-md bg-destructive/10 border border-destructive/30 p-3">
-            <AlertCircle className="h-4 w-4 text-destructive flex-shrink-0 mt-0.5" aria-hidden="true" />
-            <div className="min-w-0">
-              <p className="text-sm font-medium text-destructive">Error</p>
-              <p className="text-xs text-destructive/80 mt-0.5">{message.error}</p>
+      {/* User: avatar on right side — rendered after content via flex-row-reverse */}
+      {isUser ? (
+        <>
+          {/* Content bubble */}
+          <div className="flex flex-col items-end min-w-0 max-w-[68ch]">
+            {/* Name + timestamp row */}
+            <div className="flex items-center gap-2 mb-2">
+              {message.created_at && (
+                <time
+                  className="text-[10px] text-muted-foreground/50 opacity-0 group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100 transition-opacity"
+                  dateTime={message.created_at}
+                  title={new Date(message.created_at).toLocaleString()}
+                >
+                  {formatRelativeTime(message.created_at)}
+                </time>
+              )}
+              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">You</span>
             </div>
-          </div>
-        )}
 
-        {message.stopped && !message.error && (
-          <div className="mt-3 inline-flex items-center gap-2 rounded-md bg-muted border border-border px-3 py-1.5">
-            <span className="text-xs font-medium text-muted-foreground">Stopped</span>
-          </div>
-        )}
-
-        <div className="flex items-center mt-2">
-          {isUser && onEdit && (
-            <button
-              onClick={() => onEdit(message.id, message.content)}
-              className="opacity-0 group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100 transition-opacity p-1 rounded hover:bg-secondary"
-              aria-label="Edit message"
+            {/* Message bubble */}
+            <div
+              className={cn(
+                "rounded-2xl rounded-tr-sm px-4 py-3 text-sm leading-relaxed",
+                "bg-primary text-primary-foreground",
+                "max-w-full break-words"
+              )}
             >
-              <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
-            </button>
-          )}
-
-          {onFork && (
-            <div className="opacity-0 group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100 focus-within:opacity-100 transition-opacity duration-200">
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7"
-                      onClick={onFork}
-                      aria-label="Branch conversation from here"
-                    >
-                      <GitBranch className="h-3.5 w-3.5" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p>Branch from here</p>
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
+              {message.content}
             </div>
-          )}
-        </div>
-      </div>
+
+            {/* Error */}
+            {message.error && (
+              <div className="mt-2 flex items-start gap-2 rounded-lg bg-destructive/10 border border-destructive/20 p-3 text-left">
+                <AlertCircle className="h-4 w-4 text-destructive flex-shrink-0 mt-0.5" aria-hidden />
+                <div>
+                  <p className="text-sm font-medium text-destructive">Error</p>
+                  <p className="text-xs text-destructive/80 mt-0.5">{message.error}</p>
+                </div>
+              </div>
+            )}
+
+            {/* Actions */}
+            <UserMessageActions
+              content={message.content}
+              onEdit={onEdit ? () => onEdit(message.id, message.content) : undefined}
+              onFork={onFork}
+            />
+          </div>
+
+          {/* Avatar */}
+          <div
+            className="flex-shrink-0 w-7 h-7 mt-0.5 rounded-full flex items-center justify-center bg-primary text-primary-foreground self-start"
+            aria-hidden
+          >
+            <span className="text-[10px] font-bold leading-none">{userInitial}</span>
+          </div>
+        </>
+      ) : (
+        // Fallback: assistant rendered via MessageBubble (shouldn't normally happen)
+        <>
+          <div className="flex-shrink-0 w-7 h-7 mt-0.5 rounded-full flex items-center justify-center bg-primary/10 text-primary" aria-hidden>
+            <span className="text-xs font-semibold">{userInitial}</span>
+          </div>
+          <div className="flex-1 min-w-0 max-w-[68ch]">
+            <MarkdownMessage
+              content={message.content}
+              isStreaming={isStreaming && !isUser}
+            />
+          </div>
+        </>
+      )}
     </motion.div>
   );
-}
+});

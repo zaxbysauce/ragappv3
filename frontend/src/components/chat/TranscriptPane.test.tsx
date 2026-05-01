@@ -14,9 +14,68 @@ class MockResizeObserver {
 }
 global.ResizeObserver = MockResizeObserver as unknown as typeof ResizeObserver;
 
+// Shared mock state — must be hoisted so vi.mock factories can close over it
+const mockChatState = vi.hoisted(() => ({
+  messageIds: [] as string[],
+  messagesById: {} as Record<string, any>,
+  input: "",
+  isStreaming: false,
+  streamingMessageId: null as string | null,
+  inputError: null as string | null,
+  expandedSources: new Set<string>(),
+  activeChatId: null as string | null,
+  abortFn: null,
+  setInput: vi.fn(),
+  setIsStreaming: vi.fn(),
+  setAbortFn: vi.fn(),
+  setInputError: vi.fn(),
+  addMessage: vi.fn(),
+  updateMessage: vi.fn(),
+  appendToMessage: vi.fn(),
+  removeMessagesFrom: vi.fn(),
+  stopStreaming: vi.fn(),
+  loadChat: vi.fn(),
+  newChat: vi.fn(),
+}));
+
 // Mock the hooks and dependencies
-vi.mock("@/stores/useChatStore");
+vi.mock("@/stores/useChatStore", () => ({
+  useChatStore: vi.fn((selector?: (s: typeof mockChatState) => unknown) =>
+    typeof selector === "function" ? selector(mockChatState) : mockChatState
+  ),
+  useMessageIds: vi.fn(() => mockChatState.messageIds),
+  useMessage: vi.fn((id: string) => mockChatState.messagesById[id]),
+  useChatMessages: vi.fn(() =>
+    mockChatState.messageIds.map((id) => mockChatState.messagesById[id])
+  ),
+  useChatInput: vi.fn(() => mockChatState.input),
+  useChatIsStreaming: vi.fn(() => mockChatState.isStreaming),
+  useChatInputError: vi.fn(() => mockChatState.inputError),
+  useChatActiveChatId: vi.fn(() => mockChatState.activeChatId),
+  useChatStreamingId: vi.fn(() => mockChatState.streamingMessageId),
+}));
 vi.mock("@/stores/useVaultStore");
+vi.mock("@/stores/useAuthStore", () => ({
+  useAuthStore: vi.fn((selector?: (s: any) => unknown) => {
+    const state = { user: null };
+    return typeof selector === "function" ? selector(state) : state;
+  }),
+}));
+vi.mock("@/stores/useChatShellStore", () => ({
+  useChatShellStore: vi.fn((selector?: (s: any) => unknown) => {
+    const state = {
+      activeSessionId: null,
+      activeSessionTitle: null,
+      openRightPane: vi.fn(),
+      closeRightPane: vi.fn(),
+      setActiveRightTab: vi.fn(),
+      activeRightTab: "evidence",
+      selectedEvidenceSource: null,
+      setSelectedEvidenceSource: vi.fn(),
+    };
+    return typeof selector === "function" ? selector(state) : state;
+  }),
+}));
 vi.mock("@/hooks/useSendMessage");
 vi.mock("@/hooks/useChatHistory");
 vi.mock("react-router-dom", () => ({
@@ -84,6 +143,12 @@ const renderComposerWithProviders = (props: React.ComponentProps<typeof Composer
   );
 };
 
+// Helper to set messages in both normalized fields and keep _mockMessageCount in sync
+function setMockMessages(messages: Array<{ id: string; role: string; content: string; [key: string]: any }>) {
+  mockChatState.messageIds = messages.map((m) => m.id);
+  mockChatState.messagesById = Object.fromEntries(messages.map((m) => [m.id, m]));
+}
+
 describe("TranscriptPane", () => {
   const mockSetInput = vi.fn();
   const mockHandleSend = vi.fn();
@@ -95,19 +160,23 @@ describe("TranscriptPane", () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    // Default mock implementations for useChatStore
-    (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-      messages: [],
-      input: "",
-      isStreaming: false,
-      setInput: mockSetInput,
-      setIsStreaming: vi.fn(),
-      setAbortFn: vi.fn(),
-      setInputError: vi.fn(),
-      addMessage: vi.fn(),
-      updateMessage: vi.fn(),
-      inputError: null,
-    });
+    // Reset shared mock state
+    mockChatState.messageIds = [];
+    mockChatState.messagesById = {};
+    mockChatState.input = "";
+    mockChatState.isStreaming = false;
+    mockChatState.streamingMessageId = null;
+    mockChatState.inputError = null;
+    mockChatState.setInput = mockSetInput;
+    mockChatState.setIsStreaming = vi.fn();
+    mockChatState.setAbortFn = vi.fn();
+    mockChatState.setInputError = vi.fn();
+    mockChatState.addMessage = vi.fn();
+    mockChatState.updateMessage = vi.fn();
+    mockChatState.removeMessagesFrom = vi.fn();
+    mockChatState.stopStreaming = vi.fn();
+    mockChatState.loadChat = vi.fn();
+    mockChatState.newChat = vi.fn();
 
     // Mock useVaultStore with selector support
     (useVaultStore as unknown as ReturnType<typeof vi.fn>).mockImplementation((selector) => {
@@ -153,21 +222,10 @@ describe("TranscriptPane", () => {
   describe("2. TranscriptPane renders message list when messages exist", () => {
     it("renders MessageBubble components for each message", () => {
       _mockMessageCount = 2;
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [
-          { id: "1", role: "user", content: "Hello" },
-          { id: "2", role: "assistant", content: "Hi there!" },
-        ],
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockMessages([
+        { id: "1", role: "user", content: "Hello" },
+        { id: "2", role: "assistant", content: "Hi there!" },
+      ]);
 
       render(<TranscriptPane />);
       expect(screen.getAllByTestId("message-bubble")).toHaveLength(2);
@@ -175,18 +233,7 @@ describe("TranscriptPane", () => {
 
     it("renders user message correctly", () => {
       _mockMessageCount = 1;
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        messages: [{ id: "1", role: "user", content: "Test message" }],
-        input: "",
-        isStreaming: false,
-        setInput: mockSetInput,
-        setIsStreaming: vi.fn(),
-        setAbortFn: vi.fn(),
-        setInputError: vi.fn(),
-        addMessage: vi.fn(),
-        updateMessage: vi.fn(),
-        inputError: null,
-      });
+      setMockMessages([{ id: "1", role: "user", content: "Test message" }]);
 
       render(<TranscriptPane />);
       expect(screen.getByText("Test message")).toBeInTheDocument();
@@ -328,12 +375,7 @@ describe("TranscriptPane", () => {
 
   describe("9. Composer Enter sends when menu is closed", () => {
     it("calls onSend when Enter is pressed without Shift and menu is closed", async () => {
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        input: "Test message",
-        setInput: mockSetInput,
-        inputError: null,
-        isStreaming: false,
-      });
+      mockChatState.input = "Test message";
 
       renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
 
@@ -353,12 +395,7 @@ describe("TranscriptPane", () => {
     });
 
     it("does not send if input is only whitespace", async () => {
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        input: "   ",
-        setInput: mockSetInput,
-        inputError: null,
-        isStreaming: false,
-      });
+      mockChatState.input = "   ";
 
       renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
 
@@ -438,12 +475,7 @@ describe("TranscriptPane", () => {
 
   describe("11. Composer Shift+Enter adds newline", () => {
     it("does not call onSend when Shift+Enter is pressed", async () => {
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        input: "Test",
-        setInput: mockSetInput,
-        inputError: null,
-        isStreaming: false,
-      });
+      mockChatState.input = "Test";
 
       renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
 
@@ -454,12 +486,7 @@ describe("TranscriptPane", () => {
     });
 
     it("textarea updates on key events for newline handling", async () => {
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        input: "Line 1",
-        setInput: mockSetInput,
-        inputError: null,
-        isStreaming: false,
-      });
+      mockChatState.input = "Line 1";
 
       renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
 
@@ -475,12 +502,7 @@ describe("TranscriptPane", () => {
 
   describe("12. Composer send button disabled when input is empty", () => {
     it("send button is disabled when input is empty", () => {
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        input: "",
-        setInput: mockSetInput,
-        inputError: null,
-        isStreaming: false,
-      });
+      mockChatState.input = "";
 
       renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
 
@@ -489,12 +511,7 @@ describe("TranscriptPane", () => {
     });
 
     it("send button is disabled when input is only whitespace", () => {
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        input: "   ",
-        setInput: mockSetInput,
-        inputError: null,
-        isStreaming: false,
-      });
+      mockChatState.input = "   ";
 
       renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
 
@@ -503,12 +520,7 @@ describe("TranscriptPane", () => {
     });
 
     it("send button is enabled when input has content", () => {
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        input: "Hello",
-        setInput: mockSetInput,
-        inputError: null,
-        isStreaming: false,
-      });
+      mockChatState.input = "Hello";
 
       renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
 
@@ -543,14 +555,10 @@ describe("TranscriptPane", () => {
   });
 
   describe("14. Composer attachment affordance", () => {
-    it("does not render an attachment button until file upload is wired up", () => {
-      // The "Coming soon" disabled paperclip button was removed in Round 4
-      // because a permanently-disabled affordance creates friction without
-      // value. When attachment lands, this test should flip to assert the
-      // enabled control.
+    it("renders an attachment button for file upload", () => {
       renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
 
-      expect(screen.queryByLabelText(/attach file/i)).not.toBeInTheDocument();
+      expect(screen.getByLabelText(/attach file/i)).toBeInTheDocument();
     });
   });
 
@@ -702,12 +710,7 @@ describe("TranscriptPane", () => {
     });
 
     it("shows error message when inputError is set", () => {
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        input: "",
-        setInput: mockSetInput,
-        inputError: "Test error message",
-        isStreaming: false,
-      });
+      mockChatState.inputError = "Test error message";
 
       renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
 
@@ -716,12 +719,7 @@ describe("TranscriptPane", () => {
 
     it("character count shows warning when input is near max length", () => {
       const longInput = "a".repeat(1700); // > 80% of 2000
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        input: longInput,
-        setInput: mockSetInput,
-        inputError: null,
-        isStreaming: false,
-      });
+      mockChatState.input = longInput;
 
       renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
 
@@ -730,12 +728,7 @@ describe("TranscriptPane", () => {
 
     it("character count shows destructive color when over max", () => {
       const overMaxInput = "a".repeat(2100); // > 2000
-      (useChatStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        input: overMaxInput,
-        setInput: mockSetInput,
-        inputError: null,
-        isStreaming: false,
-      });
+      mockChatState.input = overMaxInput;
 
       renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
 

@@ -4,6 +4,36 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.0.5] - 2026-05-01
+
+### Added
+
+- **Normalized chat store**: `useChatStore` uses `messageIds: string[]` + `messagesById: Record<string, Message>` with `appendToMessage(id, chunk)` for O(1) streaming token append — non-streaming message rows no longer re-render on every token
+- **`sendDirect(content, history, options)`**: new primitive in `useSendMessage` that accepts content and history directly, eliminating the stale-Zustand-state race in retry and edit-resubmit flows
+- **Shiki syntax highlighting**: fenced code blocks render with `github-light` / `github-dark` themes; lazy-loaded as a separate Vite chunk; unknown languages fall back to unstyled code; copy button copies raw code
+- **`Composer.tsx`**: extracted from `TranscriptPane.tsx` — auto-growing textarea, IME composition guard (`e.nativeEvent.isComposing`), stop button always clickable during streaming, slash command menu, vault indicator, character count
+- **File attachments**: paste or drag-drop files into the composer; uploads to active vault via `uploadDocument()`; attachment tray shows filename, size, progress bar, and remove button; send blocked until all uploads complete
+- **`SourceCards` component**: shown under every assistant answer — "Sources:" header with count, top 3 sources with expand/collapse, filename + snippet + relevance label, "View all N sources" link to RightPane, clicking a card selects it in RightPane
+- **`MarkdownMessage.tsx`**: unified markdown renderer (GFM, Shiki, streaming caret, inline citation chips); replaces parallel rendering in `AssistantMessage` and `MessageContent`
+- **`MessageActions.tsx`**: shared action bar — copy with clipboard feedback, retry, thumbs-up/down feedback, fork/branch, developer debug panel
+- **`SourceCitation.tsx`**: inline citation chip handling `[S1]` and `[Source: filename]` formats
+- **Session delete undo**: Sonner toast with Undo action on session deletion; session disappears optimistically and is restored on Undo
+- Granular Zustand selectors: `useMessageIds`, `useMessage(id)`, `useChatIsStreaming`, `useChatStreamingId`, `useChatInput`, `useChatInputError`, `useChatActiveChatId`
+
+### Changed
+
+- **Chat layout**: removed full-width tinted background bands (`bg-muted/30`, `bg-primary/[0.12]`, `border-l-2`); content column is now `max-w-[760px]`; 24–32px vertical rhythm between message groups; hover action bar hidden until hover/focus/coarse-pointer
+- **RightPane heading**: renamed from "Details" to "Evidence"
+- **`AssistantMessage.tsx`** and **`MessageContent.tsx`**: now thin wrappers over shared components; one markdown parse per message
+- **`TranscriptPane.tsx`**: duplicate `evidence:jump-to-answer` listener removed; Composer extracted; layout variables applied
+- `@tailwindcss/typography` applied to assistant prose
+
+### Fixed
+
+- Duplicate `evidence:jump-to-answer` event listener caused two scroll + highlight cycles per citation click
+- Stop generation incorrectly showed red error UI for user-initiated aborts
+- Retry and edit-resubmit could send stale input state due to async Zustand batching
+
 ## [1.0.4] - 2026-05-01
 
 ### Security
