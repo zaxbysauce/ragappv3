@@ -5,7 +5,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
-import { useChatStore, type Message } from "@/stores/useChatStore";
+import { useChatMessages, type Message } from "@/stores/useChatStore";
 import { useChatShellStore } from "@/stores/useChatShellStore";
 import type { Source } from "@/lib/api";
 import { getRelevanceLabel, type ScoreType } from "@/lib/relevance";
@@ -312,7 +312,7 @@ function StructuredOutputItem({ output }: StructuredOutputItemProps) {
 }
 
 export function RightPane() {
-  const { messages } = useChatStore();
+  const messages = useChatMessages();
   const { selectedEvidenceSource, setSelectedEvidenceSource, activeRightTab, setActiveRightTab } = useChatShellStore();
   const [selectedSource, setSelectedSource] = useState<Source | null>(null);
   const [activeTab, setActiveTab] = useState<string>("sources");
@@ -429,7 +429,7 @@ export function RightPane() {
     <div className="flex h-full flex-col">
       <div className="mb-4 flex items-center justify-between">
         <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-          Details
+          Evidence
         </h2>
       </div>
 

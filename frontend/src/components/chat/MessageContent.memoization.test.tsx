@@ -21,8 +21,16 @@ vi.mock("remark-gfm", () => ({ default: () => {} }));
 vi.mock("rehype-sanitize", () => ({ default: () => {} }));
 
 // Mock other imports
-vi.mock("lucide-react", () => ({ Copy: () => null, Check: () => null }));
+vi.mock("lucide-react", () => ({ Copy: () => null, Check: () => null, FileText: () => null }));
 vi.mock("@/components/ui/button", () => ({ Button: ({ children }: any) => <button>{children}</button> }));
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: any) => <>{children}</>,
+  TooltipContent: ({ children }: any) => <>{children}</>,
+  TooltipProvider: ({ children }: any) => <>{children}</>,
+  TooltipTrigger: ({ children, asChild }: any) => <>{children}</>,
+}));
+vi.mock("@/components/shared/CopyButton", () => ({ CopyButton: () => null }));
+vi.mock("./SourceCitation", () => ({ SourceCitation: () => null }));
 vi.mock("@/lib/api", () => ({}));
 vi.mock("@/lib/relevance", () => ({ getRelevanceLabel: () => ({ text: "High" }) }));
 
@@ -79,13 +87,13 @@ describe("MemoizedMarkdown memoization", () => {
       <MemoizedMarkdown content="test content" isStreaming={false} />
     );
 
-    const afterInitialRender = reactMarkdownRenderCount;
-    expect(afterInitialRender).toBe(1);
+    // No streaming indicator initially
+    expect(document.querySelector('[role="status"]')).not.toBeInTheDocument();
 
     // Re-render with isStreaming = true
     rerender(<MemoizedMarkdown content="test content" isStreaming={true} />);
 
-    // isStreaming changed, so ReactMarkdown SHOULD have been called again
-    expect(reactMarkdownRenderCount).toBe(afterInitialRender + 1);
+    // Streaming indicator should now appear
+    expect(document.querySelector('[role="status"]')).toBeInTheDocument();
   });
 });

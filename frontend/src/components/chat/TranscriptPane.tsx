@@ -1,113 +1,52 @@
 // frontend/src/components/chat/TranscriptPane.tsx
 
-import { useRef, useEffect, useState, useCallback } from "react";
+import { useRef, useEffect, useState, useCallback, memo } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Send,
-  Square,
-  Slash,
   Sparkles,
   Database,
   ArrowDown,
-  FileText,
-  GitCompare,
-  Calendar,
-  ListChecks,
   TrendingUp,
   AlignLeft,
   CheckCircle2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
-import { Badge } from "@/components/ui/badge";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { MessageBubble } from "./MessageBubble";
 import { AssistantMessage } from "./AssistantMessage";
 import { WaitingIndicator } from "./WaitingIndicator";
-import { useChatStore } from "@/stores/useChatStore";
+import { Composer } from "./Composer";
+import { useChatStore, useMessageIds, useMessage } from "@/stores/useChatStore";
 import { useVaultStore } from "@/stores/useVaultStore";
 import { useAuthStore } from "@/stores/useAuthStore";
 import { useChatShellStore } from "@/stores/useChatShellStore";
-import { useSendMessage, MAX_INPUT_LENGTH } from "@/hooks/useSendMessage";
+import { useSendMessage } from "@/hooks/useSendMessage";
 import { useChatHistory } from "@/hooks/useChatHistory";
 import { forkChatSession } from "@/lib/api";
 import { toast } from "sonner";
+import type { Message } from "@/stores/useChatStore";
 
 // =============================================================================
-// TYPES & INTERFACES
+// Types
 // =============================================================================
 
 interface TranscriptPaneProps {
-  /** Optional className for styling overrides */
   className?: string;
-}
-
-interface ComposerProps {
-  /** Callback when user sends a message */
-  onSend: () => void;
-  /** Callback when user stops streaming */
-  onStop: () => void;
-  /** Whether a response is currently streaming */
-  isStreaming: boolean;
-  /** Optional className for styling overrides */
-  className?: string;
-  /** Ref to the textarea for external focus control */
-  inputRef?: React.RefObject<HTMLTextAreaElement | null>;
 }
 
 interface EmptyTranscriptProps {
-  /** Callback when user clicks a suggested prompt */
   onPromptClick: (prompt: string) => void;
-  /** Whether the active vault has indexed documents */
   hasIndexedDocs: boolean;
-  /** Callback to navigate to documents page */
   onNavigateToDocuments?: () => void;
-  /** Active vault name (shown for context when documents are present) */
   vaultName?: string | null;
-  /** Number of indexed documents in the active vault */
   documentCount?: number;
 }
 
-interface SlashCommand {
-  id: string;
-  label: string;
-  description: string;
-  icon: React.ReactNode;
-}
-
 // =============================================================================
-// CONSTANTS
+// Constants
 // =============================================================================
-
-const SLASH_COMMANDS: SlashCommand[] = [
-  {
-    id: "summarize",
-    label: "/summarize",
-    description: "Summarize this document",
-    icon: <FileText className="h-4 w-4" />,
-  },
-  {
-    id: "compare",
-    label: "/compare",
-    description: "Compare these sources",
-    icon: <GitCompare className="h-4 w-4" />,
-  },
-  {
-    id: "timeline",
-    label: "/timeline",
-    description: "Create a timeline",
-    icon: <Calendar className="h-4 w-4" />,
-  },
-  {
-    id: "actions",
-    label: "/actions",
-    description: "List action items",
-    icon: <ListChecks className="h-4 w-4" />,
-  },
-];
 
 const SUGGESTED_PROMPTS = [
   { text: "What are the key findings?", Icon: TrendingUp },
@@ -117,10 +56,10 @@ const SUGGESTED_PROMPTS = [
 ];
 
 // =============================================================================
-// COMPONENT: EmptyTranscript
+// EmptyTranscript
 // =============================================================================
 
-function EmptyTranscript({
+export function EmptyTranscript({
   onPromptClick,
   hasIndexedDocs,
   onNavigateToDocuments,
@@ -128,33 +67,24 @@ function EmptyTranscript({
   documentCount,
 }: EmptyTranscriptProps) {
   return (
-    <div
-      className="flex h-full flex-col items-center justify-center px-4 py-12"
-      role="region"
-      aria-label="Empty transcript"
-    >
+    <div className="flex h-full flex-col items-center justify-center px-4 py-16" role="region" aria-label="Empty transcript">
       <motion.div
-        initial={{ opacity: 0, y: 20 }}
+        initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.4 }}
+        transition={{ duration: 0.35 }}
         className="flex max-w-md flex-col items-center text-center"
       >
-        {/* App branding icon */}
-        <div
-          className="mb-6 flex h-20 w-20 items-center justify-center rounded-2xl bg-primary/15 shadow-md shadow-primary/10"
-          aria-hidden="true"
-        >
-          <Sparkles className="h-10 w-10 text-primary" />
+        <div className="mb-6 flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/10 shadow-md shadow-primary/10" aria-hidden>
+          <Sparkles className="h-8 w-8 text-primary" />
         </div>
 
-        <h2 className="mb-2 text-xl font-semibold text-foreground">
+        <h2 className="mb-2 text-lg font-semibold text-foreground">
           {hasIndexedDocs ? "What would you like to know?" : "Upload documents to get started"}
         </h2>
 
-        {/* Vault context line — grounds the user in which corpus they are querying */}
         {hasIndexedDocs && vaultName && (
           <p className="mb-2 text-xs text-muted-foreground">
-            {documentCount !== undefined && documentCount > 0
+            {documentCount && documentCount > 0
               ? `Searching ${documentCount} document${documentCount === 1 ? "" : "s"} in `
               : "Searching "}
             <span className="font-medium text-foreground/80">{vaultName}</span>
@@ -163,40 +93,27 @@ function EmptyTranscript({
 
         <p className="mb-8 text-sm text-muted-foreground">
           {hasIndexedDocs
-            ? "Select a prompt below or type your own question to explore your documents."
-            : "Add documents to your vault to start chatting with your knowledge base."}
+            ? "Select a prompt below or type your own question."
+            : "Add documents to your vault to start chatting."}
         </p>
 
         {hasIndexedDocs ? (
-          // Suggested prompts grid
-          <div
-            className="grid w-full grid-cols-1 gap-3 sm:grid-cols-2"
-            role="list"
-            aria-label="Suggested prompts"
-          >
-            {SUGGESTED_PROMPTS.map((prompt, index) => (
+          <div className="grid w-full grid-cols-1 gap-2.5 sm:grid-cols-2" role="list" aria-label="Suggested prompts">
+            {SUGGESTED_PROMPTS.map((prompt, i) => (
               <button
-                key={index}
+                key={i}
                 onClick={() => onPromptClick(prompt.text)}
-                className="group flex items-start gap-3 rounded-lg border border-border bg-card p-4 text-left transition-all duration-200 hover:bg-accent hover:text-accent-foreground hover:border-accent hover:shadow-sm hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="group flex items-start gap-3 rounded-xl border border-border bg-card p-4 text-left transition-all duration-200 hover:border-primary/30 hover:bg-accent/5 hover:-translate-y-0.5 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 aria-label={`Use prompt: ${prompt.text}`}
               >
-                <prompt.Icon
-                  className="mt-0.5 h-4 w-4 flex-shrink-0 text-muted-foreground group-hover:text-accent-foreground"
-                  aria-hidden="true"
-                />
-                <span className="text-sm">{prompt.text}</span>
+                <prompt.Icon className="mt-0.5 h-4 w-4 flex-shrink-0 text-muted-foreground group-hover:text-primary transition-colors" aria-hidden />
+                <span className="text-sm font-medium">{prompt.text}</span>
               </button>
             ))}
           </div>
         ) : (
-          // Empty vault CTA
-          <Button
-            onClick={onNavigateToDocuments}
-            className="gap-2"
-            aria-label="Go to documents page to upload files"
-          >
-            <Database className="h-4 w-4" aria-hidden="true" />
+          <Button onClick={onNavigateToDocuments} className="gap-2" aria-label="Go to documents page">
+            <Database className="h-4 w-4" aria-hidden />
             Go to Documents
           </Button>
         )}
@@ -206,510 +123,226 @@ function EmptyTranscript({
 }
 
 // =============================================================================
-// COMPONENT: Composer
+// MessageRow — granular subscriber per message to avoid full-list re-renders
 // =============================================================================
 
-// localStorage key for in-progress message draft. Keyed by active session so
-// switching between sessions doesn't bleed drafts. New chats use the "new" key.
-const DRAFT_STORAGE_KEY_PREFIX = "ragapp_chat_draft_";
-
-function getDraftKey(sessionId: string | null): string {
-  return `${DRAFT_STORAGE_KEY_PREFIX}${sessionId ?? "new"}`;
+interface MessageRowProps {
+  messageId: string;
+  isLast: boolean;
+  isStreaming: boolean;
+  streamingMessageId: string | null;
+  userInitial: string;
+  activeSessionId: string | null;
+  showDebug: boolean;
+  highlightedId: string | null;
+  onRetry: () => void;
+  onEdit: (messageId: string, content: string) => void;
+  onFork: (messageId: string) => void;
+  onFeedback: (messageId: string, feedback: "up" | "down" | null) => void;
 }
 
-function Composer({ onSend, onStop, isStreaming, className, inputRef }: ComposerProps) {
-  const internalRef = useRef<HTMLTextAreaElement>(null);
-  const textareaRef = inputRef || internalRef;
-  const { input, setInput, inputError, activeChatId } = useChatStore();
-  const { getActiveVault } = useVaultStore();
-  const activeVault = getActiveVault();
+const MessageRow = memo(function MessageRow({
+  messageId,
+  isLast,
+  isStreaming,
+  streamingMessageId,
+  userInitial,
+  activeSessionId,
+  showDebug,
+  highlightedId,
+  onRetry,
+  onEdit,
+  onFork,
+  onFeedback,
+}: MessageRowProps) {
+  const message = useMessage(messageId);
+  if (!message) return null;
 
-  // Slash command menu state
-  const [showSlashMenu, setShowSlashMenu] = useState(false);
-  const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
-  const [slashQuery, setSlashQuery] = useState("");
-
-  // Draft persistence — restore unsent draft on session change. Saves happen
-  // inside handleInputChange / insertCommand / handleSubmit (below) so the
-  // localStorage write only fires on real user actions, not on every render.
-  // This avoids a race where a save effect triggered by the same activeChatId
-  // change as a load effect would clobber the new session's draft with the
-  // previous session's stale input.
-  const lastLoadedSessionRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const sessionKey = activeChatId ?? "new";
-    if (lastLoadedSessionRef.current === sessionKey) return;
-    lastLoadedSessionRef.current = sessionKey;
-    try {
-      const draft = localStorage.getItem(getDraftKey(activeChatId)) ?? "";
-      setInput(draft);
-    } catch {
-      // localStorage may throw in private mode / quota issues — silently ignore
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeChatId]);
-
-  const persistDraft = useCallback(
-    (value: string) => {
-      if (typeof window === "undefined") return;
-      try {
-        const key = getDraftKey(activeChatId);
-        if (value) {
-          localStorage.setItem(key, value);
-        } else {
-          localStorage.removeItem(key);
-        }
-      } catch {
-        // ignore
-      }
-    },
-    [activeChatId]
-  );
-
-  // Filter commands based on query
-  const filteredCommands = SLASH_COMMANDS.filter((cmd) =>
-    cmd.label.toLowerCase().includes(slashQuery.toLowerCase())
-  );
-
-  // Auto-grow textarea
-  const adjustTextareaHeight = useCallback(() => {
-    const textarea = textareaRef.current;
-    if (textarea) {
-      textarea.style.height = "auto";
-      const newHeight = Math.min(textarea.scrollHeight, 200); // ~8 lines max
-      textarea.style.height = `${Math.max(44, newHeight)}px`;
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    adjustTextareaHeight();
-  }, [input, adjustTextareaHeight]);
-
-  // Handle input changes
-  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const value = e.target.value;
-    setInput(value);
-    persistDraft(value);
-
-    // Check for slash command trigger
-    const lines = value.split("\n");
-    const lastLine = lines[lines.length - 1];
-
-    if (lastLine.startsWith("/") && !lastLine.includes(" ")) {
-      setShowSlashMenu(true);
-      setSlashQuery(lastLine.slice(1));
-      setSelectedCommandIndex(0);
-    } else {
-      setShowSlashMenu(false);
-      setSlashQuery("");
-    }
+  // Coerce types for safety
+  const safeMessage: Message = {
+    ...message,
+    id: String(message.id ?? messageId),
+    role: (message.role === "user" || message.role === "assistant") ? message.role : "user",
+    content: typeof message.content === "string" ? message.content : String(message.content ?? ""),
   };
 
-  // Handle keyboard navigation
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (showSlashMenu) {
-      switch (e.key) {
-        case "ArrowDown":
-          e.preventDefault();
-          setSelectedCommandIndex((prev) =>
-            prev < filteredCommands.length - 1 ? prev + 1 : prev
-          );
-          return;
-        case "ArrowUp":
-          e.preventDefault();
-          setSelectedCommandIndex((prev) => (prev > 0 ? prev - 1 : 0));
-          return;
-        case "Enter":
-          e.preventDefault();
-          if (filteredCommands[selectedCommandIndex]) {
-            insertCommand(filteredCommands[selectedCommandIndex]);
-          }
-          return;
-        case "Escape":
-          e.preventDefault();
-          setShowSlashMenu(false);
-          return;
-      }
-    }
-
-    // Enter to send, Shift+Enter for new line
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSubmit();
-    }
-  };
-
-  // Insert selected command
-  const insertCommand = (command: SlashCommand) => {
-    const lines = input.split("\n");
-    lines[lines.length - 1] = command.label + " ";
-    const next = lines.join("\n");
-    setInput(next);
-    persistDraft(next);
-    setShowSlashMenu(false);
-    textareaRef.current?.focus();
-  };
-
-  // Handle submit
-  const handleSubmit = () => {
-    if (!input.trim() || isStreaming) return;
-    if (input.length > MAX_INPUT_LENGTH) return;
-    // Clear persisted draft now that the user has committed the message.
-    // useSendMessage will clear the in-memory input via setInput("").
-    persistDraft("");
-    onSend();
-  };
+  const isAssistantStreaming = isStreaming && isLast && safeMessage.role === "assistant" && streamingMessageId === messageId;
+  const isHighlighted = highlightedId === messageId;
 
   return (
-    <div className={cn("relative", className)}>
-      {/* Vault Context Pill */}
-      {activeVault && (
-        <div className="mb-2 flex items-center gap-2">
-          <Badge
-            variant="secondary"
-            className="gap-1.5 text-xs font-normal"
-            aria-label={`Active vault: ${activeVault.name}`}
-          >
-            <Database className="h-3 w-3" aria-hidden="true" />
-            {activeVault.name}
-          </Badge>
-        </div>
-      )}
-
-      {/* Screen-reader-only keyboard help for the textarea below. Pointed at
-          via aria-describedby so the announcement happens once on focus. */}
-      <span id="composer-keyboard-help" className="sr-only">
-        Press Enter to send, Shift+Enter for a new line, slash to open the
-        command menu.
-      </span>
-
-      {/* Composer container */}
-      <div className="relative rounded-xl border border-input bg-background shadow-sm focus-within:border-primary/60 transition-colors duration-150">
-        {/* Textarea */}
-        <Textarea
-          ref={textareaRef as React.Ref<HTMLTextAreaElement>}
-          value={input}
-          onChange={handleInputChange}
-          onKeyDown={handleKeyDown}
-          placeholder="Message... (Enter to send · Shift+Enter for newline · / for commands)"
-          className="min-h-[44px] max-h-[200px] resize-none border-0 bg-transparent px-4 py-3 text-sm placeholder:text-muted-foreground/80 focus-visible:ring-2 focus-visible:ring-ring transition-colors duration-150"
-          // readOnly (not disabled) during streaming so users can still scroll
-          // through their draft and the textarea remains in tab order.
-          readOnly={isStreaming}
-          aria-label="Message input"
-          // Combine the optional error description with a static keyboard-help
-          // description so screen readers announce the full instructions.
-          aria-describedby={
-            inputError ? "input-error composer-keyboard-help" : "composer-keyboard-help"
-          }
-          // role="combobox" + the existing aria-expanded/haspopup/controls wires
-          // the slash-menu pattern correctly for screen readers.
-          role="combobox"
-          aria-expanded={showSlashMenu}
-          aria-haspopup="listbox"
-          aria-controls={showSlashMenu ? "slash-command-menu" : undefined}
-          rows={1}
-        />
-
-        {/* Slash command menu */}
-        <AnimatePresence>
-          {showSlashMenu && (
-            <motion.div
-              initial={{ opacity: 0, y: -8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.15 }}
-              id="slash-command-menu"
-              role="listbox"
-              aria-label="Slash commands"
-              className="absolute bottom-full left-0 z-50 mb-2 w-72 overflow-hidden rounded-lg border border-border bg-popover shadow-lg"
-            >
-              <div className="max-h-64 overflow-y-auto py-1">
-                {filteredCommands.length === 0 ? (
-                  <div className="px-3 py-4 text-center text-sm text-muted-foreground">
-                    No matching commands
-                  </div>
-                ) : (
-                  filteredCommands.map((command, index) => (
-                    <button
-                      key={command.id}
-                      onClick={() => insertCommand(command)}
-                      onMouseEnter={() => setSelectedCommandIndex(index)}
-                      role="option"
-                      aria-selected={index === selectedCommandIndex}
-                      className={cn(
-                        "flex w-full items-center gap-3 px-3 py-2.5 text-left text-sm transition-colors",
-                        index === selectedCommandIndex
-                          ? "bg-accent text-accent-foreground"
-                          : "text-popover-foreground hover:bg-accent/50"
-                      )}
-                    >
-                      <span
-                        className={cn(
-                          "flex h-8 w-8 items-center justify-center rounded-md",
-                          index === selectedCommandIndex
-                            ? "bg-primary text-primary-foreground"
-                            : "bg-muted text-muted-foreground"
-                        )}
-                      >
-                        {command.icon}
-                      </span>
-                      <div className="flex flex-col">
-                        <span className="font-medium">{command.label}</span>
-                        <span
-                          className={cn(
-                            "text-xs",
-                            index === selectedCommandIndex
-                              ? "text-accent-foreground/70"
-                              : "text-muted-foreground"
-                          )}
-                        >
-                          {command.description}
-                        </span>
-                      </div>
-                    </button>
-                  ))
-                )}
-              </div>
-            </motion.div>
+    <div className={isHighlighted ? "ring-2 ring-primary/50 rounded-xl transition-all duration-500" : undefined}>
+      {safeMessage.role === "assistant" ? (
+        <AnimatePresence mode="wait">
+          {isAssistantStreaming && !safeMessage.content ? (
+            <WaitingIndicator key="waiting" />
+          ) : (
+            <AssistantMessage
+              key="message"
+              message={safeMessage}
+              isStreaming={isAssistantStreaming}
+              showDebug={showDebug}
+              onRetry={onRetry}
+              onFork={() => onFork(messageId)}
+              sessionId={String(activeSessionId ?? "")}
+              messageFeedback={safeMessage.feedback}
+              onFeedback={(fb) => onFeedback(messageId, fb)}
+            />
           )}
         </AnimatePresence>
-
-        {/* Error message */}
-        {inputError && (
-          <div id="input-error" role="alert" className="px-4 pb-2 text-xs text-destructive">
-            {inputError}
-          </div>
-        )}
-
-        {/* Toolbar */}
-        <div className="flex items-center justify-between border-t border-border px-2 py-2">
-          <div className="flex items-center gap-1">
-            {/* Attachment button: removed for now — file attachment is not
-                yet supported and a permanently-disabled affordance with a
-                "Coming soon" tooltip created friction without value. The
-                `Paperclip` icon import and supporting imports remain
-                for the inevitable re-add when the feature ships. */}
-
-            {/* Slash command hint */}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 text-muted-foreground"
-                  onClick={() => {
-                    setInput(input + "/");
-                    textareaRef.current?.focus();
-                  }}
-                  aria-label="Open slash commands"
-                >
-                  <Slash className="h-4 w-4" aria-hidden="true" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>Slash commands</p>
-              </TooltipContent>
-            </Tooltip>
-          </div>
-
-          {/* Send/Stop button */}
-          {isStreaming ? (
-            <Button
-              variant="destructive"
-              size="default"
-              onClick={onStop}
-              className="gap-1.5"
-              aria-label="Stop generating"
-            >
-              <Square className="h-3.5 w-3.5 fill-current" aria-hidden="true" />
-              Stop
-            </Button>
-          ) : (
-            <Button
-              size="default"
-              onClick={handleSubmit}
-              disabled={!input.trim() || input.length > MAX_INPUT_LENGTH}
-              className="gap-1.5 shadow-sm"
-              aria-label="Send message"
-            >
-              <Send className="h-3.5 w-3.5" aria-hidden="true" />
-              Send
-            </Button>
-          )}
-        </div>
-      </div>
-
-      {/* Character count warning */}
-      {input.length > MAX_INPUT_LENGTH * 0.8 && (
-        <div
-          className={cn(
-            "mt-1 text-right text-xs",
-            input.length > MAX_INPUT_LENGTH ? "text-destructive" : "text-muted-foreground"
-          )}
-          aria-live="polite"
-        >
-          {input.length}/{MAX_INPUT_LENGTH}
-        </div>
+      ) : (
+        <MessageBubble
+          message={safeMessage}
+          isStreaming={isAssistantStreaming}
+          onFork={() => onFork(messageId)}
+          userInitial={userInitial}
+          onEdit={onEdit}
+        />
       )}
     </div>
   );
-}
+});
 
 // =============================================================================
-// COMPONENT: TranscriptPane
+// TranscriptPane
 // =============================================================================
 
 export function TranscriptPane({ className }: TranscriptPaneProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const navigate = useNavigate();
-  const { messages, isStreaming, setInput, setMessages, loadChat, updateMessage } = useChatStore();
+
+  const messageIds = useMessageIds();
+  const { isStreaming, streamingMessageId, setInput, removeMessagesFrom, updateMessage, loadChat } = useChatStore();
+
   const { getActiveVault } = useVaultStore();
   const activeVault = getActiveVault();
-  const vaultId = useVaultStore((state) => state.activeVaultId);
+  const vaultId = useVaultStore((s) => s.activeVaultId);
 
-  // G-3: Compute userInitial once from auth store
-  const authUser = useAuthStore((state) => state.user);
+  const authUser = useAuthStore((s) => s.user);
   const userInitial = (authUser?.full_name || authUser?.username || "U")[0].toUpperCase();
 
-  // D-2: Get active session ID from shell store
-  const activeSessionId = useChatShellStore((state) => state.activeSessionId);
+  const activeSessionId = useChatShellStore((s) => s.activeSessionId);
 
-  // Use chat history hook for refresh functionality
   const { refreshHistory } = useChatHistory(vaultId);
-  const { handleSend, handleStop } = useSendMessage(vaultId, refreshHistory);
+  const { handleSend, handleStop, sendDirect } = useSendMessage(vaultId, refreshHistory);
 
-  // Scroll state
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [isAtBottom, setIsAtBottom] = useState(true);
-  const [showDebug, setShowDebug] = useState(false);
+  const showDebug = import.meta.env.DEV;
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
 
-  // Check if vault has indexed documents (using file_count from Vault interface)
   const hasIndexedDocs = activeVault ? activeVault.file_count > 0 : false;
 
-  // Virtualizer for efficient message rendering
+  // Virtualizer
   const virtualizer = useVirtualizer({
-    count: messages.length,
+    count: messageIds.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => 120,
     overscan: 5,
     measureElement: (el) => el?.getBoundingClientRect().height ?? 0,
   });
 
-  // G-2: Auto-scroll to bottom on new messages if user is already at bottom
-  // Uses messages.length (not messages) to avoid firing on content updates
+  // Auto-scroll on new message (count changes)
   useEffect(() => {
-    if (isAtBottom && messages.length > 0) {
+    if (isAtBottom && messageIds.length > 0) {
       requestAnimationFrame(() => {
-        virtualizer.scrollToIndex(messages.length - 1, { align: 'end', behavior: 'auto' });
+        virtualizer.scrollToIndex(messageIds.length - 1, { align: "end", behavior: "auto" });
       });
     }
-  }, [messages.length, isAtBottom, virtualizer]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messageIds.length, isAtBottom]);
 
-  // G-2: Separate effect for streaming scroll — fires on every content chunk
+  // Auto-scroll during streaming
   useEffect(() => {
-    if (isStreaming && isAtBottom) {
-      virtualizer.scrollToIndex(messages.length - 1, { align: 'end', behavior: 'auto' });
+    if (isStreaming && isAtBottom && messageIds.length > 0) {
+      virtualizer.scrollToIndex(messageIds.length - 1, { align: "end", behavior: "auto" });
     }
-  }, [isStreaming, messages.length, isAtBottom, virtualizer]);
+  }, [isStreaming, messageIds.length, isAtBottom, virtualizer]);
 
-  // Wire evidence:jump-to-answer event from RightPane "Jump to answer" button
+  // Single evidence:jump-to-answer listener (Phase 1 fix — duplicate listener removed)
   useEffect(() => {
     const handler = (e: Event) => {
       const { sourceId } = (e as CustomEvent<{ sourceId: string }>).detail;
-      const msgIndex = messages.findIndex(m => m.sources?.some(s => s.id === sourceId));
-      if (msgIndex >= 0) {
-        virtualizer.scrollToIndex(msgIndex, { align: 'start' });
-        const msgId = String(messages[msgIndex].id);
-        setHighlightedMessageId(msgId);
-        setTimeout(() => setHighlightedMessageId(null), 1500);
-      }
-    };
-    window.addEventListener('evidence:jump-to-answer', handler);
-    return () => window.removeEventListener('evidence:jump-to-answer', handler);
-  }, [messages, virtualizer]);
-
-  // Auto-focus chat input on mount (only if no dialog/modal is open)
-  useEffect(() => {
-    if (!document.querySelector('[role="dialog"], [role="alertdialog"], [data-radix-popper-content-wrapper]')) {
-      composerRef.current?.focus();
-    }
-  }, []);
-
-  // E-1: evidence:jump-to-answer event listener
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const event = e as CustomEvent<{ sourceId: string }>;
-      const foundIndex = messages.findIndex(
-        (msg) => msg.sources?.some((s) => s.id === event.detail.sourceId)
-      );
-      if (foundIndex >= 0) {
-        virtualizer.scrollToIndex(foundIndex, { align: 'center', behavior: 'smooth' });
-        setHighlightedMessageId(messages[foundIndex].id);
+      const { messageIds: ids, messagesById } = useChatStore.getState();
+      const idx = ids.findIndex((id) => messagesById[id]?.sources?.some((s) => s.id === sourceId));
+      if (idx >= 0) {
+        virtualizer.scrollToIndex(idx, { align: "center", behavior: "smooth" });
+        setHighlightedMessageId(ids[idx]);
         setTimeout(() => setHighlightedMessageId(null), 1500);
       }
     };
     window.addEventListener("evidence:jump-to-answer", handler);
     return () => window.removeEventListener("evidence:jump-to-answer", handler);
-  }, [messages, virtualizer]);
+  }, [virtualizer]);
 
-  // Handle scroll events - track if user is near bottom (<100px)
+  // Page title — updates whenever active session title changes
+  const activeSessionTitle = useChatShellStore((s) => s.activeSessionTitle);
+  useEffect(() => {
+    document.title = activeSessionTitle ? `${activeSessionTitle} — RAGApp` : "RAGApp";
+    return () => { document.title = "RAGApp"; };
+  }, [activeSessionTitle]);
+
+  // Auto-focus composer on mount
+  useEffect(() => {
+    if (!document.querySelector('[role="dialog"], [role="alertdialog"]')) {
+      composerRef.current?.focus();
+    }
+  }, []);
+
   const handleScroll = () => {
-    const container = scrollRef.current;
-    if (!container) return;
-
-    const { scrollTop, scrollHeight, clientHeight } = container;
-    const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
-    const atBottom = distanceFromBottom < 150;
-
+    const el = scrollRef.current;
+    if (!el) return;
+    const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const atBottom = dist < 150;
     setIsAtBottom(atBottom);
     setShowScrollButton(!atBottom);
   };
 
-  // Scroll to bottom
   const scrollToBottom = () => {
-    if (messages.length > 0) {
-      virtualizer.scrollToIndex(messages.length - 1, { align: 'end' });
-    }
+    if (messageIds.length > 0) virtualizer.scrollToIndex(messageIds.length - 1, { align: "end" });
     setIsAtBottom(true);
     setShowScrollButton(false);
   };
 
-  // Handle suggested prompt click - sets input and focuses composer
   const handlePromptClick = (prompt: string) => {
     setInput(prompt);
-    // Focus the composer textarea after a brief delay to ensure state update
-    setTimeout(() => {
-      composerRef.current?.focus();
-    }, 0);
+    setTimeout(() => composerRef.current?.focus(), 0);
   };
 
-  // Handle navigation to documents page
-  const handleNavigateToDocuments = () => {
-    navigate('/documents');
-  };
-
-  // E-4: handleRetry streaming guard — bail immediately if streaming
-  const handleRetry = () => {
+  // Retry: find last user message, trim store, call sendDirect
+  const handleRetry = useCallback(() => {
     if (isStreaming) return;
-    const lastUserIdx = messages.map((m, i) => ({ m, i })).reverse().find(({ m }) => m.role === "user")?.i;
-    if (lastUserIdx !== undefined) {
-      setMessages(messages.slice(0, lastUserIdx));
-      setInput(messages[lastUserIdx].content);
-      handleSend();
+    const { messageIds: ids, messagesById } = useChatStore.getState();
+    let lastUserIdx = -1;
+    for (let i = ids.length - 1; i >= 0; i--) {
+      if (messagesById[ids[i]]?.role === "user") { lastUserIdx = i; break; }
     }
-  };
+    if (lastUserIdx < 0) return;
 
-  // Handle fork - create a new session branching from a specific message index
-  const handleFork = useCallback(async (messageIndex: number) => {
+    const userContent = messagesById[ids[lastUserIdx]].content;
+    const history = ids.slice(0, lastUserIdx).map((id) => messagesById[id]);
+    removeMessagesFrom(lastUserIdx);
+    sendDirect(userContent, history);
+  }, [isStreaming, removeMessagesFrom, sendDirect]);
+
+  // Edit: trim store from message index, restore content to composer
+  const handleEdit = useCallback((messageId: string, content: string) => {
+    const { messageIds: ids } = useChatStore.getState();
+    const idx = ids.indexOf(messageId);
+    if (idx < 0) return;
+    removeMessagesFrom(idx);
+    setInput(content);
+    composerRef.current?.focus();
+  }, [removeMessagesFrom, setInput]);
+
+  // Fork
+  const handleFork = useCallback(async (messageId: string) => {
     const { activeChatId } = useChatStore.getState();
     if (!activeChatId) return;
+    const { messageIds: ids } = useChatStore.getState();
+    const msgIndex = ids.indexOf(messageId);
     try {
-      const forked = await forkChatSession(parseInt(activeChatId), messageIndex);
+      const forked = await forkChatSession(parseInt(activeChatId), msgIndex);
       const forkMessages = forked.messages.map((m) => ({
         id: m.id.toString(),
         role: m.role as "user" | "assistant",
@@ -727,159 +360,108 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
     }
   }, [loadChat, refreshHistory, navigate]);
 
-  // Handle debug toggle
-  const handleDebugToggle = () => {
-    setShowDebug((prev) => !prev);
-  };
-
-  // F-2: handleEdit — trim messages from index, restore content to composer
-  const handleEdit = (messageId: string, content: string) => {
-    const messageIndex = messages.findIndex((m) => m.id === messageId);
-    if (messageIndex === -1) return;
-    setMessages(messages.slice(0, messageIndex));
-    setInput(content);
-    composerRef.current?.focus();
-  };
+  const handleFeedback = useCallback((messageId: string, feedback: "up" | "down" | null) => {
+    updateMessage(messageId, { feedback });
+  }, [updateMessage]);
 
   return (
-    <TooltipProvider>
-      <div className={cn("flex h-full flex-col", className)}>
-        {/* Message list area */}
-        <div className="relative flex-1 min-h-0 overflow-hidden">
-          <div
-            ref={scrollRef}
-            onScroll={handleScroll}
-            className="h-full overflow-y-auto"
-            aria-label="Chat messages"
-            role="log"
-            aria-live="polite"
-            aria-relevant="additions"
-          >
-            <div className="mx-auto max-w-4xl">
-              {messages.length === 0 ? (
-                <EmptyTranscript
-                  onPromptClick={handlePromptClick}
-                  hasIndexedDocs={hasIndexedDocs}
-                  onNavigateToDocuments={handleNavigateToDocuments}
-                  vaultName={activeVault?.name ?? null}
-                  documentCount={activeVault?.file_count}
-                />
-              ) : (
-                <>
-                  <div
-                    style={{
-                      height: virtualizer.getTotalSize(),
-                      width: '100%',
-                      position: 'relative',
-                    }}
-                  >
-                    {virtualizer.getVirtualItems().map((virtualItem) => {
-                    const rawMessage = messages[virtualItem.index];
-                    // Coerce Symbol/non-string ids to string for React key safety
-                    const messageId = String(rawMessage.id ?? virtualItem.index);
-                    // Coerce Symbol/non-string roles to "user" for rendering safety
-                    const messageRole = String(rawMessage.role ?? 'user');
-                    // Coerce non-string content to string to prevent React child type errors
-                    const messageContent = typeof rawMessage.content === 'string' ? rawMessage.content : String(rawMessage.content ?? '');
-                    const message = {
-                      ...rawMessage,
-                      id: messageId,
-                      role: messageRole as "user" | "assistant",
-                      content: messageContent,
-                    };
-                    const isLastMessage = virtualItem.index === messages.length - 1;
-                    const isAssistantStreaming = isStreaming && isLastMessage && message.role === "assistant";
-
-                    const isHighlighted = highlightedMessageId === messageId;
-                    const itemStyle = {
-                      position: 'absolute' as const,
-                      top: virtualItem.start,
-                      left: 0,
-                      width: '100%',
-                    };
-
-                    return (
-                      <div
-                        key={messageId}
-                        data-index={virtualItem.index}
-                        ref={virtualizer.measureElement}
-                        style={itemStyle}
-                        className={isHighlighted ? "ring-2 ring-primary/60 rounded-lg transition-all duration-500" : undefined}
-                      >
-                        {message.role === "assistant" ? (
-                          <AnimatePresence mode="wait">
-                            {isAssistantStreaming && !message.content ? (
-                              <WaitingIndicator key="waiting" />
-                            ) : (
-                              <AssistantMessage
-                                key="message"
-                                message={message}
-                                isStreaming={isAssistantStreaming}
-                                showDebug={showDebug}
-                                onCopy={undefined}
-                                onRetry={handleRetry}
-                                onDebugToggle={handleDebugToggle}
-                                onFork={!isStreaming ? () => handleFork(virtualItem.index) : undefined}
-                                sessionId={String(activeSessionId ?? "")}
-                                messageFeedback={message.feedback}
-                                onFeedback={(newFeedback) => updateMessage(message.id, { feedback: newFeedback })}
-                              />
-                            )}
-                          </AnimatePresence>
-                        ) : (
-                          <MessageBubble
-                            message={message}
-                            isStreaming={isAssistantStreaming}
-                            onFork={!isStreaming ? () => handleFork(virtualItem.index) : undefined}
-                            userInitial={userInitial}
-                            onEdit={handleEdit}
-                          />
-                        )}
-                      </div>
-                    );
-                  })}
-                  </div>
-              </>
-            )}
-            </div>
-          </div>
-
-          {/* Scroll to bottom button */}
-          <AnimatePresence>
-            {showScrollButton && (
-              <motion.div
-                initial={{ opacity: 0, scale: 0.8 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.8 }}
-                transition={{ duration: 0.15 }}
-                className="absolute bottom-4 left-1/2 -translate-x-1/2"
+    <div className={cn("flex h-full flex-col", className)}>
+      {/* Message list */}
+      <div className="relative flex-1 min-h-0 overflow-hidden">
+        <div
+          ref={scrollRef}
+          onScroll={handleScroll}
+          className="h-full overflow-y-auto scroll-smooth chat-scrollbar"
+          aria-label="Chat messages"
+          role="log"
+          aria-live="polite"
+          aria-relevant="additions"
+        >
+          {/* Width-constrained column */}
+          <div className="mx-auto w-full max-w-[760px] px-2 sm:px-4">
+            {messageIds.length === 0 ? (
+              <EmptyTranscript
+                onPromptClick={handlePromptClick}
+                hasIndexedDocs={hasIndexedDocs}
+                onNavigateToDocuments={() => navigate("/documents")}
+                vaultName={activeVault?.name ?? null}
+                documentCount={activeVault?.file_count}
+              />
+            ) : (
+              <div
+                style={{ height: virtualizer.getTotalSize(), width: "100%", position: "relative" }}
               >
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={scrollToBottom}
-                  className="h-8 gap-1.5 rounded-full px-3 shadow-lg"
-                  aria-label="Scroll to bottom"
-                >
-                  <ArrowDown className="h-3.5 w-3.5" aria-hidden="true" />
-                  <span className="text-xs">New messages</span>
-                </Button>
-              </motion.div>
+                {virtualizer.getVirtualItems().map((vItem) => {
+                  const msgId = messageIds[vItem.index];
+                  return (
+                    <div
+                      key={msgId}
+                      data-index={vItem.index}
+                      ref={virtualizer.measureElement}
+                      style={{ position: "absolute", top: vItem.start, left: 0, width: "100%" }}
+                    >
+                      <MessageRow
+                        messageId={msgId}
+                        isLast={vItem.index === messageIds.length - 1}
+                        isStreaming={isStreaming}
+                        streamingMessageId={streamingMessageId}
+                        userInitial={userInitial}
+                        activeSessionId={activeSessionId}
+                        showDebug={showDebug}
+                        highlightedId={highlightedMessageId}
+                        onRetry={handleRetry}
+                        onEdit={handleEdit}
+                        onFork={handleFork}
+                        onFeedback={handleFeedback}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
             )}
-          </AnimatePresence>
+          </div>
         </div>
 
-        {/* Composer area */}
-        <div className="border-t border-border bg-background p-4">
-          <div className="mx-auto max-w-4xl">
-            <Composer onSend={handleSend} onStop={handleStop} isStreaming={isStreaming} inputRef={composerRef} />
-          </div>
+        {/* Scroll to bottom button */}
+        <AnimatePresence>
+          {showScrollButton && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.85 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.85 }}
+              transition={{ duration: 0.12 }}
+              className="absolute bottom-4 left-1/2 -translate-x-1/2"
+            >
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={scrollToBottom}
+                className="h-8 gap-1.5 rounded-full px-3 shadow-lg border border-border"
+                aria-label="Scroll to bottom"
+              >
+                <ArrowDown className="h-3.5 w-3.5" />
+                <span className="text-xs">New messages</span>
+              </Button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
+      {/* Composer */}
+      <div className="border-t border-border bg-background/80 backdrop-blur-sm p-3 sm:p-4">
+        <div className="mx-auto w-full max-w-[760px]">
+          <Composer
+            onSend={handleSend}
+            onStop={handleStop}
+            isStreaming={isStreaming}
+            inputRef={composerRef}
+          />
         </div>
       </div>
-    </TooltipProvider>
+    </div>
   );
 }
 
-// Export individual components for flexibility
-export { Composer, EmptyTranscript };
-export type { TranscriptPaneProps, ComposerProps, EmptyTranscriptProps };
+// Export for external consumption
+export { Composer };
+export type { TranscriptPaneProps };

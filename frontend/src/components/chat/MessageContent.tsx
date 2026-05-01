@@ -1,14 +1,14 @@
-import React from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import rehypeSanitize from "rehype-sanitize";
-import { Copy, Check } from "lucide-react";
-import { Button } from "@/components/ui/button";
+// MessageContent — kept for backwards compat with tests and external code.
+// Renders markdown via MarkdownMessage plus a copy button and sources list.
+import { useState, useCallback } from "react";
+import { Check, Copy } from "lucide-react";
+import { MarkdownMessage } from "./MarkdownMessage";
+import { getRelevanceLabel, type ScoreType } from "@/lib/relevance";
+import { cn } from "@/lib/utils";
 import type { Source } from "@/lib/api";
-import { getRelevanceLabel } from "@/lib/relevance";
 
-const REMARK_PLUGINS = [remarkGfm];
-const REHYPE_PLUGINS = [rehypeSanitize];
+// Re-export for consumers that import from here
+export { MarkdownMessage as MemoizedMarkdown };
 
 interface MessageContentProps {
   content: string;
@@ -16,92 +16,59 @@ interface MessageContentProps {
   isStreaming?: boolean;
 }
 
-const escapeHtml = (unsafe: string): string => {
-  return unsafe
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
-};
-
-interface MemoizedMarkdownProps {
-  content: string;
-  isStreaming?: boolean;
-}
-
-const MemoizedMarkdown = React.memo<MemoizedMarkdownProps>(
-  function MemoizedMarkdown({ content, isStreaming }) {
-    return (
-      <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:font-semibold prose-headings:mt-4 prose-headings:mb-1 prose-strong:font-medium prose-p:leading-relaxed prose-p:mb-3 prose-p:mt-0 prose-li:my-0.5 prose-ul:my-2 prose-ol:my-2 prose-code:bg-primary/10 prose-code:text-primary prose-code:rounded prose-code:px-1 prose-code:py-0.5 dark:prose-code:bg-primary/20">
-        <ReactMarkdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS}>{content}</ReactMarkdown>
-        {isStreaming && (
-          <span className="inline-block w-2 h-4 ml-1 bg-foreground animate-pulse" role="status" aria-live="polite" aria-label="Message streaming" />
-        )}
-      </div>
-    );
-});
-
-export { MemoizedMarkdown };
-
 export function MessageContent({ content, sources, isStreaming }: MessageContentProps) {
-  const [copied, setCopied] = React.useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
 
-  const handleCopy = async () => {
-    if (!navigator.clipboard) {
-      return; // Silently fail - clipboard not available
+  const handleCopy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopyState("copied");
+      setTimeout(() => setCopyState("idle"), 2000);
+    } catch {
+      // ignore
     }
-    await navigator.clipboard.writeText(content);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
+  }, [content]);
 
   return (
-    <div className="relative group">
-      <MemoizedMarkdown content={content} isStreaming={isStreaming} />
+    <div>
+      <MarkdownMessage content={content} isStreaming={isStreaming} />
+
+      <button
+        type="button"
+        onClick={handleCopy}
+        className="mt-2 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+        aria-label={copyState === "copied" ? "Copied to clipboard" : "Copy message"}
+      >
+        {copyState === "copied" ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+        {copyState === "copied" ? "Copied" : "Copy"}
+      </button>
 
       {sources && sources.length > 0 && (
-        <div className="mt-4 pt-4 border-t border-border">
-          <p className="text-sm font-semibold mb-2 text-muted-foreground">Sources</p>
-          <div className="space-y-2">
-            {sources.map((source, index) => (
-              <div
-                key={source.id}
-                className="text-xs p-2 rounded-md bg-muted/50 border border-border"
-              >
-                <div className="flex items-center justify-between">
-                  <span className="font-medium">{source.filename}</span>
-                  {source.score !== undefined && (
-                    <span className="text-xs text-muted-foreground">
-                      #{index + 1} · {getRelevanceLabel(source.score, source.score_type).text}
-                    </span>
+        <div className="mt-3 border-t border-border pt-3">
+          <p className="text-xs font-medium text-muted-foreground mb-2">Sources</p>
+          <ul className="space-y-1.5">
+            {sources.map((source, i) => {
+              const relevance = source.score !== undefined
+                ? getRelevanceLabel(source.score, source.score_type as ScoreType)
+                : null;
+              return (
+                <li key={source.id} className="text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className="text-muted-foreground font-mono">#{i + 1}</span>
+                    <span className="font-medium truncate">{source.filename}</span>
+                    {relevance && (
+                      <span className={cn("text-[10px]", relevance.color)}>{relevance.text}</span>
+                    )}
+                  </div>
+                  {source.snippet && (
+                    <p className="text-muted-foreground mt-0.5 pl-5 leading-relaxed">{source.snippet}</p>
                   )}
-                </div>
-                {source.snippet && (
-                  <p
-                    className="mt-1 text-muted-foreground line-clamp-2"
-                    dangerouslySetInnerHTML={{ __html: escapeHtml(source.snippet) }}
-                  />
-                )}
-              </div>
-            ))}
-          </div>
+                </li>
+              );
+            })}
+          </ul>
         </div>
       )}
-
-      <Button
-        variant="ghost"
-        size="icon"
-        className="absolute -right-10 top-0 opacity-40 hover:opacity-100 focus-visible:opacity-100 transition-opacity"
-        onClick={handleCopy}
-        aria-label={copied ? "Copied to clipboard" : "Copy message to clipboard"}
-      >
-        {copied ? (
-          <Check className="h-4 w-4 text-success" />
-        ) : (
-          <Copy className="h-4 w-4" />
-        )}
-      </Button>
     </div>
   );
 }

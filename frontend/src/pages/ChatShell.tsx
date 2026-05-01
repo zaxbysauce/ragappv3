@@ -3,7 +3,7 @@ import { useParams } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { getChatSession } from "@/lib/api";
 import { useChatShellStore } from "@/stores/useChatShellStore";
-import { useChatStore, type Message } from "@/stores/useChatStore";
+import { useChatMessages, useChatStore, type Message } from "@/stores/useChatStore";
 import { SessionRail } from "@/components/chat/SessionRail";
 import { TranscriptPane } from "@/components/chat/TranscriptPane";
 import { RightPane } from "@/components/chat/RightPane";
@@ -59,7 +59,7 @@ export default function ChatShell() {
   // NOT suppress the fixed inset-0 bg-black/40 overlay — it would dim the whole
   // desktop layout whenever rightPaneOpen flips true on lg+ widths.
   const isBelowLg = useIsMobile(1024);
-  const messages = useChatStore((s) => s.messages);
+  const messages = useChatMessages();
   const { open: shortcutsOpen, setOpen: setShortcutsOpen } = useKeyboardShortcuts();
   // Mobile Sheet uses its own state, toggled by the same button
   const [mobileSheetOpen, setMobileSheetOpen] = useState(false);

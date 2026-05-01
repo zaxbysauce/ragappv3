@@ -20,9 +20,17 @@ vi.mock("@tanstack/react-virtual", () => ({
 }));
 
 // Mock the stores
-vi.mock("@/stores/useChatStore", () => ({
-  useChatStore: vi.fn(),
-}));
+vi.mock("@/stores/useChatStore", () => {
+  const useChatStoreMock = vi.fn();
+  const useChatMessagesMock = vi.fn(() => {
+    const state = useChatStoreMock();
+    return state?.messages ?? [];
+  });
+  return {
+    useChatStore: useChatStoreMock,
+    useChatMessages: useChatMessagesMock,
+  };
+});
 
 vi.mock("@/stores/useChatShellStore", () => ({
   useChatShellStore: vi.fn(),

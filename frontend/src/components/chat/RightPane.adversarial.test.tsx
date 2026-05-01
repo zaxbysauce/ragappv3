@@ -26,7 +26,17 @@ global.dispatchEvent = mockDispatchEvent;
 // MOCKS
 // =============================================================================
 
-vi.mock("@/stores/useChatStore");
+vi.mock("@/stores/useChatStore", () => {
+  const useChatStoreMock = vi.fn();
+  const useChatMessagesMock = vi.fn(() => {
+    const state = useChatStoreMock();
+    return state?.messages ?? [];
+  });
+  return {
+    useChatStore: useChatStoreMock,
+    useChatMessages: useChatMessagesMock,
+  };
+});
 vi.mock("@/stores/useChatShellStore", () => ({
   useChatShellStore: vi.fn(() => ({
     selectedEvidenceSource: null,
@@ -120,7 +130,7 @@ describe("RightPane ADVERSARIAL TESTS", () => {
       render(<RightPane />);
 
       await waitFor(() => {
-        expect(screen.getByText("Details")).toBeInTheDocument();
+        expect(screen.getByText("Evidence")).toBeInTheDocument();
       });
 
       // No script elements should be created
@@ -149,7 +159,7 @@ describe("RightPane ADVERSARIAL TESTS", () => {
       render(<RightPane />);
 
       await waitFor(() => {
-        expect(screen.getByText("Details")).toBeInTheDocument();
+        expect(screen.getByText("Evidence")).toBeInTheDocument();
       });
 
       expect(document.querySelector("script")).toBeNull();
@@ -222,7 +232,7 @@ describe("RightPane ADVERSARIAL TESTS", () => {
       }).not.toThrow();
 
       await waitFor(() => {
-        expect(screen.getByText("Details")).toBeInTheDocument();
+        expect(screen.getByText("Evidence")).toBeInTheDocument();
       });
     });
 
@@ -254,7 +264,7 @@ describe("RightPane ADVERSARIAL TESTS", () => {
       render(<RightPane />);
 
       await waitFor(() => {
-        expect(screen.getByText("Details")).toBeInTheDocument();
+        expect(screen.getByText("Evidence")).toBeInTheDocument();
       });
 
       // Should render without error
@@ -327,7 +337,7 @@ describe("RightPane ADVERSARIAL TESTS", () => {
       render(<RightPane />);
 
       await waitFor(() => {
-        expect(screen.getByText("Details")).toBeInTheDocument();
+        expect(screen.getByText("Evidence")).toBeInTheDocument();
       });
 
       // Should still render
@@ -364,7 +374,7 @@ describe("RightPane ADVERSARIAL TESTS", () => {
       render(<RightPane />);
 
       await waitFor(() => {
-        expect(screen.getByText("Details")).toBeInTheDocument();
+        expect(screen.getByText("Evidence")).toBeInTheDocument();
       });
 
       // Filename should be truncated
@@ -430,7 +440,7 @@ And more content.
       render(<RightPane />);
 
       await waitFor(() => {
-        expect(screen.getByText("Details")).toBeInTheDocument();
+        expect(screen.getByText("Evidence")).toBeInTheDocument();
       });
 
       // Should render extracted tab
@@ -453,7 +463,7 @@ And more content.
       render(<RightPane />);
 
       await waitFor(() => {
-        expect(screen.getByText("Details")).toBeInTheDocument();
+        expect(screen.getByText("Evidence")).toBeInTheDocument();
       });
 
       // Click on Extracted tab to see the outputs
@@ -465,7 +475,7 @@ And more content.
       });
 
       // Should have extracted items (may be truncated)
-      expect(screen.getByText("Details")).toBeInTheDocument();
+      expect(screen.getByText("Evidence")).toBeInTheDocument();
     });
 
     it("should handle code blocks with very long lines (10000 chars)", async () => {
@@ -499,7 +509,7 @@ And more content.
       render(<RightPane />);
 
       await waitFor(() => {
-        expect(screen.getByText("Details")).toBeInTheDocument();
+        expect(screen.getByText("Evidence")).toBeInTheDocument();
       });
     });
 
@@ -548,7 +558,7 @@ double closed
         expect(screen.getByText("No sources yet")).toBeInTheDocument();
       });
 
-      expect(screen.getByText("Details")).toBeInTheDocument();
+      expect(screen.getByText("Evidence")).toBeInTheDocument();
     });
 
     it("should show empty state when sources is null", async () => {
@@ -629,7 +639,7 @@ double closed
       render(<RightPane />);
 
       await waitFor(() => {
-        expect(screen.getByText("Details")).toBeInTheDocument();
+        expect(screen.getByText("Evidence")).toBeInTheDocument();
       });
     });
 
@@ -661,7 +671,7 @@ double closed
       render(<RightPane />);
 
       await waitFor(() => {
-        expect(screen.getByText("Details")).toBeInTheDocument();
+        expect(screen.getByText("Evidence")).toBeInTheDocument();
       });
     });
 
@@ -693,7 +703,7 @@ double closed
       render(<RightPane />);
 
       await waitFor(() => {
-        expect(screen.getByText("Details")).toBeInTheDocument();
+        expect(screen.getByText("Evidence")).toBeInTheDocument();
       });
     });
 
@@ -740,7 +750,7 @@ double closed
       render(<RightPane />);
 
       await waitFor(() => {
-        expect(screen.getByText("Details")).toBeInTheDocument();
+        expect(screen.getByText("Evidence")).toBeInTheDocument();
       });
     });
 
@@ -783,7 +793,7 @@ Check this code:
       render(<RightPane />);
 
       await waitFor(() => {
-        expect(screen.getByText("Details")).toBeInTheDocument();
+        expect(screen.getByText("Evidence")).toBeInTheDocument();
       });
 
       // No script execution in extracted content
@@ -808,7 +818,7 @@ const template = \`\${document.cookie}\`;
       render(<RightPane />);
 
       await waitFor(() => {
-        expect(screen.getByText("Details")).toBeInTheDocument();
+        expect(screen.getByText("Evidence")).toBeInTheDocument();
       });
 
       expect(document.querySelector("script")).toBeNull();
@@ -854,7 +864,7 @@ SELECT * FROM users WHERE id = 1; DROP TABLE users;--
       render(<RightPane />);
 
       await waitFor(() => {
-        expect(screen.getByText("Details")).toBeInTheDocument();
+        expect(screen.getByText("Evidence")).toBeInTheDocument();
       });
 
       // Should render as extracted content
@@ -924,7 +934,7 @@ Normal text
       render(<RightPane />);
 
       await waitFor(() => {
-        expect(screen.getByText("Details")).toBeInTheDocument();
+        expect(screen.getByText("Evidence")).toBeInTheDocument();
       });
     });
   });
@@ -1006,7 +1016,7 @@ Normal text
       render(<RightPane />);
 
       await waitFor(() => {
-        expect(screen.getByText("Details")).toBeInTheDocument();
+        expect(screen.getByText("Evidence")).toBeInTheDocument();
       });
 
       // Both sources should be in DOM
@@ -1028,7 +1038,7 @@ Normal text
       render(<RightPane />);
 
       await waitFor(() => {
-        expect(screen.getByText("Details")).toBeInTheDocument();
+        expect(screen.getByText("Evidence")).toBeInTheDocument();
       });
 
       // Get all source buttons and click them rapidly
@@ -1039,7 +1049,7 @@ Normal text
         fireEvent.click(button);
       }
 
-      expect(screen.getByText("Details")).toBeInTheDocument();
+      expect(screen.getByText("Evidence")).toBeInTheDocument();
     });
 
     it("should handle tab switching rapidly", async () => {
@@ -1063,7 +1073,7 @@ Normal text
         fireEvent.click(i % 2 === 0 ? sourcesTab : extractedTab);
       }
 
-      expect(screen.getByText("Details")).toBeInTheDocument();
+      expect(screen.getByText("Evidence")).toBeInTheDocument();
     });
 
     it("should handle source with circular reference", async () => {
@@ -1117,7 +1127,7 @@ Normal text
       render(<RightPane />);
 
       await waitFor(() => {
-        expect(screen.getByText("Details")).toBeInTheDocument();
+        expect(screen.getByText("Evidence")).toBeInTheDocument();
       });
     });
 
@@ -1153,7 +1163,7 @@ Normal text
       render(<RightPane />);
 
       await waitFor(() => {
-        expect(screen.getByText("Details")).toBeInTheDocument();
+        expect(screen.getByText("Evidence")).toBeInTheDocument();
       });
     });
 
@@ -1225,7 +1235,7 @@ Normal text
       render(<RightPane />);
 
       await waitFor(() => {
-        expect(screen.getByText("Details")).toBeInTheDocument();
+        expect(screen.getByText("Evidence")).toBeInTheDocument();
       });
 
       // Should show count in tab

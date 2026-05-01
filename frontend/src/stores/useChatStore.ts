@@ -13,8 +13,11 @@ export interface Message {
 }
 
 export interface ChatState {
-  // State
-  messages: Message[];
+  // Normalized message storage — O(1) streaming updates on the active message
+  messageIds: string[];
+  messagesById: Record<string, Message>;
+  streamingMessageId: string | null;
+
   input: string;
   isStreaming: boolean;
   abortFn: (() => void) | null;
@@ -23,12 +26,16 @@ export interface ChatState {
   activeChatId: string | null;
 
   // Actions
-  setMessages: (messages: Message[] | ((prev: Message[]) => Message[])) => void;
   addMessage: (message: Message) => void;
+  /** Fast streaming path: appends a chunk to content without replacing the full array. */
+  appendToMessage: (id: string, chunk: string) => void;
   updateMessage: (id: string, updates: Partial<Message>) => void;
+  /** Trim messages array at the given index (exclusive). */
+  removeMessagesFrom: (index: number) => void;
   clearMessages: () => void;
   setInput: (input: string) => void;
   setIsStreaming: (isStreaming: boolean) => void;
+  setStreamingMessageId: (id: string | null) => void;
   setAbortFn: (abortFn: (() => void) | null) => void;
   setInputError: (error: string | null) => void;
   toggleSource: (sourceId: string) => void;
@@ -36,11 +43,15 @@ export interface ChatState {
   stopStreaming: () => void;
   loadChat: (chatId: string, messages: Message[]) => void;
   newChat: () => void;
+
+  // Legacy compat — converts array to/from normalized shape
+  setMessages: (messages: Message[] | ((prev: Message[]) => Message[])) => void;
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
-  // Initial state
-  messages: [],
+  messageIds: [],
+  messagesById: {},
+  streamingMessageId: null,
   input: "",
   isStreaming: false,
   abortFn: null,
@@ -48,46 +59,59 @@ export const useChatStore = create<ChatState>((set, get) => ({
   expandedSources: new Set(),
   activeChatId: null,
 
-  // Actions
-  setMessages: (messages) => {
-    if (typeof messages === "function") {
-      set((state) => ({ messages: messages(state.messages) }));
-    } else {
-      set({ messages });
-    }
-  },
-
   addMessage: (message) => {
-    set((state) => ({ messages: [...state.messages, message] }));
-  },
-
-  updateMessage: (id, updates) => {
     set((state) => ({
-      messages: state.messages.map((msg) =>
-        msg.id === id ? { ...msg, ...updates } : msg
-      ),
+      messageIds: [...state.messageIds, message.id],
+      messagesById: { ...state.messagesById, [message.id]: message },
     }));
   },
 
+  appendToMessage: (id, chunk) => {
+    set((state) => {
+      const msg = state.messagesById[id];
+      if (!msg) return state;
+      return {
+        messagesById: {
+          ...state.messagesById,
+          [id]: { ...msg, content: msg.content + chunk },
+        },
+      };
+    });
+  },
+
+  updateMessage: (id, updates) => {
+    set((state) => {
+      const msg = state.messagesById[id];
+      if (!msg) return state;
+      return {
+        messagesById: {
+          ...state.messagesById,
+          [id]: { ...msg, ...updates },
+        },
+      };
+    });
+  },
+
+  removeMessagesFrom: (index) => {
+    set((state) => {
+      const newIds = state.messageIds.slice(0, index);
+      const newById: Record<string, Message> = {};
+      for (const id of newIds) {
+        if (state.messagesById[id]) newById[id] = state.messagesById[id];
+      }
+      return { messageIds: newIds, messagesById: newById };
+    });
+  },
+
   clearMessages: () => {
-    set({ messages: [], expandedSources: new Set(), activeChatId: null });
+    set({ messageIds: [], messagesById: {}, expandedSources: new Set(), activeChatId: null, streamingMessageId: null });
   },
 
-  setInput: (input) => {
-    set({ input });
-  },
-
-  setIsStreaming: (isStreaming) => {
-    set({ isStreaming });
-  },
-
-  setAbortFn: (abortFn) => {
-    set({ abortFn });
-  },
-
-  setInputError: (inputError) => {
-    set({ inputError });
-  },
+  setInput: (input) => set({ input }),
+  setIsStreaming: (isStreaming) => set({ isStreaming }),
+  setStreamingMessageId: (streamingMessageId) => set({ streamingMessageId }),
+  setAbortFn: (abortFn) => set({ abortFn }),
+  setInputError: (inputError) => set({ inputError }),
 
   toggleSource: (sourceId) => {
     set((state) => {
@@ -106,37 +130,61 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   stopStreaming: () => {
-    const { abortFn } = get();
-    if (abortFn) {
-      abortFn();
-      set({ abortFn: null, isStreaming: false });
-      // Mark the last assistant message as stopped
-      set((state) => {
-        const lastMessage = state.messages[state.messages.length - 1];
-        if (lastMessage && lastMessage.role === "assistant") {
-          return {
-            messages: state.messages.map((msg, idx) =>
-              idx === state.messages.length - 1 ? { ...msg, stopped: true } : msg
-            ),
-          };
-        }
-        return state;
-      });
+    const { abortFn, messageIds, messagesById, streamingMessageId } = get();
+    if (abortFn) abortFn();
+
+    const updates: Partial<ChatState> = {
+      abortFn: null,
+      isStreaming: false,
+      streamingMessageId: null,
+    };
+
+    const targetId = streamingMessageId ?? messageIds[messageIds.length - 1];
+    if (targetId) {
+      const lastMsg = messagesById[targetId];
+      if (lastMsg && lastMsg.role === "assistant") {
+        updates.messagesById = {
+          ...messagesById,
+          [targetId]: { ...lastMsg, stopped: true },
+        };
+      }
     }
+    set(updates);
   },
 
   loadChat: (chatId, messages) => {
-    set({ activeChatId: chatId, messages: messages, expandedSources: new Set() });
+    const messageIds = messages.map((m) => m.id);
+    const messagesById: Record<string, Message> = {};
+    for (const m of messages) messagesById[m.id] = m;
+    set({ activeChatId: chatId, messageIds, messagesById, expandedSources: new Set(), streamingMessageId: null });
   },
 
   newChat: () => {
-    set({ activeChatId: null, messages: [], expandedSources: new Set() });
+    set({ activeChatId: null, messageIds: [], messagesById: {}, expandedSources: new Set(), streamingMessageId: null });
+  },
+
+  setMessages: (messages) => {
+    const current = get();
+    const resolved =
+      typeof messages === "function"
+        ? messages(current.messageIds.map((id) => current.messagesById[id]))
+        : messages;
+    const newIds = resolved.map((m) => m.id);
+    const newById: Record<string, Message> = {};
+    for (const m of resolved) newById[m.id] = m;
+    set({ messageIds: newIds, messagesById: newById });
   },
 }));
 
-// H-27: Granular selectors to avoid unnecessary re-renders
-export const useChatMessages = () => useChatStore((s) => s.messages);
+// Selectors — use granular selectors to limit re-renders
+export const useMessageIds = () => useChatStore((s) => s.messageIds);
+/** Subscribe to a single message by ID — streaming rows only re-render for their own message. */
+export const useMessage = (id: string) => useChatStore((s) => s.messagesById[id]);
+/** Legacy: full messages array. Triggers re-render when any message changes. */
+export const useChatMessages = () =>
+  useChatStore((s) => s.messageIds.map((id) => s.messagesById[id]));
 export const useChatInput = () => useChatStore((s) => s.input);
 export const useChatIsStreaming = () => useChatStore((s) => s.isStreaming);
 export const useChatInputError = () => useChatStore((s) => s.inputError);
 export const useChatActiveChatId = () => useChatStore((s) => s.activeChatId);
+export const useChatStreamingId = () => useChatStore((s) => s.streamingMessageId);

@@ -10,6 +10,7 @@
  */
 
 /* Google Fonts — preloaded via <link> in index.html for non-blocking load */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -123,7 +124,8 @@
   
   body {
     @apply bg-background text-foreground antialiased;
-    font-family: 'Spline Sans', system-ui, sans-serif;
+    /* Premium UI font stack: Inter → system-ui fallback */
+    font-family: 'Inter', 'Spline Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
     
     /* Subtle gradient background */
     background: linear-gradient(
@@ -181,6 +183,85 @@
   }
 }
 
+/* =============================================================================
+   Custom scrollbar — subtle and consistent across panes
+   ============================================================================= */
+@layer utilities {
+  .chat-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+  .chat-scrollbar::-webkit-scrollbar {
+    width: 5px;
+  }
+  .chat-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .chat-scrollbar::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 9999px;
+  }
+  .chat-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.4);
+  }
+}
+
+/* =============================================================================
+   Streaming caret — custom blinking cursor shown at end of streaming text
+   ============================================================================= */
+@layer utilities {
+  .streaming-caret {
+    display: inline-block;
+    width: 2px;
+    height: 1.1em;
+    margin-left: 2px;
+    vertical-align: text-bottom;
+    background-color: hsl(var(--primary));
+    border-radius: 1px;
+    animation: caret-blink 1s step-end infinite;
+  }
+}
+
+@keyframes caret-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+/* =============================================================================
+   Shiki code block theme overrides — transparent background so our own
+   container controls the surface color in both light and dark modes.
+   ============================================================================= */
+@layer base {
+  .shiki-wrapper pre {
+    background: transparent !important;
+    margin: 0 !important;
+  }
+  .shiki-wrapper code {
+    font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', 'Fira Code', ui-monospace, 'Courier New', monospace;
+    font-size: 0.8125rem;
+    line-height: 1.6;
+  }
+
+  /* Headings inside chat message prose use sans-serif, not the site serif */
+  .prose h1, .prose h2, .prose h3, .prose h4, .prose h5, .prose h6 {
+    font-family: 'Inter', 'Spline Sans', system-ui, sans-serif;
+    font-weight: 600;
+  }
+
+  code, pre, .font-mono {
+    font-family: 'Geist Mono', 'JetBrains Mono', 'Cascadia Code', ui-monospace, 'Courier New', monospace;
+  }
+}
+
+/* =============================================================================
+   Active press micro-interaction
+   ============================================================================= */
+@layer base {
+  button {
+    transition: transform 0.07s ease;
+  }
+}
+
 /* Respect user motion preferences */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
@@ -188,5 +269,9 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+  .streaming-caret {
+    animation: none !important;
+    opacity: 1 !important;
   }
 }

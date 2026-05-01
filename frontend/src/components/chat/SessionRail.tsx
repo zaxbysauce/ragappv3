@@ -42,14 +42,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { toast } from "sonner";
 import {
   listChatSessions,
@@ -254,7 +246,6 @@ export const SessionItem = forwardRef<HTMLDivElement, SessionItemProps>(
   ) {
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(session.title || "");
-  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const displayTitle = session.title || "Untitled";
@@ -291,11 +282,6 @@ export const SessionItem = forwardRef<HTMLDivElement, SessionItemProps>(
     },
     [handleSaveEdit, handleCancelEdit]
   );
-
-  const handleDeleteConfirm = useCallback(() => {
-    onDelete();
-    setShowDeleteDialog(false);
-  }, [onDelete]);
 
   // Focus input when editing starts
   useEffect(() => {
@@ -464,7 +450,7 @@ export const SessionItem = forwardRef<HTMLDivElement, SessionItemProps>(
                     className="h-7 w-7 text-destructive hover:text-destructive"
                     onClick={(e) => {
                       e.stopPropagation();
-                      setShowDeleteDialog(true);
+                      onDelete();
                     }}
                     aria-label="Delete session"
                   >
@@ -521,7 +507,7 @@ export const SessionItem = forwardRef<HTMLDivElement, SessionItemProps>(
                   <DropdownMenuItem
                     onClick={(e) => {
                       e.stopPropagation();
-                      setShowDeleteDialog(true);
+                      onDelete();
                     }}
                     className="text-destructive focus:text-destructive"
                   >
@@ -535,26 +521,6 @@ export const SessionItem = forwardRef<HTMLDivElement, SessionItemProps>(
         )}
       </div>
 
-      {/* Delete Confirmation Dialog */}
-      <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
-        <DialogContent aria-labelledby="delete-session-title" aria-describedby="delete-session-desc">
-          <DialogHeader>
-            <DialogTitle id="delete-session-title">Delete Session</DialogTitle>
-            <DialogDescription id="delete-session-desc">
-              Are you sure you want to delete &quot;{displayTitle}&quot;? This action cannot
-              be undone.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowDeleteDialog(false)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={handleDeleteConfirm}>
-              Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </>
   );
 });
@@ -728,6 +694,8 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [focusedSessionIndex, setFocusedSessionIndex] = useState(0);
+  // Tracks pending (delayed) delete timers so Undo can cancel them
+  const pendingDeletesRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
 
   // H-7 fix: Debounce search to avoid firing API calls per keystroke
   const [debouncedSearchQuery] = useDebounce(sessionSearchQuery, 300);
@@ -894,28 +862,63 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
     []
   );
 
-  // Handle delete with API call
+  // Handle delete with optimistic UI removal + 5-second undo window.
+  // The actual API call is delayed until the undo window expires. If the user
+  // clicks Undo, the timer is cancelled and the session is restored — the
+  // backend is never called, so there is nothing to restore server-side.
   const handleSessionDelete = useCallback(
-    async (session: ChatSession) => {
-      try {
-        await deleteChatSession(session.id);
-        // Invalidate cache so next fetch gets fresh data
-        _sessionCache.ts = 0;
-        // Remove from local list
-        setSessions((prev) => prev.filter((s) => s.id !== session.id));
-        // Unpin if it was pinned
-        if (isSessionPinned(session.id)) {
-          togglePinSession(session.id);
-        }
-        // Navigate away if it was the active session
-        if (String(session.id) === activeSessionId) {
-          setActiveSessionId(null);
-          navigate("/chat");
-        }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "Failed to delete session";
-        setError(message);
+    (session: ChatSession) => {
+      // Optimistic removal
+      setSessions((prev) => prev.filter((s) => s.id !== session.id));
+      const wasActive = String(session.id) === activeSessionId;
+      if (wasActive) {
+        setActiveSessionId(null);
+        navigate("/chat");
       }
+
+      const timer = setTimeout(async () => {
+        pendingDeletesRef.current.delete(session.id);
+        try {
+          await deleteChatSession(session.id);
+          _sessionCache.ts = 0;
+          if (isSessionPinned(session.id)) togglePinSession(session.id);
+        } catch (err) {
+          // Hard delete failed — restore session in UI and show error
+          setSessions((prev) =>
+            [...prev, session].sort(
+              (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+            )
+          );
+          const msg = err instanceof Error ? err.message : "Failed to delete session";
+          toast.error("Could not delete session. It has been restored.", { description: msg });
+        }
+      }, 5000);
+
+      pendingDeletesRef.current.set(session.id, timer);
+
+      toast(`"${session.title || "Untitled"}" deleted`, {
+        action: {
+          label: "Undo",
+          onClick: () => {
+            const t = pendingDeletesRef.current.get(session.id);
+            if (t !== undefined) {
+              clearTimeout(t);
+              pendingDeletesRef.current.delete(session.id);
+            }
+            // Restore session in UI
+            setSessions((prev) =>
+              [...prev, session].sort(
+                (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+              )
+            );
+            if (wasActive) {
+              setActiveSessionId(String(session.id));
+              navigate(`/chat/${session.id}`);
+            }
+          },
+        },
+        duration: 5000,
+      });
     },
     [activeSessionId, isSessionPinned, navigate, setActiveSessionId, togglePinSession]
   );

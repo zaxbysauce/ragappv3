@@ -8,9 +8,17 @@ import * as useChatStoreModule from "@/stores/useChatStore";
 import * as useChatShellStoreModule from "@/stores/useChatStore";
 
 // Mock the stores
-vi.mock("@/stores/useChatStore", () => ({
-  useChatStore: vi.fn(),
-}));
+vi.mock("@/stores/useChatStore", () => {
+  const useChatStoreMock = vi.fn();
+  const useChatMessagesMock = vi.fn(() => {
+    const state = useChatStoreMock();
+    return state?.messages ?? [];
+  });
+  return {
+    useChatStore: useChatStoreMock,
+    useChatMessages: useChatMessagesMock,
+  };
+});
 
 vi.mock("@/stores/useChatShellStore", () => ({
   useChatShellStore: vi.fn(() => ({
@@ -99,7 +107,7 @@ describe("RightPane", () => {
   // SCENARIO 1: RightPane renders Evidence tab by default
   // =============================================================================
   describe("renders Evidence tab by default", () => {
-    it("should show Details header and Sources tab by default", () => {
+    it("should show Evidence header and Sources tab by default", () => {
       mockUseChatStore.mockReturnValue({
         messages: [],
         expandedSources: new Set(),
@@ -107,7 +115,7 @@ describe("RightPane", () => {
 
       render(<RightPane />);
 
-      expect(screen.getByText("Details")).toBeInTheDocument();
+      expect(screen.getByText("Evidence")).toBeInTheDocument();
       expect(screen.getByText("Sources")).toBeInTheDocument();
     });
 
