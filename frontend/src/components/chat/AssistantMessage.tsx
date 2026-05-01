@@ -2,7 +2,7 @@
 // Business logic implementation for assistant message display with citations
 
 import { useState, useMemo, useCallback, useEffect } from "react";
-import { motion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 import { Bot, Copy, Check, RotateCcw, Bug, FileText, ThumbsUp, ThumbsDown, AlertCircle, GitBranch } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -583,6 +583,7 @@ export function AssistantMessage({
 }: AssistantMessageProps) {
   const [isDebugActive, setIsDebugActive] = useState(false);
   const { openRightPane, setSelectedEvidenceSource, setActiveRightTab } = useChatShellStore();
+  const prefersReducedMotion = useReducedMotion();
 
   // Parse citations from message content
   const { segments, citedSources } = useMemo(() => {
@@ -712,9 +713,9 @@ export function AssistantMessage({
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3 }}
+      initial={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, y: 10 }}
+      animate={prefersReducedMotion ? { opacity: 1 } : { opacity: 1, y: 0 }}
+      transition={{ duration: prefersReducedMotion ? 0.1 : 0.3 }}
       className="flex gap-3 p-4 bg-muted/30 group"
       role="article"
       aria-label="Assistant message"
@@ -735,7 +736,7 @@ export function AssistantMessage({
         </div>
 
         {/* Message Body */}
-        <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:font-semibold prose-headings:mt-4 prose-headings:mb-1 prose-strong:font-medium prose-p:leading-relaxed prose-p:mb-3 prose-p:mt-0 prose-li:my-0.5 prose-ul:my-2 prose-ol:my-2 prose-code:bg-primary/10 prose-code:text-primary prose-code:rounded prose-code:px-1 prose-code:py-0.5">
+        <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:font-semibold prose-headings:mt-4 prose-headings:mb-1 prose-strong:font-medium prose-p:leading-relaxed prose-p:mb-3 prose-p:mt-0 prose-li:my-0.5 prose-ul:my-2 prose-ol:my-2 prose-code:bg-primary/10 prose-code:text-primary prose-code:rounded prose-code:px-1 prose-code:py-0.5 dark:prose-code:bg-primary/20">
           {renderedContent}
           {isStreaming && (
             <span className="inline-block w-2 h-4 ml-1 bg-foreground animate-pulse" />
