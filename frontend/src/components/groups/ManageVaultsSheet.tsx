@@ -71,7 +71,7 @@ export function ManageVaultsSheet({
 
   // Initialise access map from current group vault permissions
   useEffect(() => {
-    if (open && groupVaults.length >= 0) {
+    if (open && groupVaults.length > 0) {
       const map = new Map<number, string>();
       for (const gv of groupVaults) {
         map.set(gv.id, gv.permission ?? "read");

@@ -6,7 +6,7 @@ from collections.abc import Callable
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.api.deps import (
     MultipleOrgError,
@@ -86,6 +86,7 @@ class VaultAccessItem(BaseModel):
     vault_id: int
     permission: str = "read"
 
+    @field_validator("permission")
     @classmethod
     def validate_permission(cls, v: str) -> str:
         if v not in ("read", "write", "admin"):

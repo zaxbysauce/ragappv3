@@ -616,6 +616,18 @@ async def delete_user(
                 status_code=400, detail="Cannot delete your own account"
             )
 
+        # Prevent orphaning organizations by deleting their sole owner
+        cursor = conn.execute(
+            "SELECT org_id FROM org_members WHERE user_id = ? AND role = 'owner'",
+            (user_id,),
+        )
+        owned_orgs = [row[0] for row in cursor.fetchall()]
+        if owned_orgs:
+            raise HTTPException(
+                status_code=400,
+                detail=f"User owns organization(s) {owned_orgs}. Transfer ownership before deleting.",
+            )
+
         if target_role == "superadmin":
             # Atomic guard: only delete if there are other active superadmins
             cursor.execute(

@@ -427,7 +427,7 @@ const handleCreateUser = async () => {
  toast.error("Password must contain at least 1 digit");
  return;
  }
- if (createPassword !== createPassword.trim()) {
+ if (!createPassword.trim()) {
  toast.error("Password cannot be only whitespace");
  return;
  }

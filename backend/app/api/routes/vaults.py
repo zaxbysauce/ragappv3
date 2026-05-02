@@ -224,7 +224,7 @@ async def create_vault(
             )
         # If user has no org, target_org_id remains None (global vault)
 
-    # If org_id provided or inferred, validate it exists
+    # If org_id provided or inferred, validate it exists and caller is a member
     if target_org_id is not None:
         cursor = await asyncio.to_thread(
             conn.execute,
@@ -236,6 +236,18 @@ async def create_vault(
                 status_code=400,
                 detail=f"Organization {target_org_id} not found",
             )
+        # Non-superadmins may only create vaults in organizations they belong to
+        if user.get("role") != "superadmin":
+            cursor = await asyncio.to_thread(
+                conn.execute,
+                "SELECT 1 FROM org_members WHERE org_id = ? AND user_id = ?",
+                (target_org_id, user["id"]),
+            )
+            if not await asyncio.to_thread(cursor.fetchone):
+                raise HTTPException(
+                    status_code=403,
+                    detail="You are not a member of that organization",
+                )
 
     # Insert vault row — IntegrityError here means duplicate name
     try:

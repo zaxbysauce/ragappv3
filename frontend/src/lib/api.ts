@@ -1231,11 +1231,6 @@ export async function listAllUsers(): Promise<UserListItem[]> {
   return response.data.users;
 }
 
-export async function getGroupVaultIds(groupId: number): Promise<number[]> {
-  const response = await apiClient.get<{ id: number; name: string }[]>(`/groups/${groupId}/vaults`);
-  return response.data.map((vault) => vault.id);
-}
-
 export async function getUserGroups(userId: number): Promise<{ groups: Group[] }> {
   const response = await apiClient.get<{ groups: Group[] }>(`/users/${userId}/groups`);
   return response.data;

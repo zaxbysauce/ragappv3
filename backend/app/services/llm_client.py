@@ -343,6 +343,9 @@ class LLMClient:
                                         logger.debug(
                                             "Filtering thinking content from model response (Thinking Process pattern)"
                                         )
+                                        pre_marker, _, _ = _buffer.partition("Thinking Process:")
+                                        if pre_marker:
+                                            yield pre_marker
                                         _thinking_active = True
                                         _buffer = ""
                                     # else: still accumulating a partial open

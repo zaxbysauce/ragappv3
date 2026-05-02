@@ -219,7 +219,7 @@ class MemoryStore:
                 return summary
 
             cursor = conn.execute(
-                "SELECT id, content FROM memories WHERE embedding IS NULL OR embedding_model != ?",
+                "SELECT id, content FROM memories WHERE embedding IS NULL OR embedding_model IS NULL OR embedding_model != ?",
                 (current_model,),
             )
             rows = cursor.fetchall()

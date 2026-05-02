@@ -197,9 +197,8 @@ def stream_chat_response(
         # check every [S#]/[M#] citation against the available labels. The
         # validation only emits an extra ``citation_validation`` field on the
         # done event so older clients ignore it; we never rewrite already-
-        # streamed tokens. The ``add_message`` route additionally sanitizes
-        # content before persisting, so any invalid citations are repaired
-        # before they reach the chat history.
+        # streamed tokens. Invalid citations in streaming responses are not
+        # repaired at persistence — they are surfaced in citation_validation.
         full_content = "".join(collected_content)
         try:
             cv = repair_against_sources_and_memories(
@@ -292,7 +291,7 @@ async def non_stream_chat_response(
         cv = repair_against_sources_and_memories(
             full_content, sources, memories_used
         )
-        full_content = cv.repaired_content or full_content
+        full_content = cv.repaired_content  # always a valid str; never fall back to unrepaired content
         if cv.invalid_stripped:
             logger.info(
                 "Stripped %d invalid citation(s) from non-stream response: %s",
