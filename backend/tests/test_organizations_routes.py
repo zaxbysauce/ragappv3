@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS users (
     full_name TEXT DEFAULT '',
     role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('superadmin','admin','member','viewer')),
     is_active INTEGER NOT NULL DEFAULT 1,
+    must_change_password INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_login_at TIMESTAMP
 );
@@ -603,5 +604,91 @@ class TestDeleteOrganization:
         """Non-existent organization returns 404."""
         response = client.delete(
             "/api/organizations/999", headers=auth_headers(superadmin_token)
+        )
+        assert response.status_code == 404
+
+
+class TestTransferOwnership:
+    """Tests for POST /organizations/{org_id}/transfer-ownership endpoint."""
+
+    def test_owner_transfers_ownership(self, client):
+        """Organization owner can transfer ownership to another member (200)."""
+        org_id = _create_org("Transfer Org", 2)  # admin1 (user 2) is owner
+        _add_org_member(org_id, 3, "member")  # member1 (user 3) as member
+
+        response = client.post(
+            f"/api/organizations/{org_id}/transfer-ownership",
+            json={"new_owner_user_id": 3},
+            headers=auth_headers(admin_token),  # admin1 is current owner
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["new_owner_user_id"] == 3
+
+        # Verify DB state: user 3 is now owner, user 2 is admin
+        conn = _get_db_conn()
+        row2 = conn.execute(
+            "SELECT role FROM org_members WHERE org_id=? AND user_id=2", (org_id,)
+        ).fetchone()
+        row3 = conn.execute(
+            "SELECT role FROM org_members WHERE org_id=? AND user_id=3", (org_id,)
+        ).fetchone()
+        conn.close()
+        assert row2[0] == "admin"
+        assert row3[0] == "owner"
+
+    def test_superadmin_can_transfer_any_org(self, client):
+        """Superadmin can transfer ownership of any org (200)."""
+        org_id = _create_org("Superadmin Transfer Org", 2)
+        _add_org_member(org_id, 3, "member")
+
+        response = client.post(
+            f"/api/organizations/{org_id}/transfer-ownership",
+            json={"new_owner_user_id": 3},
+            headers=auth_headers(superadmin_token),
+        )
+        assert response.status_code == 200
+
+    def test_non_owner_cannot_transfer(self, client):
+        """A regular admin (not owner) cannot transfer ownership (403)."""
+        org_id = _create_org("No Transfer Org", 2)  # admin1 is owner
+        _add_org_member(org_id, 3, "admin")  # member1 as admin (not owner)
+
+        response = client.post(
+            f"/api/organizations/{org_id}/transfer-ownership",
+            json={"new_owner_user_id": 1},
+            headers=auth_headers(member_token),  # member1 is admin, not owner
+        )
+        assert response.status_code == 403
+
+    def test_cannot_transfer_to_non_member(self, client):
+        """Cannot transfer ownership to a user not in the org (400)."""
+        org_id = _create_org("Non Member Transfer Org", 2)
+        # user 4 is NOT a member of this org
+
+        response = client.post(
+            f"/api/organizations/{org_id}/transfer-ownership",
+            json={"new_owner_user_id": 4},
+            headers=auth_headers(admin_token),
+        )
+        assert response.status_code == 400
+
+    def test_cannot_transfer_to_self(self, client):
+        """Cannot transfer ownership to yourself (400)."""
+        org_id = _create_org("Self Transfer Org", 2)
+
+        response = client.post(
+            f"/api/organizations/{org_id}/transfer-ownership",
+            json={"new_owner_user_id": 2},  # admin1 transferring to themselves
+            headers=auth_headers(admin_token),
+        )
+        assert response.status_code == 400
+
+    def test_nonexistent_org_returns_404(self, client):
+        """Non-existent org returns 404."""
+        response = client.post(
+            "/api/organizations/999/transfer-ownership",
+            json={"new_owner_user_id": 3},
+            headers=auth_headers(superadmin_token),
         )
         assert response.status_code == 404

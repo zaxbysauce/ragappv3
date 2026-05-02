@@ -391,6 +391,7 @@ def run_migrations(sqlite_path: str) -> None:
     migrate_add_chat_memories_column(sqlite_path)
     migrate_add_memory_embedding_column(sqlite_path)
     migrate_sanitize_existing_chat_messages(sqlite_path)
+    migrate_backfill_default_vault_org(sqlite_path)
 
     # Add partial unique index for duplicate hash detection (HIGH-10)
     # Wrapped in IntegrityError handler: existing databases may have duplicate
@@ -821,6 +822,46 @@ def migrate_add_memory_embedding_column(sqlite_path: str) -> None:
         if "embedding_model" not in existing_cols:
             conn.execute("ALTER TABLE memories ADD COLUMN embedding_model TEXT")
         conn.commit()
+    finally:
+        conn.close()
+
+
+def migrate_backfill_default_vault_org(sqlite_path: str) -> None:
+    """Migration: assign the Default vault (id=1) to the Default organization.
+
+    Vaults created before org scoping was added have a NULL org_id.  This
+    migration links vault id=1 to the Default organization so group-vault
+    assignment and org-scoped listing work correctly.  Other NULL-org vaults
+    are left alone — they remain accessible as global vaults.
+    """
+    conn = sqlite3.connect(sqlite_path)
+    try:
+        # Find the Default organization
+        org_row = conn.execute(
+            "SELECT id FROM organizations WHERE name = 'Default' LIMIT 1"
+        ).fetchone()
+        if org_row is None:
+            # No Default org yet (fresh install or test), nothing to do
+            return
+        default_org_id = org_row[0]
+
+        # Check if vault id=1 exists and has NULL org_id
+        vault_row = conn.execute(
+            "SELECT id, org_id FROM vaults WHERE id = 1"
+        ).fetchone()
+        if vault_row is None or vault_row[1] is not None:
+            # Vault doesn't exist or already has an org assigned
+            return
+
+        conn.execute(
+            "UPDATE vaults SET org_id = ? WHERE id = 1 AND org_id IS NULL",
+            (default_org_id,),
+        )
+        conn.commit()
+        logging.getLogger(__name__).info(
+            "Backfilled Default vault (id=1) to Default organization (id=%d)",
+            default_org_id,
+        )
     finally:
         conn.close()
 

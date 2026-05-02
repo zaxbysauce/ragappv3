@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { MessageSquare, FileText, Brain, MoreHorizontal, Database, Settings, Users, X, User, Building2 } from "lucide-react";
+import { MessageSquare, FileText, Brain, MoreHorizontal, Database, Settings, Users, X, User, Building2, UserCog } from "lucide-react";
 import {
   Sheet,
   SheetContent,
@@ -9,6 +9,7 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
+import { useAuthStore } from "@/stores/useAuthStore";
 import type { NavItemId } from "./navigationTypes";
 
 interface MobileBottomNavProps {
@@ -24,17 +25,19 @@ const primaryNavItems = [
 ];
 
 // Secondary items shown in "More" drawer
-const moreNavItems = [
-  { id: "vaults" as const, label: "Vaults", icon: Database },
-  { id: "settings" as const, label: "Settings", icon: Settings },
-  { id: "groups" as const, label: "Groups", icon: Users },
-  { id: "users" as const, label: "Users", icon: Users },
-  { id: "profile" as const, label: "Profile", icon: User },
-  { id: "organizations" as const, label: "Organizations", icon: Building2 },
+const moreNavItems: { id: NavItemId; label: string; icon: React.ComponentType<{ className?: string }>; adminOnly?: boolean }[] = [
+  { id: "vaults", label: "Vaults", icon: Database },
+  { id: "settings", label: "Settings", icon: Settings },
+  { id: "groups", label: "Groups", icon: Users, adminOnly: true },
+  { id: "users", label: "Users", icon: UserCog, adminOnly: true },
+  { id: "profile", label: "Profile", icon: User },
+  { id: "organizations", label: "Orgs", icon: Building2, adminOnly: true },
 ];
 
 export function MobileBottomNav({ activeItem, onItemSelect }: MobileBottomNavProps) {
   const [moreOpen, setMoreOpen] = useState(false);
+  const userRole = useAuthStore((state) => state.user?.role);
+  const isAdmin = userRole === "admin" || userRole === "superadmin";
 
   return (
     <nav className="fixed bottom-0 left-0 right-0 bg-card border-t border-border z-50 md:hidden" aria-label="Mobile navigation">
@@ -119,7 +122,7 @@ export function MobileBottomNav({ activeItem, onItemSelect }: MobileBottomNavPro
             </SheetHeader>
 
             <div className="grid grid-cols-2 gap-3">
-              {moreNavItems.map((item) => {
+              {moreNavItems.filter((item) => !item.adminOnly || isAdmin).map((item) => {
                 const Icon = item.icon;
                 const isActive = activeItem === item.id;
 

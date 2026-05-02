@@ -72,16 +72,44 @@ class GroupMembersUpdateRequest(BaseModel):
 
 
 class GroupVaultResponse(BaseModel):
-    """Response model for a vault accessible by a group."""
+    """Response model for a vault accessible by a group, including permission level."""
 
     id: int
     name: str
+    org_id: Optional[int] = None
+    permission: str = "read"
+
+
+class VaultAccessItem(BaseModel):
+    """Single vault + permission pair for group vault access updates."""
+
+    vault_id: int
+    permission: str = "read"
+
+    @classmethod
+    def validate_permission(cls, v: str) -> str:
+        if v not in ("read", "write", "admin"):
+            raise ValueError("permission must be read, write, or admin")
+        return v
 
 
 class GroupVaultsUpdateRequest(BaseModel):
-    """Request model for updating group vault access."""
+    """Request model for updating group vault access with explicit permissions.
 
-    vault_ids: List[int]
+    Accepts either the canonical ``vault_access`` list (preferred) or the
+    legacy ``vault_ids`` list (backward compat, defaults to 'read').
+    """
+
+    vault_access: Optional[List[VaultAccessItem]] = None
+    vault_ids: Optional[List[int]] = None  # legacy; maps to read permission
+
+    def resolved_access(self) -> List[VaultAccessItem]:
+        """Return the canonical list of vault+permission pairs."""
+        if self.vault_access is not None:
+            return self.vault_access
+        if self.vault_ids is not None:
+            return [VaultAccessItem(vault_id=vid, permission="read") for vid in self.vault_ids]
+        return []
 
 
 
@@ -566,6 +594,42 @@ async def get_group_members(
     ]
 
 
+@router.get("/{group_id}/eligible-members", response_model=List[GroupMemberResponse])
+async def get_eligible_members(
+    group_id: int,
+    user: dict = Depends(require_role("admin")),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Return active users who belong to the same org as this group.
+
+    These are the only users who can be validly added as group members.
+    """
+    cursor = await asyncio.to_thread(
+        db.execute, "SELECT id, org_id FROM groups WHERE id = ?", (group_id,)
+    )
+    group_row = await asyncio.to_thread(cursor.fetchone)
+    if not group_row:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    org_id = group_row[1]
+
+    cursor = await asyncio.to_thread(
+        db.execute,
+        """SELECT u.id, u.username, u.full_name
+           FROM users u
+           JOIN org_members om ON u.id = om.user_id
+           WHERE om.org_id = ? AND u.is_active = 1
+           ORDER BY u.username""",
+        (org_id,),
+    )
+    rows = await asyncio.to_thread(cursor.fetchall)
+
+    return [
+        GroupMemberResponse(id=row[0], username=row[1], full_name=row[2] or "")
+        for row in rows
+    ]
+
+
 @router.put("/{group_id}/members", response_model=List[GroupMemberResponse])
 async def update_group_members(
     group_id: int,
@@ -712,7 +776,7 @@ async def get_group_vaults(
     cursor = await asyncio.to_thread(
         db.execute,
         """
-        SELECT v.id, v.name
+        SELECT v.id, v.name, v.org_id, COALESCE(vga.permission, 'read')
         FROM vaults v
         JOIN vault_group_access vga ON v.id = vga.vault_id
         WHERE vga.group_id = ?
@@ -726,6 +790,8 @@ async def get_group_vaults(
         GroupVaultResponse(
             id=row[0],
             name=row[1],
+            org_id=row[2],
+            permission=row[3],
         )
         for row in rows
     ]
@@ -742,7 +808,8 @@ async def update_group_vaults(
     """
     Update a group's vault access (replaces all existing access).
 
-    Body: {vault_ids: number[]} - replaces all vault access
+    Accepts ``{vault_access: [{vault_id, permission}]}`` (preferred) or the
+    legacy ``{vault_ids: [number]}`` (maps to 'read' permission).
     Requires admin role.
     """
     # Verify group exists and get its org_id
@@ -776,24 +843,33 @@ async def update_group_vaults(
                 detail="You must be a member of the organization to modify this group",
             )
 
-    # Verify all vault_ids exist and belong to the same organization as the group
-    if request.vault_ids:
-        placeholders = ",".join(["?"] * len(request.vault_ids))
+    # Resolve canonical access list (handles both vault_access and legacy vault_ids)
+    access_list = request.resolved_access()
+
+    # Verify all vaults exist and belong to the same organization as the group
+    if access_list:
+        vault_ids = [item.vault_id for item in access_list]
+        placeholders = ",".join(["?"] * len(vault_ids))
         cursor = await asyncio.to_thread(
             db.execute,
             f"SELECT id, org_id FROM vaults WHERE id IN ({placeholders})",
-            tuple(request.vault_ids),
+            tuple(vault_ids),
         )
         found_vaults = await asyncio.to_thread(cursor.fetchall)
         found_ids = {row[0] for row in found_vaults}
-        missing_ids = set(request.vault_ids) - found_ids
+        missing_ids = set(vault_ids) - found_ids
         if missing_ids:
             raise HTTPException(
                 status_code=400,
                 detail=f"Vaults not found: {sorted(missing_ids)}",
             )
-        # Check for cross-org vault assignment
-        cross_org_vaults = [row[0] for row in found_vaults if row[1] != group_org_id]
+        # A vault with org_id IS NULL is treated as global (unscoped) and allowed.
+        # Only reject vaults that explicitly belong to a *different* organization.
+        cross_org_vaults = [
+            row[0]
+            for row in found_vaults
+            if row[1] is not None and row[1] != group_org_id
+        ]
         if cross_org_vaults:
             raise HTTPException(
                 status_code=400,
@@ -803,25 +879,26 @@ async def update_group_vaults(
     # Atomic update: delete existing and insert new in transaction
     def _update_vaults():
         with transaction_context(db):
-            # Delete existing vault access
             db.execute(
                 "DELETE FROM vault_group_access WHERE group_id = ?",
                 (group_id,),
             )
-            # Insert new vault access (deduplicated)
-            for vault_id in set(request.vault_ids):
-                db.execute(
-                    "INSERT INTO vault_group_access (vault_id, group_id) VALUES (?, ?)",
-                    (vault_id, group_id),
-                )
+            seen: set[int] = set()
+            for item in access_list:
+                if item.vault_id not in seen:
+                    seen.add(item.vault_id)
+                    db.execute(
+                        "INSERT INTO vault_group_access (vault_id, group_id, permission) VALUES (?, ?, ?)",
+                        (item.vault_id, group_id, item.permission),
+                    )
 
     await asyncio.to_thread(_update_vaults)
 
-    # Fetch and return updated vaults
+    # Fetch and return updated vaults with permissions
     cursor = await asyncio.to_thread(
         db.execute,
         """
-        SELECT v.id, v.name
+        SELECT v.id, v.name, v.org_id, COALESCE(vga.permission, 'read')
         FROM vaults v
         JOIN vault_group_access vga ON v.id = vga.vault_id
         WHERE vga.group_id = ?
@@ -835,6 +912,8 @@ async def update_group_vaults(
         GroupVaultResponse(
             id=row[0],
             name=row[1],
+            org_id=row[2],
+            permission=row[3],
         )
         for row in rows
     ]

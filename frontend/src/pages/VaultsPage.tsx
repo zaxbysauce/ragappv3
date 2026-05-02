@@ -14,9 +14,17 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Database, Plus, Pencil, Trash2, FileText, Brain, MessageSquare, Loader2, Shield } from "lucide-react";
 import { useVaultStore } from "@/stores/useVaultStore";
-import type { Vault } from "@/lib/api";
+import { listOrganizations } from "@/lib/api";
+import type { Vault, Organization } from "@/lib/api";
 
 export default function VaultsPage() {
   const { vaults, loading, fetchVaults, addVault, editVault, removeVault, activeVaultId, setActiveVault } = useVaultStore();
@@ -26,16 +34,25 @@ export default function VaultsPage() {
   const [selectedVault, setSelectedVault] = useState<Vault | null>(null);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [orgId, setOrgId] = useState<number | null>(null);
+  const [orgs, setOrgs] = useState<Organization[]>([]);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     fetchVaults();
+    listOrganizations().then((data) => {
+      setOrgs(data);
+      // Auto-select if user has exactly one org
+      if (data.length === 1) setOrgId(data[0].id);
+    }).catch(() => {});
   }, [fetchVaults]);
 
   function openCreateDialog() {
     setName("");
     setDescription("");
+    if (orgs.length === 1) setOrgId(orgs[0].id);
+    else setOrgId(null);
     setCreateDialogOpen(true);
   }
 
@@ -56,9 +73,13 @@ export default function VaultsPage() {
       toast.error("Vault name is required");
       return;
     }
+    if (orgs.length > 1 && orgId === null) {
+      toast.error("Please select an organization for this vault");
+      return;
+    }
     setSaving(true);
     try {
-      await addVault({ name: name.trim(), description: description.trim() });
+      await addVault({ name: name.trim(), description: description.trim(), org_id: orgId });
       toast.success("Vault created successfully");
       setCreateDialogOpen(false);
       setName("");
@@ -261,6 +282,31 @@ export default function VaultsPage() {
                 onChange={(e) => setDescription(e.target.value)}
               />
             </div>
+            {orgs.length > 0 && (
+              <div>
+                <Label htmlFor="vault-org">Organization</Label>
+                <Select
+                  value={orgId !== null ? String(orgId) : ""}
+                  onValueChange={(v) => setOrgId(v ? Number(v) : null)}
+                >
+                  <SelectTrigger id="vault-org">
+                    <SelectValue placeholder={orgs.length === 1 ? orgs[0].name : "Select organization…"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {orgs.map((org) => (
+                      <SelectItem key={org.id} value={String(org.id)}>
+                        {org.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {orgs.length > 1 && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Required: select which organization owns this vault.
+                  </p>
+                )}
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateDialogOpen(false)}>

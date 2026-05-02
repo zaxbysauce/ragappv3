@@ -102,15 +102,29 @@ class CreateUserRequest(BaseModel):
     role: str = Field(default="member")
 
 
-class UserOrgsUpdateRequest(BaseModel):
-    org_ids: List[int]
+class OrgMembershipItem(BaseModel):
+    org_id: int
     role: str = Field(default="member")
 
-    @classmethod
-    def validate_role(cls, v: str) -> str:
-        if v not in ("admin", "member"):
-            raise ValueError("Role must be 'admin' or 'member'")
-        return v
+
+class UserOrgsUpdateRequest(BaseModel):
+    """Replace user org memberships.
+
+    Canonical form: ``memberships`` list with per-org roles.
+    Legacy form: ``org_ids`` + single ``role`` applied to all.
+    """
+
+    memberships: Optional[List[OrgMembershipItem]] = None
+    org_ids: Optional[List[int]] = None
+    role: str = Field(default="member")
+
+    def resolved_memberships(self) -> List[OrgMembershipItem]:
+        """Return canonical per-org membership list."""
+        if self.memberships is not None:
+            return self.memberships
+        if self.org_ids is not None:
+            return [OrgMembershipItem(org_id=oid, role=self.role) for oid in self.org_ids]
+        return []
 
 
 class UserGroupsUpdateRequest(BaseModel):
@@ -669,11 +683,17 @@ async def update_user_organizations(
         if not cursor.fetchone():
             raise HTTPException(status_code=404, detail="User not found")
 
-        org_ids = body.org_ids
-        role = body.role
+        memberships = body.resolved_memberships()
+        valid_roles = ("admin", "member")
+
+        # Validate roles
+        for m in memberships:
+            if m.role not in valid_roles:
+                raise HTTPException(status_code=400, detail=f"Invalid role '{m.role}'. Must be one of: {', '.join(valid_roles)}")
 
         # Validate all org_ids exist
-        if org_ids:
+        if memberships:
+            org_ids = [m.org_id for m in memberships]
             placeholders = ",".join("?" * len(org_ids))
             cursor = conn.execute(
                 f"SELECT id FROM organizations WHERE id IN ({placeholders})",
@@ -691,16 +711,15 @@ async def update_user_organizations(
         )
 
         # Insert new memberships
-        for org_id in org_ids:
-            # Check if already exists (as owner)
+        for m in memberships:
             cursor = conn.execute(
                 "SELECT 1 FROM org_members WHERE org_id = ? AND user_id = ?",
-                (org_id, user_id),
+                (m.org_id, user_id),
             )
             if not cursor.fetchone():
                 conn.execute(
                     "INSERT INTO org_members (org_id, user_id, role) VALUES (?, ?, ?)",
-                    (org_id, user_id, role),
+                    (m.org_id, user_id, m.role),
                 )
         conn.commit()
 

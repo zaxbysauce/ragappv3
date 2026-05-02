@@ -35,6 +35,7 @@ class VaultCreateRequest(BaseModel):
 
     name: str = Field(..., min_length=1, max_length=255, description="Vault name")
     description: str = Field("", max_length=1000, description="Vault description")
+    org_id: Optional[int] = Field(None, description="Organization to assign this vault to")
 
     @field_validator("name", mode="before")
     @classmethod
@@ -199,15 +200,49 @@ async def create_vault(
     """
     Create a new vault.
 
-    Creates a new vault with the given name and description.
+    Creates a new vault with the given name, description, and organization.
+    org_id is required unless the caller belongs to exactly one organization
+    (in which case it is inferred). Superadmins may pass any org_id.
     Returns 409 if a vault with the same name already exists.
     """
+    # Resolve org_id: explicit > inferred > error
+    target_org_id = request.org_id
+    if target_org_id is None:
+        # Try to infer from caller's org memberships
+        cursor = await asyncio.to_thread(
+            conn.execute,
+            "SELECT org_id FROM org_members WHERE user_id = ? ORDER BY org_id LIMIT 2",
+            (user["id"],),
+        )
+        rows = await asyncio.to_thread(cursor.fetchall)
+        if len(rows) == 1:
+            target_org_id = rows[0][0]
+        elif len(rows) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail="User belongs to multiple organizations. Please provide org_id explicitly.",
+            )
+        # If user has no org, target_org_id remains None (global vault)
+
+    # If org_id provided or inferred, validate it exists
+    if target_org_id is not None:
+        cursor = await asyncio.to_thread(
+            conn.execute,
+            "SELECT id FROM organizations WHERE id = ?",
+            (target_org_id,),
+        )
+        if not await asyncio.to_thread(cursor.fetchone):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Organization {target_org_id} not found",
+            )
+
     # Insert vault row — IntegrityError here means duplicate name
     try:
         cursor = await asyncio.to_thread(
             conn.execute,
-            "INSERT INTO vaults (name, description) VALUES (?, ?)",
-            (request.name, request.description),
+            "INSERT INTO vaults (name, description, org_id) VALUES (?, ?, ?)",
+            (request.name, request.description, target_org_id),
         )
     except sqlite3.IntegrityError:
         raise HTTPException(

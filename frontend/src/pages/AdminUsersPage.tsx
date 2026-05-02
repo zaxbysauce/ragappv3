@@ -114,7 +114,7 @@ function AdminUsersPageContent() {
   const [orgsSheetOpen, setOrgsSheetOpen] = useState(false);
   const [userForOrgs, setUserForOrgs] = useState<User | null>(null);
   const [allOrgs, setAllOrgs] = useState<OrgItem[]>([]);
-  const [selectedOrgIds, setSelectedOrgIds] = useState<number[]>([]);
+  const [orgMemberships, setOrgMemberships] = useState<Map<number, string>>(new Map()); // org_id → role
   const [orgsSearchQuery, setOrgsSearchQuery] = useState("");
   const [isLoadingOrgs, setIsLoadingOrgs] = useState(false);
   const [isSavingOrgs, setIsSavingOrgs] = useState(false);
@@ -338,7 +338,11 @@ function AdminUsersPageContent() {
   const fetchUserOrgs = async (userId: number) => {
     try {
       const response = await apiClient.get<{ organizations: OrgItem[] }>(`/users/${userId}/organizations`);
-      setSelectedOrgIds(response.data.organizations.map((o) => o.id));
+      const map = new Map<number, string>();
+      for (const o of response.data.organizations) {
+        map.set(o.id, o.role || "member");
+      }
+      setOrgMemberships(map);
     } catch (err) {
       console.error("Failed to fetch user organizations:", err);
       toast.error("Failed to load user organizations");
@@ -358,24 +362,36 @@ function AdminUsersPageContent() {
     setOrgsSheetOpen(false);
     setUserForOrgs(null);
     setAllOrgs([]);
-    setSelectedOrgIds([]);
+    setOrgMemberships(new Map());
     setOrgsSearchQuery("");
   };
 
   const toggleOrg = useCallback((orgId: number) => {
-    setSelectedOrgIds((prev) =>
-      prev.includes(orgId) ? prev.filter((id) => id !== orgId) : [...prev, orgId]
-    );
+    setOrgMemberships((prev) => {
+      const next = new Map(prev);
+      if (next.has(orgId)) {
+        next.delete(orgId);
+      } else {
+        next.set(orgId, "member");
+      }
+      return next;
+    });
+  }, []);
+
+  const setOrgRole = useCallback((orgId: number, role: string) => {
+    setOrgMemberships((prev) => {
+      const next = new Map(prev);
+      next.set(orgId, role);
+      return next;
+    });
   }, []);
 
   const handleSaveOrgs = async () => {
     if (!userForOrgs) return;
     setIsSavingOrgs(true);
     try {
-      await apiClient.put(`/users/${userForOrgs.id}/organizations`, {
-        org_ids: selectedOrgIds,
-        role: "member",
-      });
+      const memberships = Array.from(orgMemberships.entries()).map(([org_id, role]) => ({ org_id, role }));
+      await apiClient.put(`/users/${userForOrgs.id}/organizations`, { memberships });
       toast.success("Organizations updated successfully");
       closeOrgsSheet();
     } catch (err) {
@@ -970,35 +986,54 @@ const handleCreateUser = async () => {
                 </div>
               ) : (
                 <div className="space-y-2 pr-4">
-                  {filteredOrgs.map((org) => (
-                    <div
-                      key={org.id}
-                      className="flex items-start space-x-3 rounded-md border p-3 hover:bg-muted/50 transition-colors"
-                    >
-                      <Checkbox
-                        id={`org-${org.id}`}
-                        checked={selectedOrgIds.includes(org.id)}
-                        onCheckedChange={() => toggleOrg(org.id)}
-                        aria-label={`Select ${org.name}`}
-                        disabled={isSavingOrgs}
-                      />
-                      <Label
-                        htmlFor={`org-${org.id}`}
-                        className="flex-1 cursor-pointer space-y-1"
+                  {filteredOrgs.map((org) => {
+                    const isMember = orgMemberships.has(org.id);
+                    const role = orgMemberships.get(org.id) ?? "member";
+                    return (
+                      <div
+                        key={org.id}
+                        className={`flex items-start space-x-3 rounded-md border p-3 transition-colors ${isMember ? "border-primary/50 bg-primary/5" : "hover:bg-muted/50"}`}
                       >
-                        <div className="font-medium">{org.name}</div>
-                        {org.description && (
-                          <div className="text-sm text-muted-foreground">{org.description}</div>
-                        )}
-                      </Label>
-                    </div>
-                  ))}
+                        <Checkbox
+                          id={`org-${org.id}`}
+                          checked={isMember}
+                          onCheckedChange={() => toggleOrg(org.id)}
+                          aria-label={`Select ${org.name}`}
+                          disabled={isSavingOrgs}
+                          className="mt-0.5"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <Label htmlFor={`org-${org.id}`} className="font-medium cursor-pointer block">
+                            {org.name}
+                          </Label>
+                          {org.description && (
+                            <div className="text-sm text-muted-foreground line-clamp-1">{org.description}</div>
+                          )}
+                          <div className="mt-1.5">
+                            <Select
+                              value={role}
+                              onValueChange={(v) => setOrgRole(org.id, v)}
+                              disabled={!isMember || isSavingOrgs}
+                            >
+                              <SelectTrigger className="h-7 w-24 text-xs" aria-label={`Role in ${org.name}`}>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="member" className="text-xs">Member</SelectItem>
+                                <SelectItem value="admin" className="text-xs">Admin</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </ScrollArea>
 
             <div className="mt-4 text-sm text-muted-foreground">
-              {selectedOrgIds.length} organization{selectedOrgIds.length !== 1 ? "s" : ""} selected
+              {orgMemberships.size} organization{orgMemberships.size !== 1 ? "s" : ""} selected
             </div>
           </div>
 

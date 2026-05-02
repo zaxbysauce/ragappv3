@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { AdminGuard } from "@/components/auth/RoleGuard";
 import { Building2, Plus, Trash2, Users, Vault, ChevronDown, ChevronUp, Loader2, UserPlus, UserX, Search } from "lucide-react";
 
-type OrgRole = "admin" | "member";
+type OrgRole = "owner" | "admin" | "member";
 
 interface OrgMember {
   user_id: number;
@@ -43,6 +43,8 @@ const ROLE_OPTIONS: { value: OrgRole; label: string }[] = [
   { value: "member", label: "Member" },
 ];
 
+const CHANGEABLE_ROLE_OPTIONS = ROLE_OPTIONS.filter((r) => r.value !== "owner");
+
 function OrgsPageContent() {
   const [orgs, setOrgs] = useState<Organization[]>([]);
   const [loading, setLoading] = useState(true);
@@ -66,6 +68,11 @@ function OrgsPageContent() {
   const [removeMemberDialogOpen, setRemoveMemberDialogOpen] = useState(false);
   const [memberToRemove, setMemberToRemove] = useState<OrgMember | null>(null);
   const [orgForMemberAction, setOrgForMemberAction] = useState<number | null>(null);
+
+  const [transferDialogOpen, setTransferDialogOpen] = useState(false);
+  const [transferOrgId, setTransferOrgId] = useState<number | null>(null);
+  const [transferTargetId, setTransferTargetId] = useState<number | null>(null);
+  const [transferring, setTransferring] = useState(false);
 
   const currentUser = useAuthStore((state) => state.user);
 
@@ -254,6 +261,23 @@ function OrgsPageContent() {
     }
   };
 
+  const handleTransferOwnership = async () => {
+    if (!transferOrgId || !transferTargetId) return;
+    setTransferring(true);
+    try {
+      await apiClient.post(`/organizations/${transferOrgId}/transfer-ownership`, { new_owner_user_id: transferTargetId });
+      toast.success("Ownership transferred successfully");
+      setTransferDialogOpen(false);
+      setTransferOrgId(null);
+      setTransferTargetId(null);
+      fetchOrgMembers(transferOrgId);
+    } catch (err: any) {
+      toast.error(err?.response?.data?.detail || "Failed to transfer ownership");
+    } finally {
+      setTransferring(false);
+    }
+  };
+
   const formatDate = (dateStr: string) => new Date(dateStr).toLocaleDateString();
 
   return (
@@ -398,13 +422,22 @@ function OrgsPageContent() {
                                 </div>
                               </td>
                               <td className="py-3">
-                                <select value={member.role} onChange={(e) => handleRoleChange(org.id, member.user_id, e.target.value as OrgRole)} disabled={updatingMemberId === member.user_id} aria-label={`Change role for ${member.username}`} className="h-8 rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50">
-                                  {ROLE_OPTIONS.map((opt) => (<option key={opt.value} value={opt.value}>{opt.label}</option>))}
-                                </select>
+                                {member.role === "owner" ? (
+                                  <Badge variant="default" className="text-xs">Owner</Badge>
+                                ) : (
+                                  <select value={member.role} onChange={(e) => handleRoleChange(org.id, member.user_id, e.target.value as OrgRole)} disabled={updatingMemberId === member.user_id} aria-label={`Change role for ${member.username}`} className="h-8 rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50">
+                                    {CHANGEABLE_ROLE_OPTIONS.map((opt) => (<option key={opt.value} value={opt.value}>{opt.label}</option>))}
+                                  </select>
+                                )}
                               </td>
                               <td className="py-3 text-muted-foreground text-sm">{formatDate(member.joined_at)}</td>
-                              <td className="py-3 text-right">
-                                <Button variant="ghost" size="icon" onClick={() => { setMemberToRemove(member); setOrgForMemberAction(org.id); setRemoveMemberDialogOpen(true); }} aria-label={`Remove ${member.username} from organization`} className="text-destructive hover:text-destructive hover:bg-destructive/10">
+                              <td className="py-3 text-right flex items-center justify-end gap-1">
+                                {member.role !== "owner" && (isSuperAdmin || org.members?.some((m) => m.user_id === currentUser?.id && m.role === "owner")) && (
+                                  <Button variant="ghost" size="sm" className="text-xs h-7 px-2" onClick={() => { setTransferOrgId(org.id); setTransferTargetId(member.user_id); setTransferDialogOpen(true); }} aria-label={`Transfer ownership to ${member.username}`} title="Transfer Ownership">
+                                    Transfer
+                                  </Button>
+                                )}
+                                <Button variant="ghost" size="icon" onClick={() => { setMemberToRemove(member); setOrgForMemberAction(org.id); setRemoveMemberDialogOpen(true); }} aria-label={`Remove ${member.username} from organization`} className="text-destructive hover:text-destructive hover:bg-destructive/10" disabled={member.role === "owner"} title={member.role === "owner" ? "Cannot remove owner — transfer ownership first" : "Remove member"}>
                                   <UserX className="w-4 h-4" />
                                 </Button>
                               </td>
@@ -477,6 +510,24 @@ function OrgsPageContent() {
           <DialogFooter>
             <Button variant="outline" onClick={() => { setRemoveMemberDialogOpen(false); setMemberToRemove(null); setOrgForMemberAction(null); }}>Cancel</Button>
             <Button variant="destructive" onClick={handleRemoveMember}>Remove</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={transferDialogOpen} onOpenChange={setTransferDialogOpen}>
+        <DialogContent aria-labelledby="transfer-title" aria-describedby="transfer-desc">
+          <DialogHeader>
+            <DialogTitle id="transfer-title">Transfer Ownership</DialogTitle>
+            <DialogDescription id="transfer-desc">
+              Transfer organization ownership to the selected member. You will become an admin after the transfer.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setTransferDialogOpen(false); setTransferOrgId(null); setTransferTargetId(null); }} disabled={transferring}>Cancel</Button>
+            <Button onClick={handleTransferOwnership} disabled={transferring}>
+              {transferring && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Transfer Ownership
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -328,6 +328,7 @@ async def update_memory(
     request: MemoryUpdateRequest,
     conn: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_active_user),
+    memory_store: MemoryStore = Depends(get_memory_store),
 ):
     """
     Update an existing memory.
@@ -361,6 +362,12 @@ async def update_memory(
         if request.content is not None:
             update_fields.append("content = ?")
             params.append(request.content)
+            # Clear stale embedding atomically with the content change so
+            # semantic search never returns results based on the old content.
+            # embed_and_store below recomputes best-effort after commit.
+            if memory_store._has_embedding_columns(conn):
+                update_fields.append("embedding = NULL")
+                update_fields.append("embedding_model = NULL")
         if request.category is not None:
             update_fields.append("category = ?")
             params.append(request.category)
@@ -414,6 +421,19 @@ async def update_memory(
         """
         await asyncio.to_thread(conn.execute, sql, params)
         await asyncio.to_thread(conn.commit)
+
+        # If content changed, recompute embedding so semantic search stays fresh.
+        # embed_and_store is best-effort: if the embedding service is down, FTS
+        # fallback remains intact and the old embedding (now stale) is NULLed first
+        # inside the method so searches won't use misleading vectors.
+        if request.content is not None:
+            try:
+                await memory_store.embed_and_store(memory_id, request.content)
+            except Exception:
+                logger.warning(
+                    "Could not recompute embedding for memory %d after content update",
+                    memory_id,
+                )
 
         # Fetch updated record
         cursor = await asyncio.to_thread(
@@ -549,3 +569,18 @@ async def search_memories_post(
         memory_store, request.query, request.limit, request.vault_id
     )
     return MemorySearchResponse(results=results, total=len(results))
+
+
+@router.post("/memories/backfill-embeddings")
+async def backfill_memory_embeddings(
+    memory_store: MemoryStore = Depends(get_memory_store),
+    user: dict = Depends(get_current_active_user),
+):
+    """Trigger embedding backfill for memories missing embeddings or with stale models.
+
+    Superadmin only. Runs synchronously and returns a progress summary.
+    """
+    if user.get("role") != "superadmin":
+        raise HTTPException(status_code=403, detail="Superadmin access required")
+    summary = await memory_store.backfill_missing_embeddings()
+    return {"status": "complete", "summary": summary}

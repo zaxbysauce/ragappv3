@@ -24,7 +24,7 @@ from app.api.deps import (
 )
 from app.config import settings
 from app.models.database import get_pool
-from app.services.citation_validator import validate_and_repair_citations
+from app.services.citation_validator import repair_against_sources_and_memories
 from app.services.rag_engine import RAGEngine, RAGEngineError
 from app.utils.assistant_sanitizer import sanitize_chat_messages_content
 
