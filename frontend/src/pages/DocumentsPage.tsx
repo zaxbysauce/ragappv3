@@ -143,9 +143,13 @@ export default function DocumentsPage() {
     document.addEventListener('mouseup', handleMouseUp);
   }, [filenameColWidth]);
 
+  // isFirstSearchRender guards against the search effect double-firing with
+  // loadData on mount AND on vault switch (fetchDocuments ref changes both times).
+  const isFirstSearchRender = useRef(true);
   useEffect(() => {
     const loadData = async () => {
       setLoading(true);
+      isFirstSearchRender.current = true; // suppress search effect on vault switch
       await Promise.all([fetchDocuments(), fetchStats()]);
       setLoading(false);
     };
@@ -153,8 +157,7 @@ export default function DocumentsPage() {
   }, [fetchDocuments, fetchStats]);
 
   // Server-side search: re-fetch when debounced search query changes.
-  // Skip on initial mount — loadData already fetches.
-  const isFirstSearchRender = useRef(true);
+  // Skipped on mount and vault switch — loadData already fetches.
   useEffect(() => {
     if (isFirstSearchRender.current) {
       isFirstSearchRender.current = false;
@@ -188,7 +191,7 @@ export default function DocumentsPage() {
 
   // Refresh documents when uploads complete
   useEffect(() => {
-    const completedCount = uploads.filter((u) => u.status === "completed").length;
+    const completedCount = uploads.filter((u) => u.status === "indexed").length;
     if (completedCount > 0) {
       // Refresh after a short delay to allow backend processing
       const timeout = setTimeout(() => {
@@ -505,10 +508,11 @@ export default function DocumentsPage() {
               <CardDescription>
                 {uploads.filter((u) => u.status === "pending").length} pending,{" "}
                 {uploads.filter((u) => u.status === "uploading").length} uploading,{" "}
-                {uploads.filter((u) => u.status === "completed").length} completed
+                {uploads.filter((u) => u.status === "indexing").length} indexing,{" "}
+                {uploads.filter((u) => u.status === "indexed").length} done
               </CardDescription>
             </div>
-            {uploads.some((u) => u.status === "completed" || u.status === "error" || u.status === "cancelled") && (
+            {uploads.some((u) => u.status === "indexed" || u.status === "error" || u.status === "cancelled") && (
               <Button variant="ghost" size="sm" onClick={clearCompleted}>
                 Clear Completed
               </Button>
@@ -522,8 +526,11 @@ export default function DocumentsPage() {
                     {upload.file.name}
                   </span>
                   <div className="flex items-center gap-2">
-                    {upload.status === "completed" && (
+                    {upload.status === "indexed" && (
                       <span className="text-success text-xs">Done</span>
+                    )}
+                    {upload.status === "indexing" && (
+                      <span className="text-blue-600 text-xs">Indexing…</span>
                     )}
                     {upload.status === "error" && (
                       <span className="text-destructive text-xs" title={upload.error}>
@@ -564,7 +571,7 @@ export default function DocumentsPage() {
                         <RotateCcw className="w-3 h-3" />
                       </Button>
                     )}
-                    {(upload.status === "completed" || upload.status === "cancelled" || upload.status === "error") && (
+                    {(upload.status === "indexed" || upload.status === "cancelled" || upload.status === "error") && (
                       <Button
                         variant="ghost"
                         size="icon"

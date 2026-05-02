@@ -6,8 +6,8 @@ export interface UploadFile {
   id: string;
   file: File;
   progress: number;
-  /** State machine: pending → uploading → uploaded → indexing → indexed | error | cancelled */
-  status: "pending" | "uploading" | "uploaded" | "indexing" | "indexed" | "completed" | "error" | "cancelled";
+  /** State machine: pending → uploading → indexing → indexed | error | cancelled */
+  status: "pending" | "uploading" | "indexing" | "indexed" | "error" | "cancelled";
   error?: string;
   /** Backend document id, set after successful upload for indexing status polling. */
   documentId?: string;
@@ -169,7 +169,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
             activeVaultId || undefined
           );
 
-          // Mark uploaded; start polling for indexing completion.
+          // Start polling for indexing completion.
           const docId = String(uploadResult.id);
           set((state) => ({
             uploads: state.uploads.map((u) =>
@@ -179,7 +179,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
             ),
           }));
 
-          // Poll until indexed, error, or 5 min timeout.
+          // Poll until indexed, error, or 3 min timeout (60 × 3 s).
           let attempts = 0;
           const maxAttempts = 60;
           while (attempts < maxAttempts) {

@@ -43,7 +43,9 @@ export const useVaultStore = create<VaultState>((set, get) => ({
         // Validate that the persisted activeVaultId is still accessible.
         // If not, auto-select the first vault or clear to null.
         const currentId = state.activeVaultId;
-        const isValid = currentId != null && vaults.some((v) => v.id === currentId);
+        // null is a valid "All Vaults" selection — only replace a non-null ID that
+        // no longer exists in the fetched vault list (e.g. vault was deleted).
+        const isValid = currentId === null || vaults.some((v) => v.id === currentId);
         if (!isValid) {
           const first = vaults[0] ?? null;
           const newId = first ? first.id : null;

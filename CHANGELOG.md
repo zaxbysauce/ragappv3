@@ -12,7 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Irrelevant memory display**: Weakly-related memories no longer appear in document-grounded answers. Backend: added `memory_dense_min_similarity` (0.30), `memory_rrf_min_score` (0.005), and `memory_context_top_k` (3) config fields; dense and RRF search paths filter candidates below threshold; `RAGEngine` caps retrieved memories at `context_top_k`. Frontend: `AssistantMessage.tsx` now shows only citation-matched memories; removed fallback to all `memoriesUsed`.
 - **Vault ID validation**: `activeVaultId` stored in localStorage is now validated after `fetchVaults()` — if the stored ID no longer exists, the store auto-selects the first available vault or clears to null.
 - **Document search double-fetch**: `DocumentsPage` was calling `fetchDocuments()` twice on mount. Fixed with `isFirstSearchRender` ref guard.
-- **Upload state tracking**: Upload status now transitions through all states — `pending → uploading → uploaded → indexing → indexed/error`. After upload, the store polls `getDocumentStatus()` every 3 seconds until indexing completes.
+- **Upload state tracking**: Upload status now transitions through all states — `pending → uploading → indexing → indexed/error`. After upload, the store polls `getDocumentStatus()` every 3 seconds until indexing completes (3-minute timeout).
 - **Memory edit UI**: Memory page now has inline edit (pencil) and delete (trash with confirm dialog) controls. `window.confirm` replaced with a proper Dialog.
 - **Health hook state mutation**: `useHealthCheck.ts` was mutating the previous state object directly. Fixed to create a new state object on each check.
 
