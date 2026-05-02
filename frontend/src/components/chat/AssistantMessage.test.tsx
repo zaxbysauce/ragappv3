@@ -335,7 +335,7 @@ describe("AssistantMessage - Citations and Sources", () => {
 
     // Inline + strip variants share aria-label so assistive tech announces the
     // filename either way, but only one carries the full filename as text.
-    const citationChips = screen.getAllByLabelText("Source 1: report.pdf");
+    const citationChips = screen.getAllByLabelText("Source S1: report.pdf");
     expect(citationChips.length).toBeGreaterThanOrEqual(2);
   });
 
@@ -349,13 +349,13 @@ describe("AssistantMessage - Citations and Sources", () => {
     });
     render(<AssistantMessage message={message} />);
 
-    const chips = screen.getAllByLabelText("Source 1: report.pdf");
+    const chips = screen.getAllByLabelText("Source S1: report.pdf");
     // Both variants render: one inline pill (text="1") and one strip chip
     // (text contains the filename). This keeps per-sentence attribution
     // without duplicating the heavy filename chip inside prose.
     expect(chips.length).toBe(2);
 
-    const inlinePill = chips.find((el) => el.textContent?.trim() === "1");
+    const inlinePill = chips.find((el) => el.textContent?.trim() === "S1");
     const stripChip = chips.find((el) => el.textContent?.includes("report.pdf"));
     expect(inlinePill).toBeDefined();
     expect(stripChip).toBeDefined();
@@ -370,7 +370,7 @@ describe("AssistantMessage - Citations and Sources", () => {
     render(<AssistantMessage message={message} />);
 
     // Click the first citation chip (inline)
-    const citationChips = screen.getAllByLabelText("Source 1: doc.pdf");
+    const citationChips = screen.getAllByLabelText("Source S1: doc.pdf");
     fireEvent.click(citationChips[0]);
 
     expect(mockSetSelectedEvidenceSource).toHaveBeenCalledWith(sources[0]);
@@ -387,8 +387,8 @@ describe("AssistantMessage - Citations and Sources", () => {
     render(<AssistantMessage message={message} />);
 
     expect(screen.getByText("Sources:")).toBeInTheDocument();
-    expect(screen.getByLabelText("Source 1: file1.pdf")).toBeInTheDocument();
-    expect(screen.getByLabelText("Source 2: file2.pdf")).toBeInTheDocument();
+    expect(screen.getByLabelText("Source S1: file1.pdf")).toBeInTheDocument();
+    expect(screen.getByLabelText("Source S2: file2.pdf")).toBeInTheDocument();
   });
 
   it("should show '+N more' when there are more than 3 sources", () => {
@@ -465,7 +465,7 @@ describe("AssistantMessage - onSourceClick", () => {
       <AssistantMessage message={message} onSourceClick={onSourceClick} />
     );
 
-    const citationChips = screen.getAllByLabelText("Source 1: doc.pdf");
+    const citationChips = screen.getAllByLabelText("Source S1: doc.pdf");
     fireEvent.click(citationChips[0]);
 
     expect(onSourceClick).toHaveBeenCalledWith(sources[0]);
@@ -479,7 +479,7 @@ describe("AssistantMessage - onSourceClick", () => {
       <AssistantMessage message={message} onSourceClick={onSourceClick} />
     );
 
-    const sourceChip = screen.getByLabelText("Source 1: evidence.pdf");
+    const sourceChip = screen.getByLabelText("Source S1: evidence.pdf");
     fireEvent.click(sourceChip);
 
     expect(onSourceClick).toHaveBeenCalledWith(sources[0]);

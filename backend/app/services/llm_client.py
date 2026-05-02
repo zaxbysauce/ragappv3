@@ -14,6 +14,7 @@ from app.services.circuit_breaker import (
     CircuitBreakerState,
     llm_cb,
 )
+from app.utils.assistant_sanitizer import sanitize_assistant_content
 
 logger = logging.getLogger(__name__)
 
@@ -97,37 +98,15 @@ class LLMClient:
             logger.debug("Could not log pool stats: %s", e)
 
     def _strip_thinking_content(self, content: str) -> str:
+        """Delegate to the centralized assistant sanitizer.
+
+        Kept as an instance method for backwards compatibility with tests
+        that patch or call it directly. All actual logic lives in
+        :func:`app.utils.assistant_sanitizer.sanitize_assistant_content`,
+        which handles ``<think>...</think>``, ``_lhs/_rhs``,
+        ``Thinking Process:...</think>``, and unterminated thinking tails.
         """
-        Remove thinking content blocks from a complete response string.
-
-        Handles two patterns:
-        1. _lhs to _rhs tags (standard pattern with opening/closing tags)
-        2. "Thinking Process:" prefix to </think> closing tag (qwen3.5-122b pattern)
-
-        Args:
-            content: The complete response content string
-
-        Returns:
-            Content with all thinking blocks removed, whitespace stripped
-        """
-        result = content
-
-        # Pattern 1: _lhs to _rhs (standard tags)
-        while "_lhs" in result and "_rhs" in result:
-            start = result.find("_lhs")
-            end = result.find("_rhs") + 4  # Include "_rhs" length
-            result = result[:start] + result[end:]
-
-        # Pattern 2: "Thinking Process:" prefix to </think> closing tag (qwen3.5-122b)
-        # Content may start with "Thinking Process:\n\n" followed by thinking, ends with </think>
-        if result.startswith("Thinking Process:"):
-            close_pos = result.find("</think>")
-            if close_pos != -1:
-                result = result[close_pos + 8 :]
-            else:
-                result = ""
-
-        return result.strip()
+        return sanitize_assistant_content(content)
 
     async def chat_completion(
         self,
@@ -233,7 +212,13 @@ class LLMClient:
                         "LLM service is currently unavailable (circuit breaker open)"
                     )
 
-        # State for filtering thinking content (_lhs/_rhs tags from qwen3.5)
+        # State for filtering thinking content. Handles three open markers:
+        #   <think>             — standard (gpt-oss-120b and most others)
+        #   _lhs                — legacy Qwen tag style
+        #   "Thinking Process:" — qwen3.5-122b prefix style
+        # And two close markers: </think> and _rhs.
+        # ``reasoning_content`` deltas are *never* streamed to users; they are
+        # treated like any other thinking content and suppressed at the source.
         _thinking_active = False
         _buffer = ""
 
@@ -283,17 +268,17 @@ class LLMClient:
                                 continue
 
                             delta = choices[0].get("delta", {})
-                            # Handle both standard content and reasoning_content (used by some models like nvidia_nemotron)
-                            content = (
-                                delta.get("content")
-                                or delta.get("reasoning_content")
-                                or ""
-                            )
+                            # ``reasoning_content`` is the OpenAI-compatible
+                            # field used by some models (gpt-oss-120b,
+                            # nvidia_nemotron) to emit chain-of-thought.
+                            # We never expose it to users — drop it entirely
+                            # and only stream ``content`` deltas.
+                            content = delta.get("content") or ""
 
-                            # Filter thinking content from qwen3.5-122b model
-                            # Handles two patterns:
-                            # 1. _lhs to _rhs tags (standard)
-                            # 2. "Thinking Process:" prefix to </think> closing tag (qwen3.5-122b)
+                            if not content:
+                                # Pure reasoning chunk (or empty) — skip.
+                                continue
+
                             _buffer += content
 
                             if len(_buffer) > _MAX_THINKING_BUFFER:
@@ -306,12 +291,27 @@ class LLMClient:
                                 )
 
                             if not _thinking_active:
-                                # Not currently in thinking block - look for opening pattern
-                                # Check for standard _lhs opening tag
-                                if "_lhs" in _buffer:
+                                # Not currently in thinking block — look for an
+                                # opening marker. Order matters: <think> before
+                                # _lhs before "Thinking Process:" so the most
+                                # specific match wins on already-complete buffers.
+                                if "<think>" in _buffer:
+                                    logger.debug(
+                                        "Filtering thinking content from model response (<think> pattern)"
+                                    )
+                                    pre_think, _, remainder = _buffer.partition("<think>")
+                                    if pre_think:
+                                        yield pre_think
+                                    _thinking_active = True
+                                    _buffer = remainder
+                                    if "</think>" in _buffer:
+                                        _, _, after_think = _buffer.partition("</think>")
+                                        _thinking_active = False
+                                        _buffer = after_think
+                                elif "_lhs" in _buffer:
                                     # Log once when thinking content is first detected
                                     logger.debug(
-                                        "Filtering thinking content from model response"
+                                        "Filtering thinking content from model response (_lhs/_rhs pattern)"
                                     )
                                     # Yield any content before the _lhs tag
                                     pre_think, _, remainder = _buffer.partition("_lhs")
@@ -321,48 +321,60 @@ class LLMClient:
                                     _buffer = remainder
                                     # Check if _rhs is also in this same chunk
                                     if "_rhs" in _buffer:
-                                        # _rhs found in same chunk - extract content after it
                                         _, _, after_think = _buffer.partition("_rhs")
                                         _thinking_active = False
                                         _buffer = after_think
-                                # Check for qwen3.5-122b pattern: "Thinking Process:" at start
-                                # Use substring check to handle fragmented streaming
+                                # Check for qwen3.5-122b pattern: "Thinking Process:"
                                 elif (
                                     "Thinking Process:".startswith(_buffer)
                                     or "Thinking Process:" in _buffer
+                                    or "<think".startswith(_buffer)
                                 ):
-                                    # Could be the start of thinking content - check if full prefix present
                                     if "Thinking Process:" in _buffer:
                                         logger.debug(
                                             "Filtering thinking content from model response (Thinking Process pattern)"
                                         )
                                         _thinking_active = True
-                                        _buffer = ""  # Discard everything up to and including the prefix
-                                    # else: still accumulating "Thinking Process:" prefix, hold buffer
+                                        _buffer = ""  # Discard the prefix
+                                    # else: still accumulating a partial open
+                                    # marker like "<thi" or "Thinking " — hold
+                                    # buffer until full marker arrives or it
+                                    # diverges from any open prefix.
                                 elif _buffer:
-                                    # Not in thinking mode and no opening pattern - yield buffer content
+                                    # No opening pattern and no partial-open
+                                    # prefix — flush buffer to output.
                                     yield _buffer
                                     _buffer = ""
                             else:
-                                # Currently inside thinking block - look for closing tag
-                                # Check for standard _rhs closing tag
-                                if "_rhs" in _buffer:
-                                    # End of thinking block - extract content after _rhs
-                                    _, _, after_think = _buffer.partition("_rhs")
-                                    _thinking_active = False
-                                    _buffer = after_think
-                                # Check for qwen3.5-122b pattern: </think> closing tag
-                                elif "</think>" in _buffer:
-                                    # End of thinking block - extract content after </think>
+                                # Currently inside thinking block — look for any
+                                # of the known closing markers.
+                                if "</think>" in _buffer:
                                     _, _, after_think = _buffer.partition("</think>")
                                     _thinking_active = False
                                     _buffer = after_think
-                                # Else: still inside thinking, keep full buffer until closing tag arrives
-                            # Yield any buffered content when not in thinking mode
+                                elif "_rhs" in _buffer:
+                                    _, _, after_think = _buffer.partition("_rhs")
+                                    _thinking_active = False
+                                    _buffer = after_think
+                                # Else: still inside thinking; keep the buffer
+                                # until a close arrives. Drop accumulated
+                                # thinking content periodically so the buffer
+                                # cap protects against runaway thinking blocks.
+                                if (
+                                    _thinking_active
+                                    and len(_buffer) > _MAX_THINKING_BUFFER // 2
+                                ):
+                                    # Trim — the close-marker check works on the
+                                    # tail just as well, and we never emit any
+                                    # of this content to users.
+                                    _buffer = _buffer[-256:]
+                            # Yield any buffered content when not in thinking
+                            # mode and the buffer is not a partial open marker.
                             if (
                                 not _thinking_active
                                 and _buffer
                                 and not "Thinking Process:".startswith(_buffer)
+                                and not "<think".startswith(_buffer)
                             ):
                                 yield _buffer
                                 _buffer = ""

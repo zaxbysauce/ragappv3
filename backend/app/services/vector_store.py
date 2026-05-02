@@ -231,6 +231,44 @@ class VectorStore:
             self._fts_exceptions = 0
             return count
 
+    def has_parent_window_text_sample(self) -> bool:
+        """Return True if at least one indexed chunk's metadata contains a
+        non-empty ``parent_window_text``.
+
+        Used at startup to decide whether parent-window retrieval will
+        actually deliver wider context or silently fall back to small-chunk
+        rendering. Best-effort: returns False on any error so the lifespan
+        check does not block startup.
+        """
+        try:
+            if self.table is None:
+                return False
+            # LanceDB table.search().limit(N) is an iterator of dicts; we
+            # only need the first matching record. Filter on a sentinel
+            # JSON substring to avoid pulling rows that lack parent windows.
+            try:
+                cursor = (
+                    self.table.search()
+                    .where(
+                        "metadata LIKE '%\"parent_window_text\"%'",
+                        prefilter=True,
+                    )
+                    .limit(1)
+                )
+                # ``to_list()`` returns a list (possibly empty).
+                rows = cursor.to_list() if hasattr(cursor, "to_list") else list(cursor)
+            except Exception:
+                # Older LanceDB API shapes — fall back to a row scan.
+                rows = list(self.table.head(50))
+                for row in rows:
+                    md = row.get("metadata") if isinstance(row, dict) else None
+                    if md and "parent_window_text" in str(md):
+                        return True
+                return False
+            return bool(rows)
+        except Exception:
+            return False
+
     async def _get_expected_embedding_dim(self) -> Optional[int]:
         """Get the expected embedding dimension from the table schema."""
         if self.table is None:
@@ -698,49 +736,36 @@ class VectorStore:
                     *search_tasks, return_exceptions=True
                 )
 
-                # Collect results from successful searches
-                all_scale_results: List[Dict[str, Any]] = []
+                # Collect results from each successful scale into its own
+                # list so we can run true cross-scale Reciprocal Rank
+                # Fusion. Previously this code summed per-scale RRF scores
+                # directly, ignoring rank position across scales and
+                # making ``multi_scale_rrf_k`` a no-op.
+                per_scale_lists: List[List[Dict[str, Any]]] = []
                 for i, scale_results in enumerate(scale_results_list):
                     if isinstance(scale_results, list):
-                        all_scale_results.extend(scale_results)
+                        per_scale_lists.append(scale_results)
                     else:
                         logger.warning(
                             f"Search failed for scale {scale_strs[i]}: {scale_results}"
                         )
+                        per_scale_lists.append([])
 
-                # Cross-scale RRF fusion
-                # NOTE: Cross-scale fusion sums per-scale _rrf_score accumulations directly.
-                # It does NOT re-rank by position, so multi_scale_rrf_k is not applicable here.
-                # The per-scale scores were computed using hybrid_rrf_k above.
-                cross_scale_scores: dict = {}
-                id_to_record: dict = {}
+                # Defer to the shared rrf_fuse helper so the math is
+                # consistent with the multi-query and memory paths. The
+                # ``k`` parameter (``settings.multi_scale_rrf_k``) now
+                # actually shapes cross-scale ranking.
+                from app.utils.fusion import rrf_fuse  # local import — avoid cycles
 
-                # Add results from each scale with their RRF contributions
-                for rank, record in enumerate(all_scale_results):
-                    uid = record.get("id", f"scale_{rank}")
-                    # Use the per-scale RRF score as contribution
-                    scale_rrf = record.get("_rrf_score", 0.0)
-                    cross_scale_scores[uid] = (
-                        cross_scale_scores.get(uid, 0.0) + scale_rrf
-                    )
-                    if uid not in id_to_record:
-                        id_to_record[uid] = record
-
-                # Sort by cross-scale RRF score and return top limit
-                sorted_uids = sorted(
-                    cross_scale_scores,
-                    key=lambda u: cross_scale_scores[u],
-                    reverse=True,
+                fused = rrf_fuse(
+                    per_scale_lists,
+                    k=settings.multi_scale_rrf_k,
+                    limit=limit,
                 )
-                fused = []
-                for uid in sorted_uids[:limit]:
-                    record = dict(id_to_record[uid])
-                    record["_rrf_score"] = cross_scale_scores[uid]
-                    fused.append(record)
 
                 logger.info(
                     f"Multi-scale search: queried {len(scale_strs)} scales, "
-                    f"returning {len(fused)} results"
+                    f"returning {len(fused)} results (multi_scale_rrf_k={settings.multi_scale_rrf_k})"
                 )
                 return fused
 

@@ -123,6 +123,7 @@ export default function ChatShell() {
           role: m.role as "user" | "assistant",
           content: m.content,
           sources: m.sources ?? undefined,
+          memoriesUsed: m.memories ?? undefined,
           created_at: m.created_at,
           feedback: m.feedback ?? undefined,
         }));

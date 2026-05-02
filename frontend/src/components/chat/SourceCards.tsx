@@ -9,11 +9,22 @@ import type { Source } from "@/lib/api";
 
 interface SourceCardProps {
   source: Source;
-  index: number;
+  /** Fallback ordinal for legacy sources without a source_label. */
+  fallbackIndex: number;
   onClick: () => void;
 }
 
-function SourceCard({ source, index, onClick }: SourceCardProps) {
+/**
+ * Display the source's stable label (e.g. "S2") so badge numbering stays
+ * consistent with the inline citations rendered in the answer text. Falls
+ * back to a 1-based ordinal only for legacy sources missing source_label.
+ */
+export function getSourceBadgeLabel(source: Source, fallbackIndex: number): string {
+  if (source.source_label && source.source_label.trim()) return source.source_label;
+  return `S${fallbackIndex + 1}`;
+}
+
+function SourceCard({ source, fallbackIndex, onClick }: SourceCardProps) {
   const [expanded, setExpanded] = useState(false);
 
   const relevance = source.score !== undefined
@@ -23,6 +34,7 @@ function SourceCard({ source, index, onClick }: SourceCardProps) {
   const snippet = source.snippet ?? "";
   const isLong = snippet.length > 120;
   const displaySnippet = expanded || !isLong ? snippet : snippet.slice(0, 120) + "…";
+  const badgeLabel = getSourceBadgeLabel(source, fallbackIndex);
 
   return (
     <div
@@ -35,12 +47,15 @@ function SourceCard({ source, index, onClick }: SourceCardProps) {
       role="button"
       tabIndex={0}
       onKeyDown={(e) => e.key === "Enter" && onClick()}
-      aria-label={`Source ${index + 1}: ${source.filename}`}
+      aria-label={`Source ${badgeLabel}: ${source.filename}`}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
-          <span className="flex-shrink-0 flex items-center justify-center w-5 h-5 rounded-full bg-primary/10 text-primary text-[10px] font-bold">
-            {index + 1}
+          <span
+            className="flex-shrink-0 flex items-center justify-center min-w-[1.25rem] h-5 px-1 rounded-full bg-primary/10 text-primary text-[10px] font-bold"
+            aria-label={`Source label ${badgeLabel}`}
+          >
+            {badgeLabel}
           </span>
           <span className="font-medium text-foreground truncate" title={source.filename}>
             {source.filename}
@@ -132,7 +147,7 @@ export function SourceCards({ sources, onSourceClick, onViewAll, hideIfEmpty = t
             >
               <SourceCard
                 source={source}
-                index={i}
+                fallbackIndex={i}
                 onClick={() => onSourceClick(source)}
               />
             </motion.div>

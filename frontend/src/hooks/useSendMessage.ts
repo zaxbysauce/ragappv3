@@ -7,6 +7,7 @@ import {
   type ChatSessionMessage,
 } from "@/lib/api";
 import { useChatStore, type Message } from "@/stores/useChatStore";
+import type { UsedMemory } from "@/lib/api";
 
 export const MAX_INPUT_LENGTH = 2000;
 
@@ -31,6 +32,7 @@ export function useSendMessage(
     addMessage,
     appendToMessage,
     updateMessage,
+    replaceMessageId,
     setStreamingMessageId,
   } = useChatStore();
 
@@ -107,6 +109,9 @@ export function useSendMessage(
           onSources: (sources) => {
             updateMessage(assistantMessageId, { sources });
           },
+          onMemories: (memories: UsedMemory[]) => {
+            updateMessage(assistantMessageId, { memoriesUsed: memories });
+          },
           onError: (error) => {
             console.error("Chat stream error:", error);
             const isAbort =
@@ -148,22 +153,26 @@ export function useSendMessage(
                     role: "assistant",
                     content: assistantMsg.content,
                     sources: assistantMsg.sources ?? undefined,
+                    memories: assistantMsg.memoriesUsed ?? undefined,
                   })
                 );
               }
               const [userSaveResult, assistantSaveResult] = await Promise.all(saves);
 
+              // Atomically migrate temp client IDs to DB-assigned IDs.
+              // Uses replaceMessageId so messageIds, messagesById, and
+              // streamingMessageId remain consistent. Migrates the local
+              // feedback storage key alongside the ID swap.
               const migrateId = (oldId: string, saveResult: ChatSessionMessage) => {
                 const dbId = String(saveResult.id);
-                if (dbId !== oldId) {
-                  const feedbackKey = `chat_feedback_${oldId}`;
-                  const feedbackValue = localStorage.getItem(feedbackKey);
-                  if (feedbackValue !== null) {
-                    localStorage.setItem(`chat_feedback_${dbId}`, feedbackValue);
-                    localStorage.removeItem(feedbackKey);
-                  }
-                  updateMessage(oldId, { id: dbId, created_at: saveResult.created_at });
+                if (dbId === oldId) return;
+                const feedbackKey = `chat_feedback_${oldId}`;
+                const feedbackValue = localStorage.getItem(feedbackKey);
+                if (feedbackValue !== null) {
+                  localStorage.setItem(`chat_feedback_${dbId}`, feedbackValue);
+                  localStorage.removeItem(feedbackKey);
                 }
+                replaceMessageId(oldId, dbId, { created_at: saveResult.created_at });
               };
 
               migrateId(userMessage.id, userSaveResult);
@@ -188,6 +197,7 @@ export function useSendMessage(
       addMessage,
       appendToMessage,
       updateMessage,
+      replaceMessageId,
       setStreamingMessageId,
       activeVaultId,
       refreshHistory,

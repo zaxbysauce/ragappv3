@@ -83,6 +83,11 @@ vi.mock("@/stores/useChatStore", () => ({
   useChatInputError: vi.fn(() => mockChatState.inputError),
   useChatActiveChatId: vi.fn(() => mockChatState.activeChatId),
   useChatStreamingId: vi.fn(() => mockChatState.streamingMessageId),
+  useStreamingMessageContentLength: vi.fn(() => {
+    const id = mockChatState.streamingMessageId;
+    if (!id) return 0;
+    return (mockChatState.messagesById[id]?.content ?? "").length;
+  }),
 }));
 vi.mock("@/stores/useVaultStore");
 vi.mock("@/hooks/useSendMessage");
@@ -226,8 +231,12 @@ describe("TranscriptPane Virtualization", () => {
       _mockMessageCount = 0;
       render(<TranscriptPane />);
 
-      expect(screen.getByText("What are the key findings?")).toBeInTheDocument();
-      expect(screen.getByText("Summarize the main topics")).toBeInTheDocument();
+      expect(
+        screen.getByText("Summarize the uploaded documents with citations")
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText("Find contradictions or conflicts across sources")
+      ).toBeInTheDocument();
     });
   });
 

@@ -27,14 +27,68 @@ global.dispatchEvent = mockDispatchEvent;
 // =============================================================================
 
 vi.mock("@/stores/useChatStore", () => {
-  const useChatStoreMock = vi.fn();
-  const useChatMessagesMock = vi.fn(() => {
-    const state = useChatStoreMock();
+  const chatStoreMock: any = vi.fn();
+  // RightPane uses useChatStore.getState() to read messagesById when
+  // computing structured outputs. Provide a getState shim that exposes
+  // a messagesById map derived from whatever fixture the test installs.
+  chatStoreMock.getState = () => {
+    const state = chatStoreMock() ?? {};
+    const messagesById: Record<string, any> = {};
+    for (const m of state.messages ?? []) {
+      if (m?.id) messagesById[String(m.id)] = m;
+    }
+    return { ...state, messagesById };
+  };
+  const messagesFromMock = (): any[] => {
+    const state = chatStoreMock();
     return state?.messages ?? [];
+  };
+  const useChatMessagesMock = vi.fn(messagesFromMock);
+  // Granular selectors used by the new RightPane. They derive from the
+  // same mock state so existing fixtures continue to work.
+  const useLastCompletedAssistantSourcesMock = vi.fn(() => {
+    const messages = messagesFromMock();
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i];
+      if (msg?.role === "assistant" && msg?.sources) return msg.sources;
+    }
+    return undefined;
+  });
+  const useLastUserContentMock = vi.fn(() => {
+    const messages = messagesFromMock();
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i]?.role === "user") return messages[i].content ?? "";
+    }
+    return "";
+  });
+  const useSourcesForSourceIdMock = vi.fn((sourceId?: string) => {
+    if (!sourceId) return undefined;
+    const messages = messagesFromMock();
+    for (const msg of messages) {
+      if (msg?.sources?.some((s: any) => s?.id === sourceId)) {
+        return msg.sources;
+      }
+    }
+    return undefined;
+  });
+  const useCompletedAssistantMessageIdsKeyMock = vi.fn(() => {
+    const messages = messagesFromMock();
+    const ids = messages
+      .filter((m: any) => m?.role === "assistant")
+      .map((m: any) => m.id ?? "");
+    return JSON.stringify(ids);
   });
   return {
-    useChatStore: useChatStoreMock,
+    useChatStore: chatStoreMock,
     useChatMessages: useChatMessagesMock,
+    useLastCompletedAssistantSources: useLastCompletedAssistantSourcesMock,
+    useLastUserContent: useLastUserContentMock,
+    useSourcesForSourceId: useSourcesForSourceIdMock,
+    useCompletedAssistantMessageIdsKey: useCompletedAssistantMessageIdsKeyMock,
+    parseCompletedAssistantIds: (key: string) => {
+      if (!key) return [];
+      try { const p = JSON.parse(key); return Array.isArray(p) ? p.map(String) : []; } catch { return []; }
+    },
   };
 });
 vi.mock("@/stores/useChatShellStore", () => ({
@@ -268,7 +322,7 @@ describe("RightPane ADVERSARIAL TESTS", () => {
       });
 
       // Should render without error
-      expect(screen.getByText("1")).toBeInTheDocument();
+      expect(screen.getByText("S1")).toBeInTheDocument();
     });
 
     it("should handle query with only whitespace", async () => {
@@ -341,7 +395,7 @@ describe("RightPane ADVERSARIAL TESTS", () => {
       });
 
       // Should still render
-      expect(screen.getByText("1")).toBeInTheDocument();
+      expect(screen.getByText("S1")).toBeInTheDocument();
     });
 
     it("should handle 500K character snippet", async () => {
@@ -378,7 +432,7 @@ describe("RightPane ADVERSARIAL TESTS", () => {
       });
 
       // Filename should be truncated
-      expect(screen.getByText("1")).toBeInTheDocument();
+      expect(screen.getByText("S1")).toBeInTheDocument();
     });
 
     it("should handle snippet with no spaces (100K chars)", async () => {

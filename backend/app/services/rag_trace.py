@@ -1,0 +1,96 @@
+"""Structured trace instrumentation for RAG queries (P3.1).
+
+A :class:`RAGTrace` accumulates the per-query observability data that the
+engine emits at each pipeline stage: query transformation, retrieval,
+fusion, reranking, distillation, packing, parent-window expansion, and
+generation/citation validation.
+
+Traces are always built (cheap; just a dict). They are emitted to the
+logger at INFO level for any query, and surfaced in the streaming
+``done`` event's ``trace`` field when ``settings.rag_trace_in_response``
+is true. The default keeps trace data out of normal user-visible
+metadata — operators flip the flag on for evaluation runs.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class RAGTrace:
+    """Aggregated observability snapshot for a single RAG query."""
+
+    original_query: str = ""
+    transformed_queries: List[str] = field(default_factory=list)
+    variants_dropped: List[str] = field(default_factory=list)
+    dense_hits_per_variant: List[int] = field(default_factory=list)
+    fts_status: str = "disabled"
+    fts_exceptions: int = 0
+    fused_hits: int = 0
+    reranked_hits: Optional[int] = None
+    rerank_status: str = "disabled"
+    filtered_hits: int = 0
+    distance_threshold: Optional[float] = None
+    distillation_before: Optional[int] = None
+    distillation_after: Optional[int] = None
+    parent_windows_expanded: int = 0
+    token_pack_included: int = 0
+    token_pack_skipped: int = 0
+    token_pack_truncated: int = 0
+    final_sources: List[str] = field(default_factory=list)
+    final_memories: List[str] = field(default_factory=list)
+    cited_sources: List[str] = field(default_factory=list)
+    cited_memories: List[str] = field(default_factory=list)
+    invalid_citations: List[str] = field(default_factory=list)
+    answer_supported: Optional[bool] = None
+    exact_match_promoted: bool = False
+    multi_scale_used: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "original_query": self.original_query,
+            "transformed_queries": list(self.transformed_queries),
+            "variants_dropped": list(self.variants_dropped),
+            "dense_hits_per_variant": list(self.dense_hits_per_variant),
+            "fts_status": self.fts_status,
+            "fts_exceptions": self.fts_exceptions,
+            "fused_hits": self.fused_hits,
+            "reranked_hits": self.reranked_hits,
+            "rerank_status": self.rerank_status,
+            "filtered_hits": self.filtered_hits,
+            "distance_threshold": self.distance_threshold,
+            "distillation_before": self.distillation_before,
+            "distillation_after": self.distillation_after,
+            "parent_windows_expanded": self.parent_windows_expanded,
+            "token_pack_included": self.token_pack_included,
+            "token_pack_skipped": self.token_pack_skipped,
+            "token_pack_truncated": self.token_pack_truncated,
+            "final_sources": list(self.final_sources),
+            "final_memories": list(self.final_memories),
+            "cited_sources": list(self.cited_sources),
+            "cited_memories": list(self.cited_memories),
+            "invalid_citations": list(self.invalid_citations),
+            "answer_supported": self.answer_supported,
+            "exact_match_promoted": self.exact_match_promoted,
+            "multi_scale_used": self.multi_scale_used,
+        }
+
+    def log(self) -> None:
+        """Emit the trace to the application logger.
+
+        Uses INFO so that production deployments capture the structured
+        signal without flipping debug logging globally. Reasoning text is
+        never persisted to the trace, only counts and identifiers.
+        """
+        try:
+            logger.info("RAG trace: %s", self.to_dict())
+        except Exception:  # pragma: no cover — defensive
+            logger.warning("Failed to emit RAG trace")
+
+
+__all__ = ["RAGTrace"]
