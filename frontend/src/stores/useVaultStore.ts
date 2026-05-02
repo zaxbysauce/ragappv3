@@ -34,7 +34,24 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     set({ loading: true, error: null });
     try {
       const data = await listVaults();
-      set({ vaults: data.vaults ?? [], loading: false, error: null });
+      const vaults = data.vaults ?? [];
+      set((state) => {
+        // Validate that the persisted activeVaultId is still accessible.
+        // If not, auto-select the first vault or clear to null.
+        const currentId = state.activeVaultId;
+        const isValid = currentId != null && vaults.some((v) => v.id === currentId);
+        if (!isValid) {
+          const first = vaults[0] ?? null;
+          const newId = first ? first.id : null;
+          if (newId != null) {
+            localStorage.setItem("kv_active_vault_id", String(newId));
+          } else {
+            localStorage.removeItem("kv_active_vault_id");
+          }
+          return { vaults, activeVaultId: newId, loading: false, error: null };
+        }
+        return { vaults, loading: false, error: null };
+      });
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Failed to fetch vaults";
       set({ error: errorMessage, loading: false });

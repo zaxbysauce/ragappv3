@@ -1,5 +1,4 @@
-import { useRef } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -7,19 +6,27 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Brain, Plus, Search, Trash2, Loader2 } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Brain, Plus, Search, Trash2, Pencil, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import { useVaultStore } from "@/stores/useVaultStore";
 import { VaultSelector } from "@/components/vault/VaultSelector";
 import { useMemorySearch } from "@/hooks/useMemorySearch";
 import { useMemoryCrud, getCategoryFromMetadata, getTagsFromMetadata, getSourceFromMetadata, MAX_MEMORY_CONTENT_LENGTH } from "@/hooks/useMemoryCrud";
+import { updateMemory, type MemoryResult } from "@/lib/api";
 
 export default function MemoryPage() {
   const { activeVaultId } = useVaultStore();
 
-  // Hook 1: Memory search/list functionality
   const { memories, searchQuery, setSearchQuery, loading, handleSearch } = useMemorySearch(activeVaultId);
 
-  // Hook 2: Memory CRUD operations
   const {
     isAddDialogOpen,
     setIsAddDialogOpen,
@@ -34,15 +41,62 @@ export default function MemoryPage() {
     handleDeleteMemory,
   } = useMemoryCrud(activeVaultId, handleSearch);
 
-  const scrollRef = useRef<HTMLDivElement>(null);
+  // Edit state
+  const [editTarget, setEditTarget] = useState<MemoryResult | null>(null);
+  const [editContent, setEditContent] = useState("");
+  const [editCategory, setEditCategory] = useState("");
+  const [editTags, setEditTags] = useState("");
+  const [editSource, setEditSource] = useState("");
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
 
-  const virtualizer = useVirtualizer({
-    count: memories?.length ?? 0,
-    getScrollElement: () => scrollRef.current,
-    estimateSize: () => 120,
-    measureElement: (el) => el?.getBoundingClientRect().height ?? 120,
-    overscan: 5,
-  });
+  // Delete-confirm dialog state
+  const [deleteTarget, setDeleteTarget] = useState<MemoryResult | null>(null);
+
+  function openEdit(memory: MemoryResult) {
+    setEditTarget(memory);
+    setEditContent(memory.content ?? "");
+    setEditCategory(getCategoryFromMetadata(memory.metadata) === "Uncategorized" ? "" : getCategoryFromMetadata(memory.metadata));
+    setEditTags(getTagsFromMetadata(memory.metadata).join(", "));
+    setEditSource(getSourceFromMetadata(memory.metadata));
+  }
+
+  function closeEdit() {
+    setEditTarget(null);
+  }
+
+  async function handleSaveEdit() {
+    if (!editTarget) return;
+    if (!editContent.trim()) {
+      toast.error("Content cannot be empty");
+      return;
+    }
+    setIsSavingEdit(true);
+    try {
+      await updateMemory(editTarget.id, {
+        content: editContent.trim(),
+        category: editCategory.trim() || undefined,
+        tags: editTags.trim() || undefined,
+        source: editSource.trim() || undefined,
+      });
+      toast.success("Memory updated");
+      closeEdit();
+      await handleSearch();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to update memory");
+    } finally {
+      setIsSavingEdit(false);
+    }
+  }
+
+  function openDeleteDialog(memory: MemoryResult) {
+    setDeleteTarget(memory);
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+    await handleDeleteMemory(deleteTarget.id);
+    setDeleteTarget(null);
+  }
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
@@ -75,9 +129,10 @@ export default function MemoryPage() {
           {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Search className="w-4 h-4 mr-2" />}
           Search
         </Button>
-        <Badge variant="secondary">{memories?.length || 0} memories</Badge>
+        <Badge variant="secondary">{memories?.length || 0} {searchQuery ? "results" : "memories"}</Badge>
       </div>
 
+      {/* Add Memory Form */}
       {isAddDialogOpen && (
         <Card>
           <CardHeader>
@@ -95,9 +150,7 @@ export default function MemoryPage() {
                 onChange={handleContentChange}
                 onKeyDown={handleKeyDown}
               />
-              {contentError && (
-                <span className="text-xs text-destructive">{contentError}</span>
-              )}
+              {contentError && <span className="text-xs text-destructive">{contentError}</span>}
               <div className="flex justify-end">
                 <span className={`text-xs ${newMemory.content.length > MAX_MEMORY_CONTENT_LENGTH ? "text-destructive" : "text-muted-foreground"}`}>
                   {newMemory.content.length}/{MAX_MEMORY_CONTENT_LENGTH}
@@ -134,9 +187,7 @@ export default function MemoryPage() {
               />
             </div>
             <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setIsAddDialogOpen(false)}>
-                Cancel
-              </Button>
+              <Button variant="outline" onClick={() => setIsAddDialogOpen(false)}>Cancel</Button>
               <Button onClick={handleAddMemory} disabled={isSubmitting || !newMemory.content.trim()}>
                 {isSubmitting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Plus className="w-4 h-4 mr-2" />}
                 Add Memory
@@ -146,6 +197,7 @@ export default function MemoryPage() {
         </Card>
       )}
 
+      {/* Memory List — normal document flow, no virtualization */}
       {loading && (!memories || memories.length === 0) ? (
         <div className="space-y-4">
           {[...Array(4)].map((_, i) => (
@@ -159,7 +211,6 @@ export default function MemoryPage() {
                     <div className="flex flex-wrap items-center gap-2 pt-2">
                       <Skeleton className="h-5 w-[70px]" />
                       <Skeleton className="h-5 w-[50px]" />
-                      <Skeleton className="h-5 w-[60px]" />
                     </div>
                   </div>
                   <Skeleton className="h-8 w-8 shrink-0" />
@@ -178,59 +229,122 @@ export default function MemoryPage() {
           </CardContent>
         </Card>
       ) : (
-        <div ref={scrollRef} className="overflow-y-auto flex-1" style={{ maxHeight: '70vh', contain: 'strict' }}>
-          <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
-            {virtualizer.getVirtualItems().map((virtualItem) => {
-              const memory = memories[virtualItem.index];
-              return (
-                <div
-                  key={virtualItem.key}
-                  data-index={virtualItem.index}
-                  ref={virtualizer.measureElement}
-                  style={{ position: 'absolute', top: virtualItem.start, left: 0, right: 0, paddingBottom: '1rem' }}
-                >
-                  <Card>
-                    <CardContent className="p-4">
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="flex-1 space-y-2">
-                          <p className="text-sm whitespace-pre-wrap">{memory.content}</p>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <Badge variant="outline">{getCategoryFromMetadata(memory.metadata)}</Badge>
-                            {getTagsFromMetadata(memory.metadata).map((tag, index) => (
-                              <Badge key={index} variant="secondary" className="text-xs">
-                                {tag}
-                              </Badge>
-                            ))}
-                            {getSourceFromMetadata(memory.metadata) && (
-                              <span className="text-xs text-muted-foreground">
-                                Source: {getSourceFromMetadata(memory.metadata)}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 shrink-0"
-                          onClick={() => handleDeleteMemory(memory.id)}
-                          disabled={isDeleting === memory.id}
-                          aria-label="Delete memory"
-                        >
-                          {isDeleting === memory.id ? (
-                            <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" aria-hidden="true" />
-                          ) : (
-                            <Trash2 className="w-4 h-4 text-destructive" aria-hidden="true" />
-                          )}
-                        </Button>
-                      </div>
-                    </CardContent>
-                  </Card>
+        <div className="space-y-3">
+          {memories.map((memory) => (
+            <Card key={memory.id}>
+              <CardContent className="p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex-1 space-y-2">
+                    <p className="text-sm whitespace-pre-wrap">{memory.content}</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="outline">{getCategoryFromMetadata(memory.metadata)}</Badge>
+                      {getTagsFromMetadata(memory.metadata).map((tag, idx) => (
+                        <Badge key={idx} variant="secondary" className="text-xs">{tag}</Badge>
+                      ))}
+                      {getSourceFromMetadata(memory.metadata) && (
+                        <span className="text-xs text-muted-foreground">
+                          Source: {getSourceFromMetadata(memory.metadata)}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      onClick={() => openEdit(memory)}
+                      aria-label="Edit memory"
+                    >
+                      <Pencil className="w-4 h-4 text-muted-foreground" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      onClick={() => openDeleteDialog(memory)}
+                      disabled={isDeleting === memory.id}
+                      aria-label="Delete memory"
+                    >
+                      {isDeleting === memory.id ? (
+                        <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                      ) : (
+                        <Trash2 className="w-4 h-4 text-destructive" />
+                      )}
+                    </Button>
+                  </div>
                 </div>
-              );
-            })}
-          </div>
+              </CardContent>
+            </Card>
+          ))}
         </div>
       )}
+
+      {/* Edit Memory Dialog */}
+      <Dialog open={!!editTarget} onOpenChange={(open) => { if (!open) closeEdit(); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Edit Memory</DialogTitle>
+            <DialogDescription>Update memory content, category, tags, or source.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label htmlFor="edit-content">Content *</Label>
+              <Textarea
+                id="edit-content"
+                className="min-h-[100px]"
+                value={editContent}
+                onChange={(e) => setEditContent(e.target.value)}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="edit-category">Category</Label>
+                <Input id="edit-category" value={editCategory} onChange={(e) => setEditCategory(e.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit-source">Source</Label>
+                <Input id="edit-source" value={editSource} onChange={(e) => setEditSource(e.target.value)} />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-tags">Tags (comma-separated)</Label>
+              <Input id="edit-tags" value={editTags} onChange={(e) => setEditTags(e.target.value)} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={closeEdit}>Cancel</Button>
+            <Button onClick={handleSaveEdit} disabled={isSavingEdit || !editContent.trim()}>
+              {isSavingEdit && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Save Changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirm Dialog */}
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Memory</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete this memory? This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          {deleteTarget && (
+            <p className="text-sm text-muted-foreground border rounded p-3 bg-muted line-clamp-3">
+              {deleteTarget.content}
+            </p>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={confirmDelete} disabled={isDeleting === deleteTarget?.id}>
+              {isDeleting === deleteTarget?.id && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

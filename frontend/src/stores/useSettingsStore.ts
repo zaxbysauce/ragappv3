@@ -51,19 +51,35 @@ export interface SettingsErrors {
   chat_model?: string;
 }
 
+// Fields that invalidate existing embeddings when changed — reindex required.
+export const REINDEX_REQUIRED_FIELDS = new Set<keyof SettingsFormData>([
+  "embedding_model",
+  "vector_metric",
+  "chunk_size_chars",
+  "chunk_overlap_chars",
+  "embedding_doc_prefix",
+  "embedding_query_prefix",
+]);
+
 export interface SettingsState {
   // Data state
   settings: SettingsResponse | null;
   formData: SettingsFormData;
-  
+
   // Loading state
   loading: boolean;
   saving: boolean;
-  
+
   // Error/Status state
   error: string | null;
   errors: SettingsErrors;
   saveStatus: "idle" | "success" | "error";
+
+  // Reindex-required banner — true after saving a change that invalidates embeddings
+  reindexRequired: boolean;
+  setReindexRequired: (value: boolean) => void;
+  /** Returns true if any currently-changed field requires a reindex. */
+  checkReindexRequired: () => boolean;
 
   // Actions
   setSettings: (settings: SettingsResponse | null) => void;
@@ -125,6 +141,35 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   error: null,
   errors: {},
   saveStatus: "idle",
+  reindexRequired: false,
+
+  setReindexRequired: (value) => set({ reindexRequired: value }),
+
+  checkReindexRequired: () => {
+    const { settings, formData } = get();
+    if (!settings) return false;
+    const decodeStr = (v: string | null | undefined, fallback: string): string => {
+      if (v == null) return fallback;
+      if (v.length >= 2 && v.startsWith('"') && v.endsWith('"')) {
+        try {
+          const parsed = JSON.parse(v);
+          if (typeof parsed === "string") return parsed;
+        } catch {} // eslint-disable-line no-empty
+      }
+      return v;
+    };
+    for (const field of REINDEX_REQUIRED_FIELDS) {
+      const current = formData[field];
+      let saved: unknown;
+      if (field === "embedding_model") saved = decodeStr(settings.embedding_model, "");
+      else if (field === "vector_metric") saved = decodeStr(settings.vector_metric, "cosine");
+      else if (field === "embedding_doc_prefix") saved = decodeStr(settings.embedding_doc_prefix, "");
+      else if (field === "embedding_query_prefix") saved = decodeStr(settings.embedding_query_prefix, "");
+      else saved = (settings as unknown as Record<string, unknown>)[field];
+      if (current !== saved) return true;
+    }
+    return false;
+  },
 
   // Actions
   setSettings: (settings) => {
@@ -315,6 +360,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       error: null,
       errors: {},
       saveStatus: "idle",
+      reindexRequired: false,
     });
   },
 
@@ -328,6 +374,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       error: null,
       errors: {},
       saveStatus: "idle",
+      reindexRequired: false,
     });
   },
 }));

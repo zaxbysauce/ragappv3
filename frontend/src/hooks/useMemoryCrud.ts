@@ -97,8 +97,6 @@ export function useMemoryCrud(
   }, [handleAddMemory]);
 
   const handleDeleteMemory = useCallback(async (id: string) => {
-    if (!confirm("Are you sure you want to delete this memory?")) return;
-
     setIsDeleting(id);
     try {
       await deleteMemory(id);

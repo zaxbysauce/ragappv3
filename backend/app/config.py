@@ -106,6 +106,18 @@ class Settings(BaseSettings):
     chat pipeline skips the memory_store search step entirely."""
     memory_retrieval_top_k: int = 5
     """Maximum memories returned by hybrid memory search per query."""
+    memory_relevance_filter_enabled: bool = True
+    """When True, apply similarity thresholds to filter out weakly related memories
+    before injecting them into the prompt. Prevents unrelated memories from polluting
+    document-grounded answers."""
+    memory_dense_min_similarity: float = 0.30
+    """Minimum cosine similarity for a memory to pass dense-path filtering.
+    Memories with sim <= 0.0 are always excluded. Raise this to tighten relevance."""
+    memory_rrf_min_score: float = 0.005
+    """Minimum RRF fused score for a memory to pass RRF-path filtering."""
+    memory_context_top_k: int = 3
+    """Maximum memories actually injected into the prompt after relevance filtering.
+    Applied after threshold filtering; further limits prompt context pollution."""
     rag_trace_in_response: bool = False
     """When True, RAG queries emit a ``trace`` field in the streaming
     done event with detailed retrieval/generation observability. Default

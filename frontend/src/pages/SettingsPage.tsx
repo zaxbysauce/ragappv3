@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Loader2 } from "lucide-react";
+import { Loader2, AlertTriangle } from "lucide-react";
 import { getSettings, updateSettings, testConnections } from "@/lib/api";
 import type { ConnectionTestResult } from "@/lib/api";
 import { useSettingsStore } from "@/stores/useSettingsStore";
@@ -28,14 +28,17 @@ function SettingsPageContent() {
     saving,
     error,
     errors,
+    reindexRequired,
     setSettings,
     initializeForm,
     setLoading,
     setSaving,
     setError,
+    setReindexRequired,
     updateFormField,
     validateForm,
     hasChanges,
+    checkReindexRequired,
   } = useSettingsStore();
 
   useEffect(() => {
@@ -104,6 +107,9 @@ const handleInputChange = (field: keyof SettingsFormData, value: string | boolea
       return;
     }
 
+    // Check before save so we know whether embeddings will be invalidated.
+    const willRequireReindex = checkReindexRequired();
+
     setSaving(true);
     setError(null);
 
@@ -135,7 +141,12 @@ const handleInputChange = (field: keyof SettingsFormData, value: string | boolea
         chat_model: formData.chat_model,
       });
       setSettings(updated);
-      toast.success("Settings saved successfully");
+      if (willRequireReindex) {
+        setReindexRequired(true);
+        toast.warning("Settings saved. Existing document embeddings are stale — reindex required.");
+      } else {
+        toast.success("Settings saved successfully");
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save settings");
       toast.error(err instanceof Error ? err.message : "Failed to save settings");
@@ -200,6 +211,25 @@ const handleInputChange = (field: keyof SettingsFormData, value: string | boolea
             <p className="text-destructive text-center">Error: {error}</p>
           </CardContent>
         </Card>
+      )}
+
+      {reindexRequired && (
+        <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 p-4">
+          <AlertTriangle className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" aria-hidden />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-amber-800 dark:text-amber-200">Reindex required</p>
+            <p className="text-xs text-amber-700 dark:text-amber-300 mt-0.5">
+              Changes to embedding model, chunk size, or vector settings invalidate existing document
+              embeddings. Re-process your documents via the Documents page to restore accurate retrieval.
+            </p>
+          </div>
+          <button
+            onClick={() => setReindexRequired(false)}
+            className="text-amber-600 hover:text-amber-800 text-xs underline flex-shrink-0"
+          >
+            Dismiss
+          </button>
+        </div>
       )}
 
       {!loading && !error && (

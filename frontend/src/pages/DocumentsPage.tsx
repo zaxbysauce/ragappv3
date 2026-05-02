@@ -100,9 +100,9 @@ export default function DocumentsPage() {
   const { uploads, addUploads, cancelUpload, removeUpload, clearCompleted, retryUpload } = useUploadStore();
   const { activeVaultId } = useVaultStore();
 
-  const fetchDocuments = useCallback(async () => {
+  const fetchDocuments = useCallback(async (search?: string) => {
     try {
-      const response = await listDocuments(activeVaultId ?? undefined);
+      const response = await listDocuments(activeVaultId ?? undefined, search);
       setDocuments(response?.documents || []);
     } catch (err) {
       console.error("Failed to fetch documents:", err);
@@ -151,6 +151,17 @@ export default function DocumentsPage() {
     };
     loadData();
   }, [fetchDocuments, fetchStats]);
+
+  // Server-side search: re-fetch when debounced search query changes.
+  // Skip on initial mount — loadData already fetches.
+  const isFirstSearchRender = useRef(true);
+  useEffect(() => {
+    if (isFirstSearchRender.current) {
+      isFirstSearchRender.current = false;
+      return;
+    }
+    fetchDocuments(debouncedSearchQuery || undefined);
+  }, [debouncedSearchQuery, fetchDocuments]);
 
   // Status polling for documents in processing state — adaptive backoff.
   // Starts fast (2 s) and backs off up to 30 s when no status change is detected,
@@ -377,14 +388,10 @@ export default function DocumentsPage() {
     });
   };
 
+  // Server already filters by search query — only apply the local optimistic-delete mask.
   const filteredDocuments = useMemo(
-    () =>
-      documents
-        ?.filter((doc) => !optimisticallyDeletedIds.has(doc.id))
-        .filter((doc) =>
-          (doc.filename ?? '').toLowerCase().includes(debouncedSearchQuery.toLowerCase())
-        ) ?? [],
-    [documents, debouncedSearchQuery, optimisticallyDeletedIds]
+    () => documents?.filter((doc) => !optimisticallyDeletedIds.has(doc.id)) ?? [],
+    [documents, optimisticallyDeletedIds]
   );
 
   const tableVirtualizer = useVirtualizer({

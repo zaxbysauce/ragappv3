@@ -150,7 +150,7 @@ export default function VaultsPage() {
     );
   }
 
-  const isDefaultVault = (vault: Vault) => vault.id === 1;
+  const isDefaultVault = (vault: Vault) => vault.is_default === true;
 
   return (
     <div className="space-y-6">

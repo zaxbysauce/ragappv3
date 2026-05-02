@@ -43,9 +43,16 @@ class SearchResult(BaseModel):
 
 
 class SearchResponse(BaseModel):
-    """Response model for search endpoint."""
+    """Response model for search endpoint.
+
+    ``search_type`` is always ``"diagnostic"`` — this endpoint performs simple
+    vector similarity search and does NOT use the full RAG retrieval pipeline
+    (no reranking, no hybrid fusion, no citation generation). Use ``/chat``
+    for production RAG answers.
+    """
 
     results: List[SearchResult]
+    search_type: str = "diagnostic"
 
 
 @router.post("/search", response_model=SearchResponse)

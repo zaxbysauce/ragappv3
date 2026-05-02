@@ -75,6 +75,8 @@ class VaultResponse(BaseModel):
     memory_count: int = 0
     session_count: int = 0
     org_id: Optional[int] = None
+    is_default: bool = False
+    """True when this vault is the system default and cannot be renamed or deleted."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -87,8 +89,9 @@ class VaultListResponse(BaseModel):
 
 def _row_to_vault_response(row) -> VaultResponse:
     """Map a database row to VaultResponse."""
+    vault_id = row[0]
     return VaultResponse(
-        id=row[0],
+        id=vault_id,
         name=row[1],
         description=row[2],
         created_at=row[3],
@@ -97,6 +100,7 @@ def _row_to_vault_response(row) -> VaultResponse:
         memory_count=row[6] or 0,
         session_count=row[7] or 0,
         org_id=row[8],
+        is_default=(vault_id == 1),
     )
 
 

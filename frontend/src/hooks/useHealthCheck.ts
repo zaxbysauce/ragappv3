@@ -31,20 +31,8 @@ export function useHealthCheck(options?: UseHealthCheckOptions): HealthStatus {
       const newEmbeddings = services?.embeddings ?? false;
       const newChat = services?.chat ?? false;
 
-      setHealth((prev) => {
+      setHealth(() => {
         const now = new Date();
-        if (
-          prev.backend === newBackend &&
-          prev.embeddings === newEmbeddings &&
-          prev.chat === newChat &&
-          !prev.loading
-        ) {
-          // Service status unchanged — still update lastChecked for freshness
-          // but return same object reference to avoid re-rendering consumers
-          // that only depend on service status fields.
-          prev.lastChecked = now;
-          return prev;
-        }
         return {
           backend: newBackend,
           embeddings: newEmbeddings,
