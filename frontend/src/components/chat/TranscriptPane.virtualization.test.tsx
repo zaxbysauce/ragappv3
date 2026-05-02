@@ -226,8 +226,12 @@ describe("TranscriptPane Virtualization", () => {
       _mockMessageCount = 0;
       render(<TranscriptPane />);
 
-      expect(screen.getByText("What are the key findings?")).toBeInTheDocument();
-      expect(screen.getByText("Summarize the main topics")).toBeInTheDocument();
+      expect(
+        screen.getByText("Summarize the uploaded documents with citations")
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText("Find contradictions or conflicts across sources")
+      ).toBeInTheDocument();
     });
   });
 

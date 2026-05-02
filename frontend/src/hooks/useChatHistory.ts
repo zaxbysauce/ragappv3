@@ -63,6 +63,7 @@ export function useChatHistory(activeVaultId: number | null): UseChatHistoryRetu
         role: m.role as "user" | "assistant",
         content: m.content,
         sources: m.sources ?? undefined,
+        memoriesUsed: m.memories ?? undefined,
         created_at: m.created_at,
         feedback: m.feedback ?? undefined,
       }));

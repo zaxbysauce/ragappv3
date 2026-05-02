@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
     content TEXT NOT NULL,
     sources TEXT,    -- JSON array of source references
+    memories TEXT,   -- JSON array of memories used (M# labels) — NULL on legacy rows
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
 );
@@ -387,6 +388,8 @@ def run_migrations(sqlite_path: str) -> None:
     migrate_add_org_slug_column(sqlite_path)
     migrate_add_fork_columns(sqlite_path)
     migrate_add_feedback_column(sqlite_path)
+    migrate_add_chat_memories_column(sqlite_path)
+    migrate_add_memory_embedding_column(sqlite_path)
 
     # Add partial unique index for duplicate hash detection (HIGH-10)
     # Wrapped in IntegrityError handler: existing databases may have duplicate
@@ -727,6 +730,49 @@ def migrate_add_feedback_column(sqlite_path: str) -> None:
         existing_cols = [row[1] for row in conn.execute("PRAGMA table_info(chat_messages)").fetchall()]
         if "feedback" not in existing_cols:
             conn.execute("ALTER TABLE chat_messages ADD COLUMN feedback TEXT")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def migrate_add_chat_memories_column(sqlite_path: str) -> None:
+    """Migration: add ``memories`` JSON column to chat_messages table.
+
+    Stores the list of memories used by the assistant when generating each
+    message. Persisted as a JSON string for symmetry with ``sources``. Legacy
+    rows are left with NULL — the chat route handles both shapes.
+    """
+    conn = sqlite3.connect(sqlite_path)
+    try:
+        existing_cols = [
+            row[1]
+            for row in conn.execute("PRAGMA table_info(chat_messages)").fetchall()
+        ]
+        if "memories" not in existing_cols:
+            conn.execute("ALTER TABLE chat_messages ADD COLUMN memories TEXT")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def migrate_add_memory_embedding_column(sqlite_path: str) -> None:
+    """Migration: add ``embedding`` and ``embedding_model`` columns to memories.
+
+    Memory embeddings power semantic/hybrid memory retrieval. The embedding
+    is stored as a JSON-encoded float list keyed by the model that produced
+    it so we can detect stale embeddings if the embedding model changes.
+    Both columns are nullable so existing memories still work via FTS5
+    fallback when no embedding has been computed yet.
+    """
+    conn = sqlite3.connect(sqlite_path)
+    try:
+        existing_cols = [
+            row[1] for row in conn.execute("PRAGMA table_info(memories)").fetchall()
+        ]
+        if "embedding" not in existing_cols:
+            conn.execute("ALTER TABLE memories ADD COLUMN embedding TEXT")
+        if "embedding_model" not in existing_cols:
+            conn.execute("ALTER TABLE memories ADD COLUMN embedding_model TEXT")
         conn.commit()
     finally:
         conn.close()

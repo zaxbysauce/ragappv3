@@ -8,9 +8,10 @@ import {
   Sparkles,
   Database,
   ArrowDown,
-  TrendingUp,
   AlignLeft,
-  CheckCircle2,
+  GitCompare,
+  ListChecks,
+  Quote,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -49,10 +50,10 @@ interface EmptyTranscriptProps {
 // =============================================================================
 
 const SUGGESTED_PROMPTS = [
-  { text: "What are the key findings?", Icon: TrendingUp },
-  { text: "Summarize the main topics", Icon: AlignLeft },
-  { text: "What data sources were used?", Icon: Database },
-  { text: "What are the main conclusions?", Icon: CheckCircle2 },
+  { text: "Summarize the uploaded documents with citations", Icon: AlignLeft },
+  { text: "Find contradictions or conflicts across sources", Icon: GitCompare },
+  { text: "Create an action-item list from the documents", Icon: ListChecks },
+  { text: "Show the strongest evidence for the main conclusion", Icon: Quote },
 ];
 
 // =============================================================================
@@ -348,6 +349,7 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
         role: m.role as "user" | "assistant",
         content: m.content,
         sources: m.sources ?? undefined,
+        memoriesUsed: m.memories ?? undefined,
         created_at: m.created_at,
         feedback: m.feedback ?? undefined,
       }));

@@ -1,11 +1,13 @@
 import { create } from "zustand";
-import type { Source } from "@/lib/api";
+import type { Source, UsedMemory } from "@/lib/api";
 
 export interface Message {
   id: string;
   role: "user" | "assistant";
   content: string;
   sources?: Source[];
+  /** Memories the assistant used while generating this message (structured, with [M#] labels). */
+  memoriesUsed?: UsedMemory[];
   stopped?: boolean;
   error?: string;
   created_at?: string;
@@ -30,6 +32,14 @@ export interface ChatState {
   /** Fast streaming path: appends a chunk to content without replacing the full array. */
   appendToMessage: (id: string, chunk: string) => void;
   updateMessage: (id: string, updates: Partial<Message>) => void;
+  /**
+   * Atomically replace a message ID. Updates messageIds (preserving order),
+   * messagesById (moving the entry), and streamingMessageId if it points at
+   * oldId. Optionally merges additional updates into the renamed message.
+   * No-op if oldId is missing or oldId === newId (with optional merge).
+   * Used after persistence to migrate temp client IDs to DB-assigned IDs.
+   */
+  replaceMessageId: (oldId: string, newId: string, updates?: Partial<Message>) => void;
   /** Trim messages array at the given index (exclusive). */
   removeMessagesFrom: (index: number) => void;
   clearMessages: () => void;
@@ -88,6 +98,39 @@ export const useChatStore = create<ChatState>((set, get) => ({
           ...state.messagesById,
           [id]: { ...msg, ...updates },
         },
+      };
+    });
+  },
+
+  replaceMessageId: (oldId, newId, updates) => {
+    set((state) => {
+      const msg = state.messagesById[oldId];
+      if (!msg) return state;
+      // Same-ID merge — apply updates only.
+      if (oldId === newId) {
+        return updates
+          ? {
+              messagesById: {
+                ...state.messagesById,
+                [oldId]: { ...msg, ...updates },
+              },
+            }
+          : state;
+      }
+      // Reject if the target ID is already in use (would corrupt ordering).
+      if (state.messagesById[newId]) return state;
+      const newIds = state.messageIds.map((id) => (id === oldId ? newId : id));
+      const newById: Record<string, Message> = {};
+      for (const k of Object.keys(state.messagesById)) {
+        if (k === oldId) continue;
+        newById[k] = state.messagesById[k];
+      }
+      newById[newId] = { ...msg, id: newId, ...(updates ?? {}) };
+      return {
+        messageIds: newIds,
+        messagesById: newById,
+        streamingMessageId:
+          state.streamingMessageId === oldId ? newId : state.streamingMessageId,
       };
     });
   },
@@ -188,3 +231,17 @@ export const useChatIsStreaming = () => useChatStore((s) => s.isStreaming);
 export const useChatInputError = () => useChatStore((s) => s.inputError);
 export const useChatActiveChatId = () => useChatStore((s) => s.activeChatId);
 export const useChatStreamingId = () => useChatStore((s) => s.streamingMessageId);
+
+/**
+ * Granular selector for the byte length of the currently-streaming assistant
+ * message's content. Triggers a re-render every time tokens grow, while
+ * intentionally not exposing the full content string. Components use this to
+ * drive auto-scroll on token growth without subscribing to the message body.
+ * Returns 0 when no message is streaming.
+ */
+export const useStreamingMessageContentLength = (): number =>
+  useChatStore((s) => {
+    const id = s.streamingMessageId;
+    if (!id) return 0;
+    return s.messagesById[id]?.content.length ?? 0;
+  });

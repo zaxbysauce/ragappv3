@@ -268,7 +268,7 @@ describe("RightPane ADVERSARIAL TESTS", () => {
       });
 
       // Should render without error
-      expect(screen.getByText("1")).toBeInTheDocument();
+      expect(screen.getByText("S1")).toBeInTheDocument();
     });
 
     it("should handle query with only whitespace", async () => {
@@ -341,7 +341,7 @@ describe("RightPane ADVERSARIAL TESTS", () => {
       });
 
       // Should still render
-      expect(screen.getByText("1")).toBeInTheDocument();
+      expect(screen.getByText("S1")).toBeInTheDocument();
     });
 
     it("should handle 500K character snippet", async () => {
@@ -378,7 +378,7 @@ describe("RightPane ADVERSARIAL TESTS", () => {
       });
 
       // Filename should be truncated
-      expect(screen.getByText("1")).toBeInTheDocument();
+      expect(screen.getByText("S1")).toBeInTheDocument();
     });
 
     it("should handle snippet with no spaces (100K chars)", async () => {

@@ -4,7 +4,7 @@ import remarkGfm from "remark-gfm";
 import rehypeSanitize from "rehype-sanitize";
 import { CopyButton } from "@/components/shared/CopyButton";
 import { SourceCitation } from "./SourceCitation";
-import type { Source } from "@/lib/api";
+import type { Source, UsedMemory } from "@/lib/api";
 
 // =============================================================================
 // Syntax highlighter — lazily loaded so first chat render is not penalized
@@ -116,24 +116,39 @@ const CodeBlock = memo(function CodeBlock({ language, code }: CodeBlockProps) {
 // =============================================================================
 
 interface ParsedSegment {
-  type: "text" | "citation";
+  type: "text" | "citation" | "memory_citation";
   content?: string;
   sourceName?: string;
+  memoryLabel?: string;
 }
 
 /**
- * Parse [S1], [S2] (new) and [Source: filename] (legacy) citation markers.
- * Returns text/citation segments so we can render citations as interactive chips
- * while running a single markdown pass per text segment.
+ * Parse citation markers from assistant text:
+ * - ``[S1]``, ``[S2]`` — document citations (new style)
+ * - ``[M1]``, ``[M2]`` — memory citations (durable user context)
+ * - ``[Source: filename]`` — legacy filename citation
+ *
+ * Memory and document labels share lookup but are kept distinct so memory
+ * chips never resolve to a non-existent ``S#`` document.
+ *
+ * Returns text/citation segments so a single ReactMarkdown pass runs per
+ * text segment while citations are rendered as interactive chips.
  */
 export function parseCitationSegments(
   content: string,
-  sources: Source[] | undefined
-): { segments: ParsedSegment[]; citedSources: Source[] } {
-  const regex = /\[S(\d+)\]|\[Source:\s*([^\]]+)\]/g;
+  sources: Source[] | undefined,
+  memories?: UsedMemory[]
+): { segments: ParsedSegment[]; citedSources: Source[]; citedMemories: UsedMemory[] } {
+  // Capture groups:
+  //  1. document number (e.g. "2" from "[S2]")
+  //  2. memory number   (e.g. "1" from "[M1]")
+  //  3. legacy filename (e.g. "report.pdf" from "[Source: report.pdf]")
+  const regex = /\[S(\d+)\]|\[M(\d+)\]|\[Source:\s*([^\]]+)\]/g;
   const segments: ParsedSegment[] = [];
   const citedSources: Source[] = [];
-  const seenIds = new Set<string>();
+  const citedMemories: UsedMemory[] = [];
+  const seenSourceIds = new Set<string>();
+  const seenMemoryIds = new Set<string>();
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
@@ -142,26 +157,41 @@ export function parseCitationSegments(
       segments.push({ type: "text", content: content.slice(lastIndex, match.index) });
     }
 
-    let source: Source | undefined;
-    let sourceName: string;
-
     if (match[1]) {
+      // Document citation [S#]
       const label = `S${match[1]}`;
-      sourceName = label;
-      source = sources?.find((s) => s.source_label === label);
+      let source = sources?.find((s) => s.source_label === label);
       if (!source) {
         const idx = parseInt(match[1], 10) - 1;
         if (sources && idx >= 0 && idx < sources.length) source = sources[idx];
       }
-    } else {
-      sourceName = match[2].trim();
-      source = sources?.find((s) => s.filename === sourceName);
-    }
-
-    segments.push({ type: "citation", sourceName });
-    if (source && !seenIds.has(source.id)) {
-      citedSources.push(source);
-      seenIds.add(source.id);
+      segments.push({ type: "citation", sourceName: label });
+      if (source && !seenSourceIds.has(source.id)) {
+        citedSources.push(source);
+        seenSourceIds.add(source.id);
+      }
+    } else if (match[2]) {
+      // Memory citation [M#]
+      const label = `M${match[2]}`;
+      let memory = memories?.find((m) => m.memory_label === label);
+      if (!memory) {
+        const idx = parseInt(match[2], 10) - 1;
+        if (memories && idx >= 0 && idx < memories.length) memory = memories[idx];
+      }
+      segments.push({ type: "memory_citation", memoryLabel: label });
+      if (memory && !seenMemoryIds.has(memory.id)) {
+        citedMemories.push(memory);
+        seenMemoryIds.add(memory.id);
+      }
+    } else if (match[3]) {
+      // Legacy [Source: filename]
+      const sourceName = match[3].trim();
+      const source = sources?.find((s) => s.filename === sourceName);
+      segments.push({ type: "citation", sourceName });
+      if (source && !seenSourceIds.has(source.id)) {
+        citedSources.push(source);
+        seenSourceIds.add(source.id);
+      }
     }
 
     lastIndex = regex.lastIndex;
@@ -171,7 +201,7 @@ export function parseCitationSegments(
     segments.push({ type: "text", content: content.slice(lastIndex) });
   }
 
-  return { segments, citedSources };
+  return { segments, citedSources, citedMemories };
 }
 
 // Stable plugin arrays — prevent re-creating on every render
@@ -181,8 +211,10 @@ const REHYPE_PLUGINS = [rehypeSanitize];
 interface MarkdownMessageProps {
   content: string;
   sources?: Source[];
+  memories?: UsedMemory[];
   isStreaming?: boolean;
   onCitationClick?: (source: Source) => void;
+  onMemoryCitationClick?: (memory: UsedMemory) => void;
   citedSources?: Source[];
 }
 
@@ -197,19 +229,52 @@ interface MarkdownMessageProps {
 export const MarkdownMessage = memo(function MarkdownMessage({
   content,
   sources,
+  memories,
   isStreaming,
   onCitationClick,
+  onMemoryCitationClick,
   citedSources: externalCitedSources,
 }: MarkdownMessageProps) {
   const { segments, citedSources: internalCitedSources } = useMemo(
-    () => parseCitationSegments(content, sources),
-    [content, sources]
+    () => parseCitationSegments(content, sources, memories),
+    [content, sources, memories]
   );
 
   const citedSources = externalCitedSources ?? internalCitedSources;
 
   const nodes = useMemo(() => {
     return segments.map((segment, i) => {
+      if (segment.type === "memory_citation") {
+        const label = segment.memoryLabel ?? "";
+        const memory =
+          memories?.find((m) => m.memory_label === label) ||
+          (() => {
+            const m = label.match(/^M(\d+)$/);
+            if (m && memories) {
+              const idx = parseInt(m[1], 10) - 1;
+              return idx >= 0 && idx < memories.length ? memories[idx] : undefined;
+            }
+            return undefined;
+          })();
+        const titleText = memory?.content
+          ? `Memory ${label}: ${memory.content.slice(0, 200)}${memory.content.length > 200 ? "…" : ""}`
+          : `Memory ${label}`;
+        return (
+          <button
+            key={`mem-${i}`}
+            type="button"
+            className="inline-flex items-center align-baseline px-1.5 py-0.5 mx-0.5 rounded-md border border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300 text-[10px] font-semibold tracking-wide hover:bg-amber-500/20 hover:border-amber-500/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={() => memory && onMemoryCitationClick?.(memory)}
+            disabled={!memory}
+            title={titleText}
+            aria-label={titleText}
+            data-citation-type="memory"
+            data-citation-label={label}
+          >
+            {label}
+          </button>
+        );
+      }
       if (segment.type === "citation") {
         const name = segment.sourceName ?? "";
         // Resolve the source
@@ -267,7 +332,7 @@ export const MarkdownMessage = memo(function MarkdownMessage({
         </ReactMarkdown>
       );
     });
-  }, [segments, citedSources, sources, onCitationClick]);
+  }, [segments, citedSources, sources, memories, onCitationClick, onMemoryCitationClick]);
 
   return (
     <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:font-semibold prose-headings:font-sans prose-headings:mt-4 prose-headings:mb-1 prose-strong:font-semibold prose-p:leading-relaxed prose-p:mb-3 prose-p:mt-0 prose-li:my-0.5 prose-ul:my-2 prose-ol:my-2 prose-blockquote:border-l-2 prose-blockquote:border-primary/40 prose-blockquote:pl-3 prose-blockquote:italic prose-code:font-mono">

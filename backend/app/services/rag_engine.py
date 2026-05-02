@@ -6,15 +6,20 @@ from datetime import datetime
 from typing import Any, AsyncIterator, Dict, List, Optional, Set, Tuple
 
 from app.config import settings
+from app.services.citation_validator import (
+    parse_citations,
+    repair_against_sources_and_memories,
+)
 from app.services.context_distiller import ContextDistiller
 from app.services.document_retrieval import DocumentRetrievalService, RAGSource
 from app.services.embeddings import EmbeddingError, EmbeddingService
 from app.services.llm_client import LLMClient, LLMError
-from app.services.memory_store import MemoryStore
+from app.services.memory_store import MemoryRecord, MemoryStore
 from app.services.prompt_builder import PromptBuilderService, calculate_primary_count
 from app.services.query_transformer import QueryTransformer
 from app.services.retrieval_evaluator import RetrievalEvaluator
 from app.services.vector_store import VectorStore
+from app.utils.assistant_sanitizer import sanitize_assistant_content
 from app.utils.fusion import rrf_fuse
 
 
@@ -889,10 +894,31 @@ class RAGEngine:
             )
             sources.append(source_meta)
 
+        # Build structured memories_used list with stable [M#] labels.
+        # Memories are not document sources — they get their own label space.
+        memories_used: List[Dict[str, Any]] = []
+        for idx, mem in enumerate(memories):
+            label = f"M{idx + 1}"
+            memories_used.append(
+                {
+                    "id": str(getattr(mem, "id", "")) or label,
+                    "memory_label": label,
+                    "content": getattr(mem, "content", "") or "",
+                    "category": getattr(mem, "category", None),
+                    "tags": getattr(mem, "tags", None),
+                    "source": getattr(mem, "source", None),
+                    "vault_id": getattr(mem, "vault_id", None),
+                    "score": getattr(mem, "score", None),
+                    "score_type": "fts",
+                    "created_at": getattr(mem, "created_at", None),
+                    "updated_at": getattr(mem, "updated_at", None),
+                }
+            )
+
         return {
             "type": "done",
             "sources": sources,
-            "memories_used": [mem.content for mem in memories],
+            "memories_used": memories_used,
             "retrieval_debug": retrieval_debug,
             "score_type": score_type,
         }

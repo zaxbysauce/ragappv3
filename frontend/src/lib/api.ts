@@ -461,9 +461,39 @@ export interface Source {
   score_type?: "distance" | "rerank" | "rrf";
 }
 
+/**
+ * A memory the assistant referenced when generating a response.
+ * Distinct from document sources: memories use the [M#] label space and
+ * represent durable user context (preferences, prior facts) rather than
+ * retrieved documents.
+ */
+export interface UsedMemory {
+  id: string;
+  /** Stable label like "M1", "M2" — matches the [M#] cited in answer text. */
+  memory_label: string;
+  content: string;
+  category?: string | null;
+  tags?: string | null;
+  source?: string | null;
+  vault_id?: number | null;
+  score?: number | null;
+  score_type?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface CitationValidationDebug {
+  valid: string[];
+  invalid: string[];
+  uncited_factual_warning: boolean;
+  has_evidence: boolean;
+}
+
 export interface ChatStreamCallbacks {
   onMessage: (chunk: string) => void;
   onSources?: (sources: Source[]) => void;
+  onMemories?: (memories: UsedMemory[]) => void;
+  onCitationValidation?: (validation: CitationValidationDebug) => void;
   onError?: (error: Error) => void;
   onComplete?: () => void;
 }
@@ -492,6 +522,8 @@ export interface ChatSessionMessage {
   role: string;
   content: string;
   sources: Source[] | null;
+  /** Memories used to generate this assistant message. May be null on legacy rows. */
+  memories?: UsedMemory[] | null;
   created_at: string;
   feedback?: "up" | "down" | null;
 }
@@ -509,6 +541,7 @@ export interface AddMessageRequest {
   role: string;
   content: string;
   sources?: Source[];
+  memories?: UsedMemory[];
 }
 
 export interface Vault {
@@ -692,13 +725,28 @@ export async function getDocumentStats(vaultId?: number): Promise<DocumentStatsR
 /**
  * Parse an SSE stream from a ReadableStream, invoking callbacks for each event.
  * Shared between the initial fetch and the 401 retry path to avoid duplication.
+ *
+ * Reasoning/thinking fields (``reasoning``, ``reasoning_content``, ``thinking``,
+ * ``thinking_content``) are explicitly ignored as defense in depth — the backend
+ * already strips these from streamed content, but if a misbehaving server
+ * forwards them anyway they must never reach the message store.
+ *
+ * Exported for tests; not part of the public API.
  */
-async function parseSSEStream(
+export async function parseSSEStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   callbacks: ChatStreamCallbacks,
 ): Promise<void> {
   const decoder = new TextDecoder();
   let buffer = "";
+
+  // Field/event names we explicitly drop on receipt. Lowercase comparison.
+  const REASONING_TYPES = new Set([
+    "reasoning",
+    "reasoning_content",
+    "thinking",
+    "thinking_content",
+  ]);
 
   while (true) {
     const { done, value } = await reader.read();
@@ -722,10 +770,20 @@ async function parseSSEStream(
             callbacks.onError?.(new Error(parsed.message || 'Chat stream error'));
             return;
           }
-          if (parsed.content) {
+          // Defense in depth: drop any reasoning/thinking event regardless of
+          // whether it appears as ``type`` or as a content field.
+          const eventType = typeof parsed.type === "string" ? parsed.type.toLowerCase() : "";
+          if (REASONING_TYPES.has(eventType)) {
+            continue;
+          }
+          // Only forward content from explicit "content" events to avoid
+          // accidentally streaming a reasoning blob that happened to contain
+          // a ``content`` field.
+          if (parsed.content && (eventType === "content" || eventType === "" || eventType === "fallback")) {
+            // Strip any reasoning-named keys before forwarding (paranoid).
             callbacks.onMessage(parsed.content);
           }
-          if (parsed.sources) {
+          if (Array.isArray(parsed.sources) && parsed.sources.length > 0) {
             const scoreType = ((parsed as { score_type?: Source["score_type"] }).score_type
               ?? "distance") as Source["score_type"];
             const enrichedSources = parsed.sources.map((s: Source) => ({
@@ -733,6 +791,41 @@ async function parseSSEStream(
               score_type: scoreType,
             }));
             callbacks.onSources?.(enrichedSources);
+          }
+          if (Array.isArray(parsed.memories_used) && parsed.memories_used.length > 0) {
+            // Backend may emit either bare strings (legacy) or structured
+            // UsedMemory dicts. Normalize to structured shape; if a string is
+            // received, synthesize a minimal record so the UI still renders.
+            const normalized: UsedMemory[] = parsed.memories_used.map(
+              (m: unknown, idx: number): UsedMemory => {
+                if (typeof m === "string") {
+                  return {
+                    id: `M${idx + 1}`,
+                    memory_label: `M${idx + 1}`,
+                    content: m,
+                  };
+                }
+                const obj = m as Partial<UsedMemory> & { id?: unknown };
+                const fallbackLabel = `M${idx + 1}`;
+                return {
+                  id: String(obj.id ?? fallbackLabel),
+                  memory_label: obj.memory_label ?? fallbackLabel,
+                  content: typeof obj.content === "string" ? obj.content : "",
+                  category: obj.category ?? null,
+                  tags: obj.tags ?? null,
+                  source: obj.source ?? null,
+                  vault_id: obj.vault_id ?? null,
+                  score: obj.score ?? null,
+                  score_type: obj.score_type ?? null,
+                  created_at: obj.created_at ?? null,
+                  updated_at: obj.updated_at ?? null,
+                };
+              }
+            );
+            callbacks.onMemories?.(normalized);
+          }
+          if (parsed.citation_validation && typeof parsed.citation_validation === "object") {
+            callbacks.onCitationValidation?.(parsed.citation_validation as CitationValidationDebug);
           }
         } catch {
           callbacks.onMessage(data);

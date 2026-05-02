@@ -216,19 +216,34 @@ async def list_memories(
 
     Returns a list of all memories with their id, content, category, tags, source,
     created_at, and updated_at fields.
+
+    Authorization:
+    - vault_id=N: requires read access to vault N (returns vault-scoped + global memories).
+    - vault_id=None: admin/superadmin only (returns all memories across all vaults).
+      Non-admin callers should specify vault_id explicitly.
     """
     if vault_id is not None:
+        if not await evaluate_policy(user, "vault", vault_id, "read"):
+            raise HTTPException(status_code=403, detail="No read access to this vault")
+        # Include global memories (vault_id IS NULL) alongside vault-scoped memories
         cursor = await asyncio.to_thread(
             conn.execute,
             """
             SELECT id, content, category, tags, source, created_at, updated_at
             FROM memories
-            WHERE vault_id = ?
+            WHERE vault_id = ? OR vault_id IS NULL
             ORDER BY created_at DESC
             """,
             (vault_id,),
         )
     else:
+        # Listing across all vaults — restrict to admin/superadmin to prevent
+        # cross-vault leakage. Non-admin users must specify a vault_id.
+        if user.get("role") not in ("superadmin", "admin"):
+            raise HTTPException(
+                status_code=403,
+                detail="Listing memories across all vaults requires admin access. Please specify a vault_id.",
+            )
         cursor = await asyncio.to_thread(
             conn.execute,
             """
@@ -476,6 +491,23 @@ async def delete_memory(
     return {"message": f"Memory {memory_id} deleted successfully"}
 
 
+async def _authorize_memory_search(user: dict, vault_id: Optional[int]) -> None:
+    """Enforce vault read access for memory search/list operations.
+
+    - vault_id=N → require read access on vault N.
+    - vault_id=None → admin/superadmin only (broad search across all vaults).
+    """
+    if vault_id is not None:
+        if not await evaluate_policy(user, "vault", vault_id, "read"):
+            raise HTTPException(status_code=403, detail="No read access to this vault")
+    else:
+        if user.get("role") not in ("superadmin", "admin"):
+            raise HTTPException(
+                status_code=403,
+                detail="Searching memories across all vaults requires admin access. Please specify a vault_id.",
+            )
+
+
 @router.get("/memories/search", response_model=MemorySearchResponse)
 async def search_memories(
     query: str = Query(..., min_length=1, description="Search query string"),
@@ -489,7 +521,11 @@ async def search_memories(
 
     Uses MemoryStore.search_memories to search memories via FTS5.
     Returns matching memories ordered by relevance.
+
+    Authorization: requires vault read access when vault_id is provided;
+    admin/superadmin only when vault_id is omitted (cross-vault search).
     """
+    await _authorize_memory_search(user, vault_id)
     results = await _perform_memory_search(memory_store, query, limit, vault_id)
     return MemorySearchResponse(results=results, total=len(results))
 
@@ -500,6 +536,12 @@ async def search_memories_post(
     memory_store: MemoryStore = Depends(get_memory_store),
     user: dict = Depends(get_current_active_user),
 ):
+    """Search memories via POST (request body).
+
+    Authorization: requires vault read access when vault_id is provided;
+    admin/superadmin only when vault_id is omitted (cross-vault search).
+    """
+    await _authorize_memory_search(user, request.vault_id)
     # Handle empty or whitespace-only queries gracefully
     if not request.query or not request.query.strip():
         return MemorySearchResponse(results=[], total=0)

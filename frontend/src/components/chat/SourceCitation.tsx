@@ -16,7 +16,14 @@ interface SourceCitationProps {
 }
 
 export function SourceCitation({ source, index, onClick, variant = "strip" }: SourceCitationProps) {
-  const label = `Source ${index + 1}: ${source.filename}`;
+  // Display label tracks the source's stable [S#] when assigned so sparse
+  // citations (e.g. only S2 and S4 cited) keep their original numbering
+  // instead of being renumbered to 1/2 by display order.
+  const displayLabel =
+    source.source_label && source.source_label.trim()
+      ? source.source_label
+      : `S${index + 1}`;
+  const label = `Source ${displayLabel}: ${source.filename}`;
 
   if (variant === "inline") {
     return (
@@ -37,7 +44,7 @@ export function SourceCitation({ source, index, onClick, variant = "strip" }: So
               )}
               aria-label={label}
             >
-              {index + 1}
+              {displayLabel}
             </button>
           </TooltipTrigger>
           <TooltipContent side="top">

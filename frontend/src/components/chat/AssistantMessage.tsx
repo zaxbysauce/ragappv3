@@ -7,6 +7,7 @@ import type { Source } from "@/lib/api";
 import { useChatShellStore } from "@/stores/useChatShellStore";
 import { MarkdownMessage, parseCitationSegments } from "./MarkdownMessage";
 import { SourceCards } from "./SourceCards";
+import { MemoryCards } from "./MemoryCards";
 import { AssistantMessageActions } from "./MessageActions";
 
 // Re-export for backwards compat with tests
@@ -47,10 +48,10 @@ export function AssistantMessage({
   const { openRightPane, setSelectedEvidenceSource, setActiveRightTab } = useChatShellStore();
   const prefersReducedMotion = useReducedMotion();
 
-  // Derive cited sources for source cards
-  const { citedSources } = useMemo(
-    () => parseCitationSegments(message.content, message.sources),
-    [message.content, message.sources]
+  // Derive cited sources and memories for source/memory cards
+  const { citedSources, citedMemories } = useMemo(
+    () => parseCitationSegments(message.content, message.sources, message.memoriesUsed),
+    [message.content, message.sources, message.memoriesUsed]
   );
 
   const handleSourceClick = useCallback(
@@ -77,6 +78,10 @@ export function AssistantMessage({
 
   // Source cards: prefer cited sources, fall back to all sources
   const sourcesForCards = citedSources.length > 0 ? citedSources : (message.sources ?? []);
+  // Memory cards: prefer cited memories, fall back to all memories.
+  // Memories are always shown distinct from document sources.
+  const memoriesForCards =
+    citedMemories.length > 0 ? citedMemories : (message.memoriesUsed ?? []);
 
   return (
     <motion.div
@@ -105,6 +110,7 @@ export function AssistantMessage({
         <MarkdownMessage
           content={message.content}
           sources={message.sources}
+          memories={message.memoriesUsed}
           isStreaming={isStreaming}
           onCitationClick={handleSourceClick}
           citedSources={citedSources}
@@ -117,6 +123,11 @@ export function AssistantMessage({
             onSourceClick={handleSourceClick}
             onViewAll={handleViewAll}
           />
+        )}
+
+        {/* Memory cards — distinct from document sources */}
+        {!isStreaming && memoriesForCards.length > 0 && (
+          <MemoryCards memories={memoriesForCards} />
         )}
 
         {/* Error */}

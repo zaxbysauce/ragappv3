@@ -1,0 +1,128 @@
+"""Centralized sanitizer for user-visible assistant content.
+
+This module is the single source of truth for stripping model thinking /
+reasoning traces from any assistant text that may be shown to users or
+persisted in chat history. It handles four distinct patterns:
+
+1. ``_lhs ... _rhs`` thinking blocks (legacy Qwen tag style).
+2. ``Thinking Process: ... </think>`` prefix style (qwen3.5-122b).
+3. Standard ``<think>...</think>`` thinking blocks (gpt-oss-120b and others).
+4. ``Thinking Process:`` followed by a ``</think>`` close even without an
+   opening tag (defensive — fragmented streams may emit just the close).
+
+All functions are idempotent: calling them twice on already-sanitized text
+returns the same result.
+
+The streaming code path additionally needs incremental, chunk-aware
+sanitization which lives in ``LLMClient.chat_completion_stream`` and uses
+:func:`is_thinking_open_marker`/:func:`is_thinking_close_marker` for guidance.
+"""
+
+from __future__ import annotations
+
+import re
+from typing import Iterable, List
+
+# Module-level constants — each is a literal regex pattern.
+# Use ``re.DOTALL`` so ``.`` spans newlines.
+_THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.DOTALL | re.IGNORECASE)
+_LHS_RHS_RE = re.compile(r"_lhs.*?_rhs", re.DOTALL)
+# Match unterminated <think> from a stripped close tag (e.g. partial chunk leak)
+_UNTERMINATED_THINK_TAIL_RE = re.compile(r"<think\b[^>]*>.*\Z", re.DOTALL | re.IGNORECASE)
+# Thinking Process: ... </think>  (qwen3.5-122b style)
+_THINKING_PROCESS_BLOCK_RE = re.compile(
+    r"Thinking Process:.*?</think>\s*", re.DOTALL | re.IGNORECASE
+)
+# Defensive: orphan "Thinking Process:" prefix at start with no close tag —
+# strip the leading line up to a blank line if present.
+_THINKING_PROCESS_PREFIX_RE = re.compile(
+    r"^Thinking Process:[^\n]*\n", re.IGNORECASE
+)
+
+
+def sanitize_assistant_content(content: str) -> str:
+    """Return ``content`` with all known thinking-content patterns stripped.
+
+    Idempotent and safe to call on partial or fully-sanitized strings.
+
+    Strips:
+    - ``<think>...</think>`` blocks (any case, any attributes)
+    - ``_lhs ... _rhs`` blocks
+    - ``Thinking Process: ... </think>`` blocks
+    - Unterminated trailing ``<think>...`` tail (defensive)
+
+    Args:
+        content: Raw assistant text that may contain thinking traces.
+
+    Returns:
+        The sanitized text. Whitespace is trimmed at both ends.
+    """
+    if not content:
+        return ""
+    out = content
+
+    # Order matters: handle complete blocks first, then unterminated trailers.
+    # 1. Standard <think>...</think>
+    out = _THINK_BLOCK_RE.sub("", out)
+    # 2. _lhs ... _rhs
+    out = _LHS_RHS_RE.sub("", out)
+    # 3. "Thinking Process: ... </think>"
+    out = _THINKING_PROCESS_BLOCK_RE.sub("", out)
+    # 4. Trailing unterminated <think>... — strip everything from the open tag
+    #    onward. This guards against persistence of a half-streamed thinking
+    #    block when sanitization is applied after-the-fact.
+    out = _UNTERMINATED_THINK_TAIL_RE.sub("", out)
+    # 5. Leading "Thinking Process:" line without a close — defensive last pass
+    out = _THINKING_PROCESS_PREFIX_RE.sub("", out)
+
+    return out.strip()
+
+
+def sanitize_chat_messages_content(content: str) -> str:
+    """Sanitize a chat_messages.content value before persistence.
+
+    Equivalent to :func:`sanitize_assistant_content`. Kept as a separate
+    name so callers can grep for "what runs at the persistence boundary"
+    independent of LLM-time stripping.
+    """
+    return sanitize_assistant_content(content)
+
+
+def cleanup_existing_chat_messages_rows(rows: Iterable[tuple]) -> List[tuple]:
+    """Idempotent cleanup helper for already-persisted rows.
+
+    Accepts an iterable of ``(id, content)`` tuples and returns a list of
+    ``(id, sanitized_content)`` tuples for rows whose content actually
+    changes after sanitization. Rows whose content is unchanged are
+    omitted so callers can do a no-op fast path.
+    """
+    out: List[tuple] = []
+    for row in rows:
+        if not row or len(row) < 2:
+            continue
+        row_id, content = row[0], row[1]
+        if not isinstance(content, str):
+            continue
+        cleaned = sanitize_assistant_content(content)
+        if cleaned != content:
+            out.append((row_id, cleaned))
+    return out
+
+
+# Constants exposed for streaming sanitizer use ----------------------------------
+
+# Substrings that, when present in a stream buffer, indicate the start of a
+# thinking block. The streaming sanitizer uses these as discrete tokens.
+THINKING_OPEN_MARKERS = ("<think>", "_lhs", "Thinking Process:")
+# Substrings indicating end of a thinking block.
+THINKING_CLOSE_MARKERS = ("</think>", "_rhs")
+
+
+def is_thinking_open_marker(buf: str) -> bool:
+    """Return True if ``buf`` contains an unambiguous thinking-open marker."""
+    return any(m in buf for m in THINKING_OPEN_MARKERS)
+
+
+def is_thinking_close_marker(buf: str) -> bool:
+    """Return True if ``buf`` contains an unambiguous thinking-close marker."""
+    return any(m in buf for m in THINKING_CLOSE_MARKERS)

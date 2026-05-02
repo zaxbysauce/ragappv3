@@ -206,8 +206,17 @@ function SourceListItem({
       )}
     >
       <div className="flex items-start gap-3">
-        <div className="flex-shrink-0 w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center text-xs font-medium text-primary">
-          {index + 1}
+        <div
+          className="flex-shrink-0 min-w-[1.5rem] h-6 px-1 rounded-full bg-primary/10 flex items-center justify-center text-xs font-medium text-primary"
+          aria-label={`Source label ${
+            source.source_label && source.source_label.trim()
+              ? source.source_label
+              : `S${index + 1}`
+          }`}
+        >
+          {source.source_label && source.source_label.trim()
+            ? source.source_label
+            : `S${index + 1}`}
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">

@@ -24,7 +24,9 @@ from app.api.deps import (
 )
 from app.config import settings
 from app.models.database import get_pool
+from app.services.citation_validator import validate_and_repair_citations
 from app.services.rag_engine import RAGEngine, RAGEngineError
+from app.utils.assistant_sanitizer import sanitize_chat_messages_content
 
 # Track background tasks to prevent garbage collection
 _background_tasks: Set[asyncio.Task] = set()
@@ -44,12 +46,33 @@ class ChatRequest(BaseModel):
     vault_id: Optional[int] = None
 
 
+class UsedMemory(BaseModel):
+    """Structured memory referenced by the assistant in a chat response.
+
+    Fields mirror the ``[M#]`` citation label space and the underlying
+    ``MemoryRecord`` so the frontend can render memory cards without
+    additional lookups.
+    """
+
+    id: str
+    memory_label: str
+    content: str
+    category: Optional[str] = None
+    tags: Optional[str] = None
+    source: Optional[str] = None
+    vault_id: Optional[int] = None
+    score: Optional[float] = None
+    score_type: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
 class ChatResponse(BaseModel):
     """Response model for non-streaming chat endpoint."""
 
     content: str
     sources: List[Dict[str, Any]] = Field(default_factory=list)
-    memories_used: List[str] = Field(default_factory=list)
+    memories_used: List[UsedMemory] = Field(default_factory=list)
     # "distance" | "rerank" | "rrf" — tells the client how to interpret `score`
     # values in each source (polarity + thresholds). Default "distance" keeps
     # older clients on the safe path if the engine omits it.
@@ -80,6 +103,7 @@ class AddMessageRequest(BaseModel):
     role: Literal["user", "assistant"]
     content: str
     sources: Optional[List[dict]] = None
+    memories: Optional[List[dict]] = None
 
 
 class UpdateSessionRequest(BaseModel):
@@ -169,11 +193,41 @@ def stream_chat_response(
             yield f"data: {json.dumps({'type': 'error', 'message': error_msg, 'code': 'INTERNAL_ERROR'})}\n\n"
             return
 
+        # Citation validation pass: parse the assembled assistant content and
+        # check every [S#]/[M#] citation against the available labels. The
+        # validation only emits an extra ``citation_validation`` field on the
+        # done event so older clients ignore it; we never rewrite already-
+        # streamed tokens. The ``add_message`` route additionally sanitizes
+        # content before persisting, so any invalid citations are repaired
+        # before they reach the chat history.
+        full_content = "".join(collected_content)
+        try:
+            cv = repair_against_sources_and_memories(
+                full_content, sources, memories_used
+            )
+            citation_validation = {
+                "valid": list(cv.valid_citations),
+                "invalid": list(cv.invalid_citations),
+                "uncited_factual_warning": cv.uncited_factual_warning,
+                "has_evidence": cv.has_evidence,
+            }
+        except Exception as cv_exc:  # noqa: BLE001 — defensive
+            logger.warning("Citation validation failed: %s", cv_exc)
+            citation_validation = None
+
         # Yield final done event with sources, memories, and score_type so the
         # frontend can correctly map `score` to relevance labels. Omitting
         # `score_type` forces the client to guess and historically caused every
         # source to render as "Tangential" via the distance-mode fallback.
-        yield f"data: {json.dumps({'type': 'done', 'sources': sources, 'memories_used': memories_used, 'score_type': score_type})}\n\n"
+        done_payload: Dict[str, Any] = {
+            "type": "done",
+            "sources": sources,
+            "memories_used": memories_used,
+            "score_type": score_type,
+        }
+        if citation_validation is not None:
+            done_payload["citation_validation"] = citation_validation
+        yield f"data: {json.dumps(done_payload)}\n\n"
 
     return StreamingResponse(
         event_generator(),
@@ -232,10 +286,30 @@ async def non_stream_chat_response(
 
     full_content = "".join(collected_content)
 
+    # Citation validation + repair: strip references to non-existent labels
+    # before returning the response so persisted history is well-formed.
+    try:
+        cv = repair_against_sources_and_memories(
+            full_content, sources, memories_used
+        )
+        full_content = cv.repaired_content or full_content
+        if cv.invalid_stripped:
+            logger.info(
+                "Stripped %d invalid citation(s) from non-stream response: %s",
+                len(cv.invalid_citations),
+                list(cv.invalid_citations),
+            )
+    except Exception as cv_exc:  # noqa: BLE001 — defensive
+        logger.warning("Citation validation failed: %s", cv_exc)
+
+    # Sanitize as final defense in depth — strips any residual thinking
+    # traces before the response leaves the API boundary.
+    full_content = sanitize_chat_messages_content(full_content)
+
     return ChatResponse(
         content=full_content,
         sources=sources,
-        memories_used=memories_used,
+        memories_used=[UsedMemory(**m) for m in memories_used] if memories_used else [],
         score_type=score_type,
     )
 
@@ -415,14 +489,29 @@ async def get_session(
     if not await evaluate_policy(user, "vault", session_row[1], "read"):
         raise HTTPException(status_code=403, detail="No read access to this vault")
 
-    # Get messages
-    messages_query = "SELECT id, role, content, sources, created_at, feedback FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC, id ASC"
+    # Detect optional ``memories`` column (older databases may lack it).
+    table_info_cursor = await asyncio.to_thread(
+        conn.execute, "PRAGMA table_info(chat_messages)"
+    )
+    table_info_rows = await asyncio.to_thread(table_info_cursor.fetchall)
+    has_memories_col = any(row[1] == "memories" for row in table_info_rows)
+
+    if has_memories_col:
+        messages_query = (
+            "SELECT id, role, content, sources, memories, created_at, feedback "
+            "FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC, id ASC"
+        )
+    else:
+        messages_query = (
+            "SELECT id, role, content, sources, created_at, feedback "
+            "FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC, id ASC"
+        )
     messages_result = await asyncio.to_thread(
         conn.execute, messages_query, (session_id,)
     )
     message_rows = await asyncio.to_thread(messages_result.fetchall)
 
-    # Parse messages with JSON sources
+    # Parse messages with JSON sources and (optional) memories.
     messages = []
     for msg_row in message_rows:
         sources = None
@@ -432,16 +521,36 @@ async def get_session(
             except json.JSONDecodeError:
                 sources = []
 
-        messages.append(
-            {
-                "id": msg_row[0],
-                "role": msg_row[1],
-                "content": msg_row[2],
-                "sources": sources,
-                "created_at": msg_row[4],
-                "feedback": msg_row[5],
-            }
-        )
+        if has_memories_col:
+            memories_val = None
+            if msg_row[4]:
+                try:
+                    memories_val = json.loads(msg_row[4])
+                except json.JSONDecodeError:
+                    memories_val = []
+            messages.append(
+                {
+                    "id": msg_row[0],
+                    "role": msg_row[1],
+                    "content": msg_row[2],
+                    "sources": sources,
+                    "memories": memories_val,
+                    "created_at": msg_row[5],
+                    "feedback": msg_row[6],
+                }
+            )
+        else:
+            messages.append(
+                {
+                    "id": msg_row[0],
+                    "role": msg_row[1],
+                    "content": msg_row[2],
+                    "sources": sources,
+                    "memories": None,
+                    "created_at": msg_row[4],
+                    "feedback": msg_row[5],
+                }
+            )
 
     return {
         "id": session_row[0],
@@ -518,12 +627,28 @@ async def fork_session(
     if not await evaluate_policy(user, "vault", vault_id, "write"):
         raise HTTPException(status_code=403, detail="No write access to this vault")
 
-    # Fetch messages up to message_index
-    messages_result = await asyncio.to_thread(
-        conn.execute,
-        "SELECT role, content, sources, created_at FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC, id ASC",
-        (session_id,),
+    # Detect optional ``memories`` column on chat_messages.
+    table_info_cursor = await asyncio.to_thread(
+        conn.execute, "PRAGMA table_info(chat_messages)"
     )
+    table_info_rows = await asyncio.to_thread(table_info_cursor.fetchall)
+    has_memories_col = any(row[1] == "memories" for row in table_info_rows)
+
+    # Fetch messages up to message_index, including memories when supported.
+    if has_memories_col:
+        messages_result = await asyncio.to_thread(
+            conn.execute,
+            "SELECT role, content, sources, memories, created_at FROM chat_messages "
+            "WHERE session_id = ? ORDER BY created_at ASC, id ASC",
+            (session_id,),
+        )
+    else:
+        messages_result = await asyncio.to_thread(
+            conn.execute,
+            "SELECT role, content, sources, created_at FROM chat_messages "
+            "WHERE session_id = ? ORDER BY created_at ASC, id ASC",
+            (session_id,),
+        )
     all_rows = await asyncio.to_thread(messages_result.fetchall)
     if request.message_index >= len(all_rows):
         raise HTTPException(
@@ -542,13 +667,24 @@ async def fork_session(
     await asyncio.to_thread(conn.commit)
     new_session_id = cursor.lastrowid
 
-    # Copy messages into the new session
-    for row in forked_rows:
-        await asyncio.to_thread(
-            conn.execute,
-            "INSERT INTO chat_messages (session_id, role, content, sources, created_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)",
-            (new_session_id, row[0], row[1], row[2]),
-        )
+    # Copy messages into the new session — preserve sources + memories so the
+    # branched conversation keeps source cards, citations, and memory cards.
+    if has_memories_col:
+        for row in forked_rows:
+            await asyncio.to_thread(
+                conn.execute,
+                "INSERT INTO chat_messages (session_id, role, content, sources, memories, created_at) "
+                "VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+                (new_session_id, row[0], row[1], row[2], row[3]),
+            )
+    else:
+        for row in forked_rows:
+            await asyncio.to_thread(
+                conn.execute,
+                "INSERT INTO chat_messages (session_id, role, content, sources, created_at) "
+                "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)",
+                (new_session_id, row[0], row[1], row[2]),
+            )
     await asyncio.to_thread(conn.commit)
 
     # Return new session info with copied messages
@@ -560,7 +696,20 @@ async def fork_session(
                 sources = json.loads(row[2])
             except json.JSONDecodeError:
                 sources = []
-        messages.append({"role": row[0], "content": row[1], "sources": sources})
+        if has_memories_col:
+            mem_val = None
+            if row[3]:
+                try:
+                    mem_val = json.loads(row[3])
+                except json.JSONDecodeError:
+                    mem_val = []
+            messages.append(
+                {"role": row[0], "content": row[1], "sources": sources, "memories": mem_val}
+            )
+        else:
+            messages.append(
+                {"role": row[0], "content": row[1], "sources": sources, "memories": None}
+            )
 
     return {
         "id": new_session_id,
@@ -741,19 +890,49 @@ async def add_message(
                 conn.execute, update_title_query, (auto_title, session_id)
             )
 
-    # Serialize sources to JSON
+    # Serialize sources and memories to JSON
     sources_json = json.dumps(request.sources) if request.sources else None
+    memories_json = json.dumps(request.memories) if request.memories else None
 
-    # Insert message
-    insert_query = """
-        INSERT INTO chat_messages (session_id, role, content, sources, created_at)
-        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-    """
-    cursor = await asyncio.to_thread(
-        conn.execute,
-        insert_query,
-        (session_id, request.role, request.content, sources_json),
+    # Sanitize assistant content before persistence — defense in depth against
+    # any thinking/reasoning trace that slipped past the LLM-time stripper or
+    # was injected by a misbehaving client. User content is left untouched.
+    persisted_content = (
+        sanitize_chat_messages_content(request.content)
+        if request.role == "assistant"
+        else request.content
     )
+
+    # Detect whether the chat_messages table has the optional ``memories``
+    # column. Older deployments may not have run the migration yet, in which
+    # case we fall back to inserting only sources. The detection is cheap and
+    # cached implicitly by SQLite's pragma cache.
+    table_info_cursor = await asyncio.to_thread(
+        conn.execute, "PRAGMA table_info(chat_messages)"
+    )
+    table_info_rows = await asyncio.to_thread(table_info_cursor.fetchall)
+    has_memories_col = any(row[1] == "memories" for row in table_info_rows)
+
+    if has_memories_col:
+        insert_query = """
+            INSERT INTO chat_messages (session_id, role, content, sources, memories, created_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        """
+        cursor = await asyncio.to_thread(
+            conn.execute,
+            insert_query,
+            (session_id, request.role, persisted_content, sources_json, memories_json),
+        )
+    else:
+        insert_query = """
+            INSERT INTO chat_messages (session_id, role, content, sources, created_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+        """
+        cursor = await asyncio.to_thread(
+            conn.execute,
+            insert_query,
+            (session_id, request.role, persisted_content, sources_json),
+        )
 
     # Update session's updated_at
     update_query = (
@@ -764,9 +943,14 @@ async def add_message(
 
     # Get the created message
     message_id = cursor.lastrowid
-    select_query = (
-        "SELECT id, role, content, sources, created_at FROM chat_messages WHERE id = ?"
-    )
+    if has_memories_col:
+        select_query = (
+            "SELECT id, role, content, sources, memories, created_at FROM chat_messages WHERE id = ?"
+        )
+    else:
+        select_query = (
+            "SELECT id, role, content, sources, created_at FROM chat_messages WHERE id = ?"
+        )
     result = await asyncio.to_thread(conn.execute, select_query, (message_id,))
     row = await asyncio.to_thread(result.fetchone)
 
@@ -781,12 +965,25 @@ async def add_message(
         except json.JSONDecodeError:
             sources = []
 
+    memories = None
+    created_at = None
+    if has_memories_col:
+        if row[4]:
+            try:
+                memories = json.loads(row[4])
+            except json.JSONDecodeError:
+                memories = []
+        created_at = row[5]
+    else:
+        created_at = row[4]
+
     return {
         "id": row[0],
         "role": row[1],
         "content": row[2],
         "sources": sources,
-        "created_at": row[4],
+        "memories": memories,
+        "created_at": created_at,
     }
 
 

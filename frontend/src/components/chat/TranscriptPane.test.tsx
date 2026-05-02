@@ -572,10 +572,18 @@ describe("TranscriptPane", () => {
         />
       );
 
-      expect(screen.getByText("What are the key findings?")).toBeInTheDocument();
-      expect(screen.getByText("Summarize the main topics")).toBeInTheDocument();
-      expect(screen.getByText("What data sources were used?")).toBeInTheDocument();
-      expect(screen.getByText("What are the main conclusions?")).toBeInTheDocument();
+      expect(
+        screen.getByText("Summarize the uploaded documents with citations")
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText("Find contradictions or conflicts across sources")
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText("Create an action-item list from the documents")
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText("Show the strongest evidence for the main conclusion")
+      ).toBeInTheDocument();
     });
 
     it("displays appropriate heading for vault with docs", () => {
@@ -649,7 +657,9 @@ describe("TranscriptPane", () => {
         />
       );
 
-      expect(screen.queryByText("What are the key findings?")).not.toBeInTheDocument();
+      expect(
+        screen.queryByText("Summarize the uploaded documents with citations")
+      ).not.toBeInTheDocument();
       expect(screen.queryByRole("list", { name: "Suggested prompts" })).not.toBeInTheDocument();
     });
   });
@@ -664,13 +674,14 @@ describe("TranscriptPane", () => {
         />
       );
 
-      const promptButton = screen.getByText("What are the key findings?");
-      
+      const promptText = "Summarize the uploaded documents with citations";
+      const promptButton = screen.getByText(promptText);
+
       await act(async () => {
         await userEvent.click(promptButton);
       });
 
-      expect(mockSetInput).toHaveBeenCalledWith("What are the key findings?");
+      expect(mockSetInput).toHaveBeenCalledWith(promptText);
     });
 
     it("works for all suggested prompts", async () => {
@@ -683,10 +694,10 @@ describe("TranscriptPane", () => {
       );
 
       const prompts = [
-        "What are the key findings?",
-        "Summarize the main topics",
-        "What data sources were used?",
-        "What are the main conclusions?",
+        "Summarize the uploaded documents with citations",
+        "Find contradictions or conflicts across sources",
+        "Create an action-item list from the documents",
+        "Show the strongest evidence for the main conclusion",
       ];
 
       for (const prompt of prompts) {
