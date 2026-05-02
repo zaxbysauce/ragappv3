@@ -657,6 +657,7 @@ async def transfer_ownership(
             )
 
         try:
+            conn.execute("BEGIN IMMEDIATE")
             conn.execute(
                 "UPDATE org_members SET role = 'admin' WHERE org_id = ? AND role = 'owner'",
                 (org_id,),

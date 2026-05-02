@@ -474,10 +474,37 @@ async def delete_vault(
         raise HTTPException(status_code=500, detail=f"Delete failed: {e}")
 
 
-class VaultGroupsUpdateRequest(BaseModel):
-    """Request model for updating vault group access."""
+class GroupAccessItem(BaseModel):
+    """Single group + permission pair for vault group access updates."""
 
-    group_ids: List[int]
+    group_id: int
+    permission: str = "read"
+
+    @field_validator("permission")
+    @classmethod
+    def validate_permission(cls, v: str) -> str:
+        if v not in ("read", "write", "admin"):
+            raise ValueError("permission must be read, write, or admin")
+        return v
+
+
+class VaultGroupsUpdateRequest(BaseModel):
+    """Request model for updating vault group access.
+
+    Preferred: ``vault_access: [{group_id, permission}]``
+    Legacy: ``group_ids: [int]`` (all get 'read' permission)
+    """
+
+    vault_access: Optional[List[GroupAccessItem]] = None
+    group_ids: Optional[List[int]] = None
+
+    def resolved_access(self) -> List[GroupAccessItem]:
+        """Return the canonical list of group+permission pairs."""
+        if self.vault_access is not None:
+            return self.vault_access
+        if self.group_ids:
+            return [GroupAccessItem(group_id=gid, permission="read") for gid in self.group_ids]
+        return []
 
 
 class VaultGroupResponse(BaseModel):
@@ -573,8 +600,10 @@ async def update_vault_groups(
         )
     vault_org_id = vault_row[1]
 
-    # If no group_ids provided, just clear all access and return empty list
-    if not request.group_ids:
+    access_items = request.resolved_access()
+
+    # If no access items provided, just clear all access and return empty list
+    if not access_items:
         await asyncio.to_thread(
             conn.execute,
             "DELETE FROM vault_group_access WHERE vault_id = ?",
@@ -583,20 +612,22 @@ async def update_vault_groups(
         await asyncio.to_thread(conn.commit)
         return VaultGroupsListResponse(groups=[])
 
+    group_ids = [item.group_id for item in access_items]
+
     # Validate all group_ids exist and belong to the same org as the vault
-    placeholders = ",".join("?" * len(request.group_ids))
+    placeholders = ",".join("?" * len(group_ids))
     cursor = await asyncio.to_thread(
         conn.execute,
         f"""
             SELECT id, org_id FROM groups
             WHERE id IN ({placeholders})
         """,
-        tuple(request.group_ids),
+        tuple(group_ids),
     )
     group_rows = await asyncio.to_thread(cursor.fetchall)
 
     found_group_ids = {row[0] for row in group_rows}
-    missing_group_ids = set(request.group_ids) - found_group_ids
+    missing_group_ids = set(group_ids) - found_group_ids
     if missing_group_ids:
         raise HTTPException(
             status_code=400, detail=f"Group(s) not found: {sorted(missing_group_ids)}"
@@ -625,14 +656,14 @@ async def update_vault_groups(
         )
 
         granted_by = user.get("id")
-        for group_id in request.group_ids:
+        for item in access_items:
             await asyncio.to_thread(
                 conn.execute,
                 """
-                    INSERT INTO vault_group_access (vault_id, group_id, granted_by)
-                    VALUES (?, ?, ?)
+                    INSERT INTO vault_group_access (vault_id, group_id, permission, granted_by)
+                    VALUES (?, ?, ?, ?)
                 """,
-                (vault_id, group_id, granted_by),
+                (vault_id, item.group_id, item.permission, granted_by),
             )
         await asyncio.to_thread(conn.commit)
     except Exception:

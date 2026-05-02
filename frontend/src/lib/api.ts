@@ -1270,7 +1270,9 @@ export async function updateVaultGroups(
   vaultId: number,
   groupAccess: { groupId: number; permission: string }[]
 ): Promise<void> {
-  await apiClient.put(`/vaults/${vaultId}/groups`, { group_ids: groupAccess.map(ga => ga.groupId) });
+  await apiClient.put(`/vaults/${vaultId}/groups`, {
+    vault_access: groupAccess.map(ga => ({ group_id: ga.groupId, permission: ga.permission })),
+  });
 }
 
 // ============================================================================

@@ -62,10 +62,12 @@ CREATE TABLE IF NOT EXISTS csrf_tokens (
 
 ADMIN_ID = 1
 TARGET_ID = 2
+SUPERADMIN_ID = 3
 ORG1_ID = 1
 ORG2_ID = 2
 
 admin_token = create_access_token(ADMIN_ID, "admin1", "admin")
+superadmin_token = create_access_token(SUPERADMIN_ID, "superadmin1", "superadmin")
 
 
 def _auth(token: str) -> dict:
@@ -98,6 +100,10 @@ def setup_db(monkeypatch):
     conn.execute(
         "INSERT INTO users (id, username, hashed_password, role) VALUES (?,?,?,?)",
         (TARGET_ID, "targetuser", pw, "member"),
+    )
+    conn.execute(
+        "INSERT INTO users (id, username, hashed_password, role) VALUES (?,?,?,?)",
+        (SUPERADMIN_ID, "superadmin1", pw, "superadmin"),
     )
     conn.execute(
         "INSERT INTO organizations (id, name, slug) VALUES (?,?,?)",
@@ -281,3 +287,39 @@ class TestLegacyOrgIdsFormat:
         assert ORG1_ID in orgs
         assert orgs[ORG1_ID] == "admin"
         assert ORG2_ID not in orgs
+
+
+class TestDeleteUserOwnerGuard:
+    """DELETE /users/{id} must block deletion of org owners."""
+
+    def test_cannot_delete_org_owner(self, client, setup_db):
+        # Make TARGET_ID an org owner
+        conn = sqlite3.connect(setup_db)
+        conn.execute(
+            "INSERT INTO org_members (org_id, user_id, role) VALUES (?,?,?)",
+            (ORG1_ID, TARGET_ID, "owner"),
+        )
+        conn.commit()
+        conn.close()
+
+        resp = client.delete(
+            f"/users/{TARGET_ID}",
+            headers=_auth(superadmin_token),
+        )
+        assert resp.status_code == 400
+        assert "transfer ownership" in resp.json()["detail"].lower()
+
+    def test_can_delete_non_owner_user(self, client, setup_db):
+        resp = client.delete(
+            f"/users/{TARGET_ID}",
+            headers=_auth(superadmin_token),
+        )
+        assert resp.status_code == 200
+        assert resp.json()["user_id"] == TARGET_ID
+
+    def test_delete_requires_superadmin(self, client, setup_db):
+        resp = client.delete(
+            f"/users/{TARGET_ID}",
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 403

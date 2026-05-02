@@ -692,3 +692,21 @@ class TestTransferOwnership:
             headers=auth_headers(superadmin_token),
         )
         assert response.status_code == 404
+
+    def test_cannot_transfer_to_inactive_user(self, client):
+        """Cannot transfer ownership to an inactive user (400)."""
+        org_id = _create_org("Inactive Transfer Org", 2)  # admin1 is owner
+        _add_org_member(org_id, 3, "member")  # member1 is a member but will be deactivated
+        # Deactivate member1
+        conn = _get_db_conn()
+        conn.execute("UPDATE users SET is_active = 0 WHERE id = 3")
+        conn.commit()
+        conn.close()
+
+        response = client.post(
+            f"/api/organizations/{org_id}/transfer-ownership",
+            json={"new_owner_user_id": 3},
+            headers=auth_headers(admin_token),
+        )
+        assert response.status_code == 400
+        assert "active" in response.json()["detail"].lower()
