@@ -11,16 +11,15 @@ from app.services.citation_validator import (
     repair_against_sources_and_memories,
 )
 from app.services.context_distiller import ContextDistiller
-from app.services.rag_trace import RAGTrace
 from app.services.document_retrieval import DocumentRetrievalService, RAGSource
 from app.services.embeddings import EmbeddingError, EmbeddingService
 from app.services.llm_client import LLMClient, LLMError
-from app.services.memory_store import MemoryRecord, MemoryStore
+from app.services.memory_store import MemoryStore
 from app.services.prompt_builder import PromptBuilderService, calculate_primary_count
 from app.services.query_transformer import QueryTransformer
+from app.services.rag_trace import RAGTrace
 from app.services.retrieval_evaluator import RetrievalEvaluator
 from app.services.vector_store import VectorStore
-from app.utils.assistant_sanitizer import sanitize_assistant_content
 from app.utils.fusion import rrf_fuse
 
 

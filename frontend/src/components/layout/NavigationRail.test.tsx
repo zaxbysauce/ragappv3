@@ -13,6 +13,13 @@ vi.mock("@/stores/useThemeStore", () => ({
   applyTheme: vi.fn(),
 }));
 
+// Mock useAuthStore — default to admin so all nav items are visible
+vi.mock("@/stores/useAuthStore", () => ({
+  useAuthStore: vi.fn((selector: (s: { user: { role: string } | null }) => unknown) =>
+    selector({ user: { role: "admin" } })
+  ),
+}));
+
 // Mock health status
 const mockHealthStatus = {
   backend: true,

@@ -18,7 +18,7 @@ from typing import List
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.models.database import init_db, run_migrations, SQLiteConnectionPool
+from app.models.database import SQLiteConnectionPool, init_db, run_migrations
 from app.services.memory_store import MemoryStore, _cosine_similarity
 
 
@@ -119,7 +119,6 @@ class TestHybridSemanticPath(unittest.TestCase):
 
             results = store.search_memories("brief report style", limit=5, vault_id=1)
             self.assertTrue(results, "expected at least one hybrid match")
-            ids = [r.id for r in results]
             # The first memory should appear in the result set even though
             # the query shares NO tokens with it.
             top_contents = [r.content for r in results]

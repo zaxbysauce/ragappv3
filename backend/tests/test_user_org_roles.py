@@ -227,7 +227,7 @@ class TestPerOrgRoleMemberships:
 
     def test_nonexistent_user_returns_404(self, client, setup_db):
         resp = client.put(
-            f"/users/9999/organizations",
+            "/users/9999/organizations",
             json={"memberships": [{"org_id": ORG1_ID, "role": "member"}]},
             headers=_auth(admin_token),
         )
