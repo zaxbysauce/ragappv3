@@ -11,6 +11,7 @@ from app.services.citation_validator import (
     repair_against_sources_and_memories,
 )
 from app.services.context_distiller import ContextDistiller
+from app.services.rag_trace import RAGTrace
 from app.services.document_retrieval import DocumentRetrievalService, RAGSource
 from app.services.embeddings import EmbeddingError, EmbeddingService
 from app.services.llm_client import LLMClient, LLMError
@@ -145,6 +146,10 @@ class RAGEngine:
             vault_id,
             stream,
         )
+        # Per-query observability accumulator. Always built; emitted into
+        # the done message only when ``rag_trace_in_response`` is on.
+        trace = RAGTrace(original_query=user_input)
+        trace.distance_threshold = self.max_distance_threshold
         # Memory intent detection
         try:
             memory_content = self.memory_store.detect_memory_intent(user_input)
@@ -177,6 +182,7 @@ class RAGEngine:
                         transformed_queries[0][1],
                         transformed_queries[1][1],
                     )
+                trace.transformed_queries = [t[1] for t in transformed_queries]
             except Exception as e:
                 logger.warning(
                     "Query transformation failed (%s): %s, using original query only", type(e).__name__, e
@@ -307,6 +313,17 @@ class RAGEngine:
                 "Failed to fetch indexed_file_ids (visibility filter disabled): %s", _exc
             )
 
+        # Capture retrieval-phase trace stats before filtering.
+        trace.fused_hits = len(vector_results)
+        trace.fts_status = hybrid_status
+        trace.fts_exceptions = fts_exceptions
+        trace.rerank_status = rerank_status
+        trace.variants_dropped = list(variants_dropped or [])
+        trace.exact_match_promoted = exact_match_promoted
+        trace.token_pack_included = token_pack_stats.get("token_pack_included", 0)
+        trace.token_pack_skipped = token_pack_stats.get("token_pack_skipped", 0)
+        trace.token_pack_truncated = token_pack_stats.get("token_pack_truncated", 0)
+
         # Filter relevant chunks using document retrieval service
         relevant_chunks = await self.document_retrieval.filter_relevant(
             vector_results,
@@ -317,6 +334,7 @@ class RAGEngine:
             "[query] After filter_relevant: relevant_chunk_count=%d",
             len(relevant_chunks),
         )
+        trace.filtered_hits = len(relevant_chunks)
 
         # Context distillation: deduplicate overlapping chunks and optionally synthesize
         if settings.context_distillation_enabled and relevant_chunks:
@@ -325,9 +343,11 @@ class RAGEngine:
                     self.embedding_service,
                     self.llm_client if settings.context_distillation_synthesis_enabled else None,
                 )
+                trace.distillation_before = len(relevant_chunks)
                 relevant_chunks = await distiller.distill(
                     user_input, relevant_chunks, eval_result
                 )
+                trace.distillation_after = len(relevant_chunks)
                 logger.info(
                     "[query] After context distillation: chunk_count=%d",
                     len(relevant_chunks),
@@ -340,6 +360,9 @@ class RAGEngine:
         # source.parent_window_text; prompt_builder renders it with [[MATCH:]] markers.
         if settings.parent_retrieval_enabled and relevant_chunks:
             relevant_chunks = self._expand_parent_windows(relevant_chunks)
+            trace.parent_windows_expanded = sum(
+                1 for c in relevant_chunks if getattr(c, "parent_window_text", None)
+            )
 
         # Check if distance filtering removed all results (no_match)
         if not relevant_chunks and self.document_retrieval.no_match:
@@ -367,37 +390,92 @@ class RAGEngine:
                 "fallback": True,
             }
 
-        # Search memories
-        try:
-            memories = await asyncio.to_thread(
-                self.memory_store.search_memories,
-                user_input,
-                settings.retrieval_top_k,
-                vault_id=vault_id,
-            )
-        except Exception as exc:
-            logger.error("Memory search failed: %s", exc)
-            memories = []
+        # Search memories (hybrid: FTS + dense + RRF, with FTS fallback).
+        # Gated by ``memory_retrieval_enabled`` so operators can disable
+        # the path during incident response without redeploying.
+        memories = []
+        if settings.memory_retrieval_enabled:
+            try:
+                memories = await asyncio.to_thread(
+                    self.memory_store.search_memories,
+                    user_input,
+                    settings.memory_retrieval_top_k,
+                    vault_id=vault_id,
+                )
+            except Exception as exc:
+                logger.error("Memory search failed: %s", exc)
+                memories = []
 
         # Build messages using prompt builder service
         messages = self.prompt_builder.build_messages(
             user_input, chat_history, relevant_chunks, memories, relevance_hint
         )
 
-        # Stream or non-stream LLM response
+        # Stream or non-stream LLM response. Capture the assembled
+        # content so citation labels can be parsed for the trace.
+        assembled_response: List[str] = []
         if stream:
             async for chunk in self._stream_llm_response(messages):
                 chunk_type = chunk.get("type", "unknown")
                 logger.debug("[query] Yielding '%s' chunk (stream)", chunk_type)
+                if chunk_type == "content":
+                    assembled_response.append(chunk.get("content", ""))
                 yield chunk
         else:
             async for chunk in self._get_llm_response(messages):
                 chunk_type = chunk.get("type", "unknown")
                 logger.debug("[query] Yielding '%s' chunk (non-stream)", chunk_type)
+                if chunk_type == "content":
+                    assembled_response.append(chunk.get("content", ""))
                 yield chunk
 
+        # Citation parsing for the trace (does not modify content; the
+        # chat route does the user-visible repair).
+        full_response = "".join(assembled_response)
+        cited_sources, cited_memories = parse_citations(full_response)
+        trace.cited_sources = cited_sources
+        trace.cited_memories = cited_memories
+
         # Yield done message with sources
-        done_msg = self._build_done_message(relevant_chunks, memories, score_type, hybrid_status, fts_exceptions, rerank_status, variants_dropped, exact_match_promoted, token_pack_stats)
+        done_msg = self._build_done_message(
+            relevant_chunks,
+            memories,
+            score_type,
+            hybrid_status,
+            fts_exceptions,
+            rerank_status,
+            variants_dropped,
+            exact_match_promoted,
+            token_pack_stats,
+        )
+        # Populate final-source labels on the trace for evaluation tooling.
+        trace.final_sources = [
+            s.get("source_label", "") for s in done_msg.get("sources", []) if s.get("source_label")
+        ]
+        trace.final_memories = [
+            m.get("memory_label", "") for m in done_msg.get("memories_used", []) if m.get("memory_label")
+        ]
+        # Run citation validation against the assembled response.
+        try:
+            validation = repair_against_sources_and_memories(
+                full_response,
+                done_msg.get("sources", []),
+                done_msg.get("memories_used", []),
+            )
+            trace.invalid_citations = list(validation.invalid_citations)
+            trace.answer_supported = (
+                validation.has_any_citation or not validation.has_evidence
+            ) and not validation.uncited_factual_warning
+        except Exception:  # pragma: no cover — defensive
+            trace.invalid_citations = []
+            trace.answer_supported = None
+
+        # Always log the trace; embed in done payload only when the operator
+        # opts in via ``settings.rag_trace_in_response``.
+        trace.log()
+        if settings.rag_trace_in_response:
+            done_msg["trace"] = trace.to_dict()
+
         logger.info(
             "[query] Yielding 'done': sources_count=%d, memories_used=%d",
             len(done_msg.get("sources", [])),

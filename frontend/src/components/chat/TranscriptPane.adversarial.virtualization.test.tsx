@@ -113,6 +113,11 @@ vi.mock("@/stores/useChatStore", () => ({
   useChatInputError: vi.fn(() => mockChatState.inputError),
   useChatActiveChatId: vi.fn(() => mockChatState.activeChatId),
   useChatStreamingId: vi.fn(() => mockChatState.streamingMessageId),
+  useStreamingMessageContentLength: vi.fn(() => {
+    const id = mockChatState.streamingMessageId;
+    if (!id) return 0;
+    return (mockChatState.messagesById[id]?.content ?? "").length;
+  }),
 }));
 vi.mock("@/stores/useVaultStore");
 vi.mock("@/hooks/useSendMessage");

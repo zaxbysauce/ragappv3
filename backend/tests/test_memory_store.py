@@ -141,10 +141,11 @@ class TestMemoryStore(unittest.TestCase):
         self.assertEqual(result, "to buy milk")
 
     def test_detect_memory_intent_keep_in_mind_pattern(self):
-        """Test 'keep in mind' pattern detection."""
+        """'keep in mind that X' should capture the body without the
+        leading 'that' connective. Improved capture introduced in P2.5."""
         text = "Keep in mind that the deadline is Friday."
         result = self.store.detect_memory_intent(text)
-        self.assertEqual(result, "that the deadline is Friday")
+        self.assertEqual(result, "the deadline is Friday")
 
     def test_detect_memory_intent_note_that_pattern(self):
         """Test 'note that' pattern detection."""

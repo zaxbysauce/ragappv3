@@ -19,7 +19,12 @@ import { MessageBubble } from "./MessageBubble";
 import { AssistantMessage } from "./AssistantMessage";
 import { WaitingIndicator } from "./WaitingIndicator";
 import { Composer } from "./Composer";
-import { useChatStore, useMessageIds, useMessage } from "@/stores/useChatStore";
+import {
+  useChatStore,
+  useMessageIds,
+  useMessage,
+  useStreamingMessageContentLength,
+} from "@/stores/useChatStore";
 import { useVaultStore } from "@/stores/useVaultStore";
 import { useAuthStore } from "@/stores/useAuthStore";
 import { useChatShellStore } from "@/stores/useChatShellStore";
@@ -228,9 +233,23 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
   const { handleSend, handleStop, sendDirect } = useSendMessage(vaultId, refreshHistory);
 
   const [showScrollButton, setShowScrollButton] = useState(false);
-  const [isAtBottom, setIsAtBottom] = useState(true);
+  // setIsAtBottom is retained for legacy components that read isAtBottom via
+  // refs higher up the tree; the auto-scroll logic itself uses isAtBottomRef
+  // exclusively to avoid stale closures.
+  const [, setIsAtBottom] = useState(true);
   const showDebug = import.meta.env.DEV;
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+
+  // Ref-backed pinned-bottom state — read inside scroll callbacks without
+  // creating stale closures over isAtBottom (which is captured by useEffect).
+  const isAtBottomRef = useRef(true);
+  // User intent flag: once the user manually scrolls up, we stop auto-scroll
+  // until they click "New messages" or reach the bottom themselves.
+  const userScrolledUpRef = useRef(false);
+
+  // Reactive token-length selector. Recomputes when streaming content grows;
+  // does NOT subscribe to the full message body or sources/feedback fields.
+  const streamingContentLength = useStreamingMessageContentLength();
 
   const hasIndexedDocs = activeVault ? activeVault.file_count > 0 : false;
 
@@ -243,22 +262,78 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
     measureElement: (el) => el?.getBoundingClientRect().height ?? 0,
   });
 
-  // Auto-scroll on new message (count changes)
-  useEffect(() => {
-    if (isAtBottom && messageIds.length > 0) {
+  /**
+   * Centralized auto-scroll. Honors three signals:
+   *  - new messages added (messageIds.length grows)
+   *  - streaming token growth on the active assistant message
+   *    (streamingContentLength grows without messageIds.length changing)
+   *  - explicit user request via the "New messages" button
+   *
+   * Only scrolls when the user is currently pinned at the bottom AND has
+   * not manually scrolled up since the last pin. Reads the ref-backed flag
+   * so callbacks fired between renders see fresh state.
+   */
+  const scrollToBottomNow = useCallback(
+    (behavior: ScrollBehavior = "auto") => {
+      if (messageIds.length === 0) return;
       requestAnimationFrame(() => {
-        virtualizer.scrollToIndex(messageIds.length - 1, { align: "end", behavior: "auto" });
+        // Force virtualizer to remeasure dynamic items (markdown, code blocks,
+        // source cards) before scrolling so the target offset is correct.
+        try {
+          virtualizer.measure();
+        } catch {
+          // measure() may be a no-op on very early renders — safe to ignore.
+        }
+        virtualizer.scrollToIndex(messageIds.length - 1, {
+          align: "end",
+          behavior,
+        });
+        // Final correction: streamed token growth and code-block reflow can
+        // leave a small gap. Force scrollTop to the absolute bottom.
+        const el = scrollRef.current;
+        if (el) {
+          // requestAnimationFrame again so the DOM has settled after measure.
+          requestAnimationFrame(() => {
+            el.scrollTop = el.scrollHeight;
+          });
+        }
       });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messageIds.length, isAtBottom]);
+    },
+    [messageIds.length, virtualizer]
+  );
 
-  // Auto-scroll during streaming
+  // New-message auto-scroll: triggered when messageIds.length changes.
   useEffect(() => {
-    if (isStreaming && isAtBottom && messageIds.length > 0) {
-      virtualizer.scrollToIndex(messageIds.length - 1, { align: "end", behavior: "auto" });
+    if (messageIds.length === 0) return;
+    if (!isAtBottomRef.current || userScrolledUpRef.current) return;
+    scrollToBottomNow("auto");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messageIds.length]);
+
+  // Token-growth auto-scroll: triggered when the active streaming message's
+  // content length grows. ``messageIds.length`` does not change during
+  // streaming, so the previous count-based effect missed every chunk.
+  useEffect(() => {
+    if (streamingContentLength === 0) return;
+    if (!isAtBottomRef.current || userScrolledUpRef.current) return;
+    scrollToBottomNow("auto");
+  }, [streamingContentLength, scrollToBottomNow]);
+
+  // After streaming completes, dynamic content (markdown headings, code
+  // blocks, source cards) re-renders and changes height. Re-pin to the
+  // bottom one more time if the user is still pinned.
+  const wasStreamingRef = useRef(isStreaming);
+  useEffect(() => {
+    const wasStreaming = wasStreamingRef.current;
+    wasStreamingRef.current = isStreaming;
+    if (wasStreaming && !isStreaming) {
+      if (isAtBottomRef.current && !userScrolledUpRef.current) {
+        // Wait for the post-stream re-render to settle (source cards, etc).
+        const t = setTimeout(() => scrollToBottomNow("auto"), 50);
+        return () => clearTimeout(t);
+      }
     }
-  }, [isStreaming, messageIds.length, isAtBottom, virtualizer]);
+  }, [isStreaming, scrollToBottomNow]);
 
   // Single evidence:jump-to-answer listener (Phase 1 fix — duplicate listener removed)
   useEffect(() => {
@@ -295,14 +370,28 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
     if (!el) return;
     const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
     const atBottom = dist < 150;
+    // Refs first so other effects firing in the same tick see fresh state.
+    const wasAtBottom = isAtBottomRef.current;
+    isAtBottomRef.current = atBottom;
+    if (atBottom) {
+      // Reaching the bottom resets the manual-scroll-up sentinel so
+      // streaming auto-scroll resumes.
+      userScrolledUpRef.current = false;
+    } else if (wasAtBottom) {
+      // User just scrolled up from a pinned position — hold auto-scroll.
+      userScrolledUpRef.current = true;
+    }
     setIsAtBottom(atBottom);
     setShowScrollButton(!atBottom);
   };
 
   const scrollToBottom = () => {
-    if (messageIds.length > 0) virtualizer.scrollToIndex(messageIds.length - 1, { align: "end" });
+    // Explicit user request: reset the manual-scroll sentinel and pin.
+    userScrolledUpRef.current = false;
+    isAtBottomRef.current = true;
     setIsAtBottom(true);
     setShowScrollButton(false);
+    scrollToBottomNow("smooth");
   };
 
   const handlePromptClick = (prompt: string) => {

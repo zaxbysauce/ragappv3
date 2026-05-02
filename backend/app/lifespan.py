@@ -311,7 +311,38 @@ async def lifespan(app: FastAPI):
         logger.error("Please run the reindex process or delete the LanceDB database.")
         logger.error("=" * 60)
         # Continue startup but warn that reindex is needed
-    app.state.memory_store = MemoryStore(app.state.db_pool)
+    # Parent-window retrieval startup check: if the operator has enabled
+    # parent_retrieval but the on-disk chunks were ingested before the
+    # parent_window_text was being persisted, the feature degrades to
+    # legacy chunk-only rendering. We emit a log diagnostic so operators
+    # can decide whether to reindex; the runtime path itself remains
+    # safe (prompt_builder handles missing parent_window_text gracefully).
+    if settings.parent_retrieval_enabled:
+        try:
+            sample_present = app.state.vector_store.has_parent_window_text_sample()
+            if sample_present:
+                logger.info(
+                    "Parent-window retrieval: ENABLED and at least one indexed chunk "
+                    "has a stored parent window."
+                )
+            else:
+                logger.warning(
+                    "Parent-window retrieval is enabled but no indexed chunks have a "
+                    "stored parent window text. Queries will degrade to legacy "
+                    "small-chunk rendering until documents are reindexed. To backfill, "
+                    "delete and re-add the affected files."
+                )
+        except Exception as exc:
+            logger.warning(
+                "Parent-window startup check failed (continuing): %s", exc
+            )
+
+    # Inject the embedding service so memory hybrid retrieval can use dense
+    # search. MemoryStore degrades gracefully to FTS-only when the embedding
+    # service is unavailable.
+    app.state.memory_store = MemoryStore(
+        app.state.db_pool, embedding_service=app.state.embedding_service
+    )
     app.state.secret_manager = SecretManager()
     app.state.toggle_manager = ToggleManager(app.state.db_pool)
     try:

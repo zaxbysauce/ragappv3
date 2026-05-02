@@ -390,6 +390,7 @@ def run_migrations(sqlite_path: str) -> None:
     migrate_add_feedback_column(sqlite_path)
     migrate_add_chat_memories_column(sqlite_path)
     migrate_add_memory_embedding_column(sqlite_path)
+    migrate_sanitize_existing_chat_messages(sqlite_path)
 
     # Add partial unique index for duplicate hash detection (HIGH-10)
     # Wrapped in IntegrityError handler: existing databases may have duplicate
@@ -751,6 +752,52 @@ def migrate_add_chat_memories_column(sqlite_path: str) -> None:
         if "memories" not in existing_cols:
             conn.execute("ALTER TABLE chat_messages ADD COLUMN memories TEXT")
         conn.commit()
+    finally:
+        conn.close()
+
+
+def migrate_sanitize_existing_chat_messages(sqlite_path: str) -> None:
+    """Migration: scrub model thinking/reasoning blocks from previously
+    persisted assistant chat_messages rows.
+
+    Idempotent: rows whose content is unchanged after sanitization are
+    skipped, so re-running the migration is a no-op once clean. Uses the
+    same canonical sanitizer as the runtime persistence path so the
+    cleanup produces exactly the same content the live ingest would
+    produce today.
+    """
+    # Import inside the function to avoid cycles during initial schema setup.
+    from app.utils.assistant_sanitizer import (
+        cleanup_existing_chat_messages_rows,
+    )
+
+    conn = sqlite3.connect(sqlite_path)
+    try:
+        # Check the table exists and has the expected columns first; some
+        # very old test fixtures call run_migrations on a partially-bootstrapped
+        # schema and we should not crash there.
+        cursor = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='chat_messages'"
+        )
+        if cursor.fetchone() is None:
+            return
+        cursor = conn.execute(
+            "SELECT id, content FROM chat_messages WHERE role = 'assistant'"
+        )
+        rows = cursor.fetchall()
+        cleaned = cleanup_existing_chat_messages_rows(rows)
+        if not cleaned:
+            return
+        for row_id, new_content in cleaned:
+            conn.execute(
+                "UPDATE chat_messages SET content = ? WHERE id = ?",
+                (new_content, row_id),
+            )
+        conn.commit()
+        logger.info(
+            "Sanitized %d existing assistant chat_messages rows during migration",
+            len(cleaned),
+        )
     finally:
         conn.close()
 

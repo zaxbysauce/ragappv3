@@ -431,6 +431,21 @@ export interface UploadDocumentResponse {
   status: string;
 }
 
+/**
+ * Status payload returned by GET /documents/{id}/status. Used by the chat
+ * composer to poll whether an uploaded file has finished indexing before
+ * letting the user submit a query that depends on it.
+ */
+export interface DocumentStatusResponse {
+  id: number;
+  filename: string;
+  /** "pending" | "processing" | "indexed" | "error" */
+  status: string;
+  chunk_count: number;
+  error_message?: string | null;
+  processed_at?: string | null;
+}
+
 export interface DocumentStatsResponse {
   total_documents: number;
   total_chunks: number;
@@ -699,6 +714,15 @@ export async function scanDocuments(vaultId?: number): Promise<ScanDocumentsResp
     "/documents/scan",
     undefined,
     vaultId != null ? { params: { vault_id: vaultId } } : undefined
+  );
+  return response.data;
+}
+
+export async function getDocumentStatus(
+  fileId: string | number
+): Promise<DocumentStatusResponse> {
+  const response = await apiClient.get<DocumentStatusResponse>(
+    `/documents/${fileId}/status`
   );
   return response.data;
 }

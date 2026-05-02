@@ -5,7 +5,15 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
-import { useChatMessages, type Message } from "@/stores/useChatStore";
+import {
+  type Message,
+  useChatStore,
+  useLastCompletedAssistantSources,
+  useLastUserContent,
+  useSourcesForSourceId,
+  useCompletedAssistantMessageIdsKey,
+  parseCompletedAssistantIds,
+} from "@/stores/useChatStore";
 import { useChatShellStore } from "@/stores/useChatShellStore";
 import type { Source } from "@/lib/api";
 import { getRelevanceLabel, type ScoreType } from "@/lib/relevance";
@@ -321,8 +329,16 @@ function StructuredOutputItem({ output }: StructuredOutputItemProps) {
 }
 
 export function RightPane() {
-  const messages = useChatMessages();
+  // Granular subscriptions — explicitly avoid useChatMessages() so streaming
+  // token growth on the active assistant message does NOT re-render this
+  // component or rerun the structured-output extraction. Each selector below
+  // ignores the streaming message and recomputes only when its own slice
+  // changes.
+  const lastCompletedSources = useLastCompletedAssistantSources();
+  const query = useLastUserContent();
+  const completedAssistantIdsKey = useCompletedAssistantMessageIdsKey();
   const { selectedEvidenceSource, setSelectedEvidenceSource, activeRightTab, setActiveRightTab } = useChatShellStore();
+  const sourcesForSelected = useSourcesForSourceId(selectedEvidenceSource?.id);
   const [selectedSource, setSelectedSource] = useState<Source | null>(null);
   const [activeTab, setActiveTab] = useState<string>("sources");
 
@@ -342,40 +358,27 @@ export function RightPane() {
     }
   }, [activeRightTab]);
 
-  // Get sources from the clicked message's sources when selectedEvidenceSource is set,
-  // otherwise fall back to the last assistant message's sources.
-  const sources = useMemo(() => {
-    if (selectedEvidenceSource) {
-      for (let i = 0; i < messages.length; i++) {
-        const msgSources = messages[i].sources;
-        if (msgSources && msgSources.some((s) => s != null && s.id === selectedEvidenceSource.id)) {
-          return msgSources.filter((s): s is Source => s != null);
-        }
-      }
-    }
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === "assistant" && messages[i].sources) {
-        return (messages[i].sources || []).filter((s): s is Source => s != null);
-      }
-    }
-    return [];
-  }, [messages, selectedEvidenceSource]);
+  // Sources to show: the parent message of the clicked citation when one is
+  // selected, otherwise the most recent completed assistant message's sources.
+  const sources = useMemo<Source[]>(() => {
+    const list = selectedEvidenceSource ? sourcesForSelected : lastCompletedSources;
+    if (!list) return [];
+    return list.filter((s): s is Source => s != null);
+  }, [selectedEvidenceSource, sourcesForSelected, lastCompletedSources]);
 
-  // Get query from the last user message
-  const query = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === "user") {
-        return messages[i].content;
-      }
-    }
-    return "";
-  }, [messages]);
-
-  // Extract structured outputs from assistant messages
-  const structuredOutputs = useMemo(
-    () => extractStructuredOutputs(messages),
-    [messages]
-  );
+  // Extract structured outputs only from completed assistant messages.
+  // Reading messagesById outside the React reactive system here is safe
+  // because the dependency list (completedAssistantIds) already triggers
+  // recompute when a message completes, and structured outputs are
+  // exclusively derived from finished content.
+  const structuredOutputs = useMemo(() => {
+    const store = useChatStore.getState();
+    const ids = parseCompletedAssistantIds(completedAssistantIdsKey);
+    const completedMessages: Message[] = ids
+      .map((id) => store.messagesById[id])
+      .filter((m): m is Message => Boolean(m));
+    return extractStructuredOutputs(completedMessages);
+  }, [completedAssistantIdsKey]);
 
   const sourcesScrollRef = useRef<HTMLDivElement>(null);
   const shouldVirtualizeSources = sources.length > 20;

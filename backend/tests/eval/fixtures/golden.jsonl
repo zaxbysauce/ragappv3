@@ -1,0 +1,5 @@
+{"id": "case-001", "vault_id": 1, "query": "What is the project deadline?", "expected_chunk_ids": ["chunk-deadline-1", "chunk-deadline-2"], "expected_source_labels": ["S1", "S2"], "expected_facts": ["October 15", "Q4"]}
+{"id": "case-002", "vault_id": 1, "query": "Who approved the budget?", "expected_chunk_ids": ["chunk-budget-3"], "expected_source_labels": ["S3"], "expected_facts": ["VP of Finance"]}
+{"id": "case-003", "vault_id": 1, "query": "Summarize the contract termination clauses.", "expected_chunk_ids": ["chunk-contract-7", "chunk-contract-8", "chunk-contract-9"], "expected_source_labels": ["S7", "S8", "S9"]}
+{"id": "case-004", "vault_id": 1, "query": "What is my preferred report format?", "expected_chunk_ids": [], "expected_memories": ["M1"]}
+{"id": "case-005", "vault_id": 1, "query": "List the unicorn flavors served on the moon.", "expected_chunk_ids": [], "expect_no_match": true}

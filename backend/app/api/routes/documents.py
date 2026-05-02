@@ -402,6 +402,59 @@ async def list_documents(
     return DocumentListResponse(documents=documents, total=total)
 
 
+class DocumentStatusResponse(BaseModel):
+    """Lightweight status response used by the upload UI to poll indexing."""
+
+    id: int
+    filename: str
+    status: str
+    chunk_count: int
+    error_message: Optional[str] = None
+    processed_at: Optional[str] = None
+
+
+@router.get("/{file_id}/status", response_model=DocumentStatusResponse)
+async def get_document_status(
+    file_id: int,
+    conn: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_active_user),
+    evaluate: Callable = Depends(get_evaluate_policy),
+):
+    """Return the current ingest status of a single document.
+
+    Used by the composer attachment tray to poll whether an uploaded file has
+    finished indexing. Returns 404 when the file doesn't exist and 403 when
+    the user lacks read access to the file's vault. Status values are the
+    canonical ``files.status`` enum: ``pending`` | ``processing`` | ``indexed``
+    | ``error``.
+    """
+    cursor = await asyncio.to_thread(
+        conn.execute,
+        """
+        SELECT id, vault_id, file_name, status, chunk_count, error_message, processed_at
+        FROM files WHERE id = ?
+        """,
+        (file_id,),
+    )
+    row = await asyncio.to_thread(cursor.fetchone)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    if not await evaluate(user, "vault", row["vault_id"], "read"):
+        raise HTTPException(status_code=403, detail="No read access to this vault")
+
+    return DocumentStatusResponse(
+        id=row["id"],
+        filename=row["file_name"],
+        status=row["status"],
+        chunk_count=row["chunk_count"] or 0,
+        error_message=row["error_message"]
+        if "error_message" in row.keys()
+        else None,
+        processed_at=row["processed_at"],
+    )
+
+
 @router.get("/stats", response_model=DocumentStatsResponse)
 async def get_document_stats(
     vault_id: Optional[int] = Query(None, description="Filter by vault ID"),

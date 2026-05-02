@@ -99,6 +99,18 @@ class Settings(BaseSettings):
     """RRF k parameter for cross-variant fusion (original + stepback + HyDE). Lower = sharper top-list preference. Operators may lower to 20 for recall-heavy workloads."""
     multi_scale_rrf_k: int = 60
     """RRF k parameter for multi-scale fusion across chunk sizes."""
+    memory_rrf_k: int = 60
+    """RRF k parameter for memory hybrid retrieval (FTS + dense fusion)."""
+    memory_retrieval_enabled: bool = True
+    """Enable memory retrieval as part of RAG queries. When False, the
+    chat pipeline skips the memory_store search step entirely."""
+    memory_retrieval_top_k: int = 5
+    """Maximum memories returned by hybrid memory search per query."""
+    rag_trace_in_response: bool = False
+    """When True, RAG queries emit a ``trace`` field in the streaming
+    done event with detailed retrieval/generation observability. Default
+    False keeps the trace out of normal user-visible metadata; flip on
+    for eval runs or when the existing debug panel is active."""
     rrf_weight_original: float = 1.0
     """Weight for original query arm in cross-variant RRF fusion. Applied directly (not normalized). Defaults sum to 2.0."""
     rrf_weight_stepback: float = 0.5
@@ -192,10 +204,19 @@ class Settings(BaseSettings):
     """Exponential decay rate (lambda) for recency scoring. Higher values decay faster."""
 
     # ── Parent-document retrieval configuration (Issue #12) ──────────────────
-    parent_retrieval_enabled: bool = False
+    parent_retrieval_enabled: bool = True
     """Enable parent-window expansion at prompt time: retrieve on small chunks, deliver the
-    surrounding parent window to the LLM for broader context. Default False until migration
-    (add_parent_window) has been run and verified in staging.  Flip to True after migration."""
+    surrounding parent window to the LLM for broader context.
+
+    When True, the prompt builder reads chunk.parent_window_text and renders
+    the broader window with [[MATCH: …]] markers around the original small
+    chunk. Chunks without a stored parent window (legacy ingest, spreadsheets,
+    schema files) gracefully degrade to small-chunk-only rendering — the
+    feature is safe to enable on un-migrated databases.
+
+    Operators who explicitly want the legacy behavior can set this to False
+    via env. The startup validation in lifespan.py emits a log warning when
+    the chunks table does not yet have parent-window columns populated."""
 
     new_dedup_policy: bool = True
     """Enable group-aware dedup: preserve up to PER_DOC_CHUNK_CAP chunks per document and
@@ -528,7 +549,7 @@ class Settings(BaseSettings):
             raise ValueError("RRF weights must be >= 0.0")
         return v
 
-    @field_validator("hybrid_rrf_k", "multi_query_rrf_k", "multi_scale_rrf_k", mode="after")
+    @field_validator("hybrid_rrf_k", "multi_query_rrf_k", "multi_scale_rrf_k", "memory_rrf_k", mode="after")
     @classmethod
     def validate_rrf_k(cls, v: int) -> int:
         """Validate RRF k parameters are >= 1 (prevents ZeroDivisionError in 1/(k+rank))."""
