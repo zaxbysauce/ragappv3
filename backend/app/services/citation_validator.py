@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Iterable, List, Sequence, Tuple
 
 # Match [S<digits>] and [M<digits>] anywhere in text. Case-sensitive: S/M
 # only — lowercase variants are treated as plain text.

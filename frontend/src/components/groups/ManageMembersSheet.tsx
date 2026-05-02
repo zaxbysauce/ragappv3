@@ -18,12 +18,11 @@ import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   type Group,
-  type UserListItem,
-  listAllUsers,
+  type GroupMember,
+  getEligibleGroupMembers,
   getGroupMembers,
 } from "@/lib/api";
 
@@ -31,7 +30,7 @@ import {
 // Types
 // ============================================================================
 
-type User = UserListItem;
+type User = GroupMember;
 
 interface ManageMembersSheetProps {
   group: Group | null;
@@ -54,11 +53,11 @@ export function ManageMembersSheet({
   const [searchQuery, setSearchQuery] = useState("");
   const [isSaving, setIsSaving] = useState(false);
 
-  // Fetch all users and current group members
+  // Fetch eligible users (org members) and current group members
   const { data: allUsers = [], isLoading: isLoadingUsers } = useQuery<User[]>({
-    queryKey: ["users"],
-    queryFn: listAllUsers,
-    enabled: open,
+    queryKey: ["groups", group?.id, "eligible-members"],
+    queryFn: () => getEligibleGroupMembers(group!.id),
+    enabled: open && !!group,
   });
 
   const { data: groupMembers = [], isLoading: isLoadingMembers } = useQuery({
@@ -170,7 +169,11 @@ export function ManageMembersSheet({
               </div>
             ) : filteredUsers.length === 0 ? (
               <div className="text-center py-8 text-muted-foreground" role="status" aria-live="polite">
-                {searchQuery ? "No users match your search" : "No users available"}
+                {searchQuery
+                  ? "No users match your search"
+                  : allUsers.length === 0
+                  ? "No org members available. Add users to the organization first."
+                  : "No users available"}
               </div>
             ) : (
               <div className="space-y-2 pr-4">
@@ -190,22 +193,12 @@ export function ManageMembersSheet({
                       htmlFor={`user-${user.id}`}
                       className="flex-1 cursor-pointer space-y-1"
                     >
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium">{user.username}</span>
-                        {!user.is_active && (
-                          <Badge variant="secondary" className="text-xs">
-                            Inactive
-                          </Badge>
-                        )}
-                      </div>
+                      <div className="font-medium">{user.username}</div>
                       {user.full_name && (
                         <div className="text-sm text-muted-foreground">
                           {user.full_name}
                         </div>
                       )}
-                      <div className="text-xs text-muted-foreground capitalize">
-                        {user.role}
-                      </div>
                     </Label>
                   </div>
                 ))}

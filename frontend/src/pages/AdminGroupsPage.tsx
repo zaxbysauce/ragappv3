@@ -25,6 +25,7 @@ import {
   updateGroupMembers,
   updateGroupVaults,
   type Group,
+  type VaultAccessItem,
 } from "@/lib/api";
 
 // ============================================================================
@@ -54,7 +55,7 @@ function AdminGroupsPageContent(): JSX.Element {
   // ============================================================================
 
   const createMutation = useMutation({
-    mutationFn: (data: GroupFormData) => createGroup(data.name, data.description ?? null),
+    mutationFn: (data: GroupFormData) => createGroup(data.name, data.description ?? null, data.org_id),
     onSuccess: () => {
       toast.success("Group created successfully");
       setCreateDialogOpen(false);
@@ -111,9 +112,9 @@ function AdminGroupsPageContent(): JSX.Element {
   });
 
   const vaultsMutation = useMutation({
-    mutationFn: (vaultIds: number[]) => {
+    mutationFn: (vaultAccess: VaultAccessItem[]) => {
       if (!selectedGroup) throw new Error("No group selected");
-      return updateGroupVaults(selectedGroup.id, vaultIds);
+      return updateGroupVaults(selectedGroup.id, vaultAccess);
     },
     onSuccess: () => {
       toast.success("Vault access updated");
@@ -169,8 +170,8 @@ function AdminGroupsPageContent(): JSX.Element {
     await membersMutation.mutateAsync(userIds);
   }, [membersMutation]);
 
-  const handleVaultsSave = useCallback(async (vaultIds: number[]) => {
-    await vaultsMutation.mutateAsync(vaultIds);
+  const handleVaultsSave = useCallback(async (vaultAccess: VaultAccessItem[]) => {
+    await vaultsMutation.mutateAsync(vaultAccess);
   }, [vaultsMutation]);
 
   // ============================================================================

@@ -4,6 +4,7 @@ OpenAI-compatible LLM chat client using httpx.
 
 import json
 import logging
+import re
 from typing import AsyncGenerator, Dict, List, Optional
 
 import httpx
@@ -19,6 +20,15 @@ from app.utils.assistant_sanitizer import sanitize_assistant_content
 logger = logging.getLogger(__name__)
 
 _MAX_THINKING_BUFFER = 1024 * 1024  # 1MB max thinking buffer
+
+# Matches a complete <think> open tag case-insensitively, with optional attributes.
+# Examples: <think>, <THINK>, <think type="reasoning">, <Think foo="bar">
+_THINK_OPEN_RE = re.compile(r"<think(?:\s[^>]*)?>", re.IGNORECASE)
+# Matches any case variant of </think>
+_THINK_CLOSE_RE = re.compile(r"</think>", re.IGNORECASE)
+# Matches any partial opening sequence — used to decide whether to hold the buffer.
+# Covers: <, <t, <th, <thi, <thin, <think (any case)
+_THINK_PARTIAL_OPEN_RE = re.compile(r"^<[tT]?[hH]?[iI]?[nN]?[kK]?$")
 
 
 class LLMError(Exception):
@@ -291,90 +301,87 @@ class LLMClient:
                                 )
 
                             if not _thinking_active:
-                                # Not currently in thinking block — look for an
-                                # opening marker. Order matters: <think> before
-                                # _lhs before "Thinking Process:" so the most
-                                # specific match wins on already-complete buffers.
-                                if "<think>" in _buffer:
+                                # Not currently in a thinking block.  Look for
+                                # complete open markers first; if none found,
+                                # check whether the buffer is a partial prefix
+                                # of a known marker (hold it) or safe to yield.
+                                think_open_match = _THINK_OPEN_RE.search(_buffer)
+                                if think_open_match:
                                     logger.debug(
                                         "Filtering thinking content from model response (<think> pattern)"
                                     )
-                                    pre_think, _, remainder = _buffer.partition("<think>")
+                                    pre_think = _buffer[: think_open_match.start()]
                                     if pre_think:
                                         yield pre_think
                                     _thinking_active = True
-                                    _buffer = remainder
-                                    if "</think>" in _buffer:
-                                        _, _, after_think = _buffer.partition("</think>")
+                                    _buffer = _buffer[think_open_match.end() :]
+                                    # Handle inline close in the same buffer
+                                    close_match = _THINK_CLOSE_RE.search(_buffer)
+                                    if close_match:
                                         _thinking_active = False
-                                        _buffer = after_think
+                                        _buffer = _buffer[close_match.end() :]
                                 elif "_lhs" in _buffer:
-                                    # Log once when thinking content is first detected
                                     logger.debug(
                                         "Filtering thinking content from model response (_lhs/_rhs pattern)"
                                     )
-                                    # Yield any content before the _lhs tag
                                     pre_think, _, remainder = _buffer.partition("_lhs")
                                     if pre_think:
                                         yield pre_think
                                     _thinking_active = True
                                     _buffer = remainder
-                                    # Check if _rhs is also in this same chunk
                                     if "_rhs" in _buffer:
                                         _, _, after_think = _buffer.partition("_rhs")
                                         _thinking_active = False
                                         _buffer = after_think
-                                # Check for qwen3.5-122b pattern: "Thinking Process:"
                                 elif (
                                     "Thinking Process:".startswith(_buffer)
                                     or "Thinking Process:" in _buffer
-                                    or "<think".startswith(_buffer)
+                                    or _THINK_PARTIAL_OPEN_RE.match(_buffer)
                                 ):
+                                    # Check for qwen3.5-122b "Thinking Process:" pattern
                                     if "Thinking Process:" in _buffer:
                                         logger.debug(
                                             "Filtering thinking content from model response (Thinking Process pattern)"
                                         )
+                                        pre_marker, _, _ = _buffer.partition("Thinking Process:")
+                                        if pre_marker:
+                                            yield pre_marker
                                         _thinking_active = True
-                                        _buffer = ""  # Discard the prefix
+                                        _buffer = ""
                                     # else: still accumulating a partial open
-                                    # marker like "<thi" or "Thinking " — hold
-                                    # buffer until full marker arrives or it
-                                    # diverges from any open prefix.
+                                    # marker — hold buffer until full marker
+                                    # arrives or it diverges from any prefix.
                                 elif _buffer:
                                     # No opening pattern and no partial-open
-                                    # prefix — flush buffer to output.
+                                    # prefix — safe to yield.
                                     yield _buffer
                                     _buffer = ""
                             else:
-                                # Currently inside thinking block — look for any
-                                # of the known closing markers.
-                                if "</think>" in _buffer:
-                                    _, _, after_think = _buffer.partition("</think>")
+                                # Currently inside a thinking block — look for any
+                                # of the known closing markers (case-insensitive).
+                                close_match = _THINK_CLOSE_RE.search(_buffer)
+                                if close_match:
                                     _thinking_active = False
-                                    _buffer = after_think
+                                    _buffer = _buffer[close_match.end() :]
                                 elif "_rhs" in _buffer:
                                     _, _, after_think = _buffer.partition("_rhs")
                                     _thinking_active = False
                                     _buffer = after_think
-                                # Else: still inside thinking; keep the buffer
-                                # until a close arrives. Drop accumulated
+                                # Else: still inside thinking; drop accumulated
                                 # thinking content periodically so the buffer
                                 # cap protects against runaway thinking blocks.
                                 if (
                                     _thinking_active
                                     and len(_buffer) > _MAX_THINKING_BUFFER // 2
                                 ):
-                                    # Trim — the close-marker check works on the
-                                    # tail just as well, and we never emit any
-                                    # of this content to users.
                                     _buffer = _buffer[-256:]
                             # Yield any buffered content when not in thinking
-                            # mode and the buffer is not a partial open marker.
+                            # mode and not holding a partial open marker.
                             if (
                                 not _thinking_active
                                 and _buffer
                                 and not "Thinking Process:".startswith(_buffer)
-                                and not "<think".startswith(_buffer)
+                                and not _THINK_PARTIAL_OPEN_RE.match(_buffer)
                             ):
                                 yield _buffer
                                 _buffer = ""

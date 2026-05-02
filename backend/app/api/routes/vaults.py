@@ -35,6 +35,7 @@ class VaultCreateRequest(BaseModel):
 
     name: str = Field(..., min_length=1, max_length=255, description="Vault name")
     description: str = Field("", max_length=1000, description="Vault description")
+    org_id: Optional[int] = Field(None, description="Organization to assign this vault to")
 
     @field_validator("name", mode="before")
     @classmethod
@@ -199,15 +200,61 @@ async def create_vault(
     """
     Create a new vault.
 
-    Creates a new vault with the given name and description.
+    Creates a new vault with the given name, description, and organization.
+    org_id is required unless the caller belongs to exactly one organization
+    (in which case it is inferred). Superadmins may pass any org_id.
     Returns 409 if a vault with the same name already exists.
     """
+    # Resolve org_id: explicit > inferred > error
+    target_org_id = request.org_id
+    if target_org_id is None:
+        # Try to infer from caller's org memberships
+        cursor = await asyncio.to_thread(
+            conn.execute,
+            "SELECT org_id FROM org_members WHERE user_id = ? ORDER BY org_id LIMIT 2",
+            (user["id"],),
+        )
+        rows = await asyncio.to_thread(cursor.fetchall)
+        if len(rows) == 1:
+            target_org_id = rows[0][0]
+        elif len(rows) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail="User belongs to multiple organizations. Please provide org_id explicitly.",
+            )
+        # If user has no org, target_org_id remains None (global vault)
+
+    # If org_id provided or inferred, validate it exists and caller is a member
+    if target_org_id is not None:
+        cursor = await asyncio.to_thread(
+            conn.execute,
+            "SELECT id FROM organizations WHERE id = ?",
+            (target_org_id,),
+        )
+        if not await asyncio.to_thread(cursor.fetchone):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Organization {target_org_id} not found",
+            )
+        # Non-superadmins may only create vaults in organizations they belong to
+        if user.get("role") != "superadmin":
+            cursor = await asyncio.to_thread(
+                conn.execute,
+                "SELECT 1 FROM org_members WHERE org_id = ? AND user_id = ?",
+                (target_org_id, user["id"]),
+            )
+            if not await asyncio.to_thread(cursor.fetchone):
+                raise HTTPException(
+                    status_code=403,
+                    detail="You are not a member of that organization",
+                )
+
     # Insert vault row — IntegrityError here means duplicate name
     try:
         cursor = await asyncio.to_thread(
             conn.execute,
-            "INSERT INTO vaults (name, description) VALUES (?, ?)",
-            (request.name, request.description),
+            "INSERT INTO vaults (name, description, org_id) VALUES (?, ?, ?)",
+            (request.name, request.description, target_org_id),
         )
     except sqlite3.IntegrityError:
         raise HTTPException(
@@ -427,10 +474,37 @@ async def delete_vault(
         raise HTTPException(status_code=500, detail=f"Delete failed: {e}")
 
 
-class VaultGroupsUpdateRequest(BaseModel):
-    """Request model for updating vault group access."""
+class GroupAccessItem(BaseModel):
+    """Single group + permission pair for vault group access updates."""
 
-    group_ids: List[int]
+    group_id: int
+    permission: str = "read"
+
+    @field_validator("permission")
+    @classmethod
+    def validate_permission(cls, v: str) -> str:
+        if v not in ("read", "write", "admin"):
+            raise ValueError("permission must be read, write, or admin")
+        return v
+
+
+class VaultGroupsUpdateRequest(BaseModel):
+    """Request model for updating vault group access.
+
+    Preferred: ``vault_access: [{group_id, permission}]``
+    Legacy: ``group_ids: [int]`` (all get 'read' permission)
+    """
+
+    vault_access: Optional[List[GroupAccessItem]] = None
+    group_ids: Optional[List[int]] = None
+
+    def resolved_access(self) -> List[GroupAccessItem]:
+        """Return the canonical list of group+permission pairs."""
+        if self.vault_access is not None:
+            return self.vault_access
+        if self.group_ids:
+            return [GroupAccessItem(group_id=gid, permission="read") for gid in self.group_ids]
+        return []
 
 
 class VaultGroupResponse(BaseModel):
@@ -526,8 +600,10 @@ async def update_vault_groups(
         )
     vault_org_id = vault_row[1]
 
-    # If no group_ids provided, just clear all access and return empty list
-    if not request.group_ids:
+    access_items = request.resolved_access()
+
+    # If no access items provided, just clear all access and return empty list
+    if not access_items:
         await asyncio.to_thread(
             conn.execute,
             "DELETE FROM vault_group_access WHERE vault_id = ?",
@@ -536,20 +612,22 @@ async def update_vault_groups(
         await asyncio.to_thread(conn.commit)
         return VaultGroupsListResponse(groups=[])
 
+    group_ids = [item.group_id for item in access_items]
+
     # Validate all group_ids exist and belong to the same org as the vault
-    placeholders = ",".join("?" * len(request.group_ids))
+    placeholders = ",".join("?" * len(group_ids))
     cursor = await asyncio.to_thread(
         conn.execute,
         f"""
             SELECT id, org_id FROM groups
             WHERE id IN ({placeholders})
         """,
-        tuple(request.group_ids),
+        tuple(group_ids),
     )
     group_rows = await asyncio.to_thread(cursor.fetchall)
 
     found_group_ids = {row[0] for row in group_rows}
-    missing_group_ids = set(request.group_ids) - found_group_ids
+    missing_group_ids = set(group_ids) - found_group_ids
     if missing_group_ids:
         raise HTTPException(
             status_code=400, detail=f"Group(s) not found: {sorted(missing_group_ids)}"
@@ -578,14 +656,14 @@ async def update_vault_groups(
         )
 
         granted_by = user.get("id")
-        for group_id in request.group_ids:
+        for item in access_items:
             await asyncio.to_thread(
                 conn.execute,
                 """
-                    INSERT INTO vault_group_access (vault_id, group_id, granted_by)
-                    VALUES (?, ?, ?)
+                    INSERT INTO vault_group_access (vault_id, group_id, permission, granted_by)
+                    VALUES (?, ?, ?, ?)
                 """,
-                (vault_id, group_id, granted_by),
+                (vault_id, item.group_id, item.permission, granted_by),
             )
         await asyncio.to_thread(conn.commit)
     except Exception:

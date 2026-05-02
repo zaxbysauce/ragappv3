@@ -559,6 +559,23 @@ export interface AddMessageRequest {
   memories?: UsedMemory[];
 }
 
+export interface Organization {
+  id: number;
+  name: string;
+  description: string;
+  slug?: string;
+  member_count?: number;
+  vault_count?: number;
+  group_count?: number;
+  created_at?: string;
+}
+
+export async function listOrganizations(): Promise<Organization[]> {
+  const response = await apiClient.get<{ organizations: Organization[] } | Organization[]>("/organizations/");
+  const data = response.data;
+  return Array.isArray(data) ? data : (data.organizations ?? []);
+}
+
 export interface Vault {
   id: number;
   name: string;
@@ -578,6 +595,7 @@ export interface VaultListResponse {
 export interface VaultCreateRequest {
   name: string;
   description?: string;
+  org_id?: number | null;
 }
 
 export interface VaultUpdateRequest {
@@ -852,7 +870,10 @@ export async function parseSSEStream(
             callbacks.onCitationValidation?.(parsed.citation_validation as CitationValidationDebug);
           }
         } catch {
-          callbacks.onMessage(data);
+          // JSON.parse failed — the server sent a malformed SSE chunk.
+          // Do NOT forward raw data to onMessage: it could contain thinking
+          // content (reasoning_content, <think>, _lhs) that must never be
+          // shown to the user.  Drop the chunk and continue streaming.
         }
       }
     }
@@ -1102,6 +1123,7 @@ export interface Group {
 export interface GroupCreateRequest {
   name: string;
   description: string | null;
+  org_id?: number | null;
 }
 
 export interface GroupUpdateRequest {
@@ -1130,8 +1152,8 @@ export async function listGroups(
   return response.data;
 }
 
-export async function createGroup(name: string, description: string | null): Promise<Group> {
-  const request: GroupCreateRequest = { name, description };
+export async function createGroup(name: string, description: string | null, orgId?: number | null): Promise<Group> {
+  const request: GroupCreateRequest = { name, description, org_id: orgId };
   const response = await apiClient.post<Group>("/groups", request);
   return response.data;
 }
@@ -1165,13 +1187,21 @@ export async function updateGroupMembers(groupId: number, userIds: number[]): Pr
   await apiClient.put(`/groups/${groupId}/members`, { user_ids: userIds });
 }
 
+export async function getEligibleGroupMembers(groupId: number): Promise<GroupMember[]> {
+  const response = await apiClient.get<GroupMember[]>(`/groups/${groupId}/eligible-members`);
+  return response.data;
+}
+
 export async function getGroupVaults(groupId: number): Promise<GroupVault[]> {
   const response = await apiClient.get<GroupVault[]>(`/groups/${groupId}/vaults`);
   return response.data;
 }
 
-export async function updateGroupVaults(groupId: number, vaultIds: number[]): Promise<void> {
-  await apiClient.put(`/groups/${groupId}/vaults`, { vault_ids: vaultIds });
+export async function updateGroupVaults(
+  groupId: number,
+  vaultAccess: VaultAccessItem[]
+): Promise<void> {
+  await apiClient.put(`/groups/${groupId}/vaults`, { vault_access: vaultAccess });
 }
 
 // ============================================================================
@@ -1201,11 +1231,6 @@ export async function listAllUsers(): Promise<UserListItem[]> {
   return response.data.users;
 }
 
-export async function getGroupVaultIds(groupId: number): Promise<number[]> {
-  const response = await apiClient.get<{ id: number; name: string }[]>(`/groups/${groupId}/vaults`);
-  return response.data.map((vault) => vault.id);
-}
-
 export async function getUserGroups(userId: number): Promise<{ groups: Group[] }> {
   const response = await apiClient.get<{ groups: Group[] }>(`/users/${userId}/groups`);
   return response.data;
@@ -1222,6 +1247,13 @@ export async function updateUserGroups(userId: number, groupIds: number[]): Prom
 export interface GroupVault {
   id: number;
   name: string;
+  org_id: number | null;
+  permission: string;
+}
+
+export interface VaultAccessItem {
+  vault_id: number;
+  permission: string;
 }
 
 export interface VaultGroupAccess {
@@ -1238,7 +1270,9 @@ export async function updateVaultGroups(
   vaultId: number,
   groupAccess: { groupId: number; permission: string }[]
 ): Promise<void> {
-  await apiClient.put(`/vaults/${vaultId}/groups`, { group_ids: groupAccess.map(ga => ga.groupId) });
+  await apiClient.put(`/vaults/${vaultId}/groups`, {
+    vault_access: groupAccess.map(ga => ({ group_id: ga.groupId, permission: ga.permission })),
+  });
 }
 
 // ============================================================================

@@ -1,5 +1,6 @@
 import { MessageSquare, FileText, Brain, Settings, Database, Users, UserCog, Building2, UserCircle, Sun, Moon } from "lucide-react";
 import { useThemeStore } from "@/stores/useThemeStore";
+import { useAuthStore } from "@/stores/useAuthStore";
 import { cn } from "@/lib/utils";
 import { NavLink, useLocation } from "react-router-dom";
 import type { NavItemId, NavigationProps } from "./navigationTypes";
@@ -12,7 +13,7 @@ interface NavConfigItem {
   label: string;
   icon: React.ComponentType<{ className?: string }>;
   to: string;
-  isSpecial?: boolean;
+  adminOnly?: boolean;
 }
 
 const navItems: NavConfigItem[] = [
@@ -21,9 +22,9 @@ const navItems: NavConfigItem[] = [
   { id: "memory", label: "Memory", icon: Brain, to: "/memory" },
   { id: "vaults", label: "Vaults", icon: Database, to: "/vaults" },
   { id: "settings", label: "Settings", icon: Settings, to: "/settings" },
-  { id: "groups", label: "Groups", icon: Users, to: "/admin/groups" },
-  { id: "users", label: "Users", icon: UserCog, to: "/admin/users" },
-  { id: "organizations", label: "Orgs", icon: Building2, to: "/admin/organizations" },
+  { id: "groups", label: "Groups", icon: Users, to: "/admin/groups", adminOnly: true },
+  { id: "users", label: "Users", icon: UserCog, to: "/admin/users", adminOnly: true },
+  { id: "organizations", label: "Orgs", icon: Building2, to: "/admin/organizations", adminOnly: true },
   { id: "profile", label: "Profile", icon: UserCircle, to: "/profile" },
 ];
 
@@ -52,6 +53,8 @@ export function NavigationRail({ healthStatus }: NavigationRailProps) {
   const location = useLocation();
   const pathname = location.pathname;
   const { theme, setTheme } = useThemeStore();
+  const userRole = useAuthStore((state) => state.user?.role);
+  const isAdmin = userRole === "admin" || userRole === "superadmin";
 
   // Determine active item based on current pathname
   const getActiveItem = (): NavItemId | null => {
@@ -81,7 +84,7 @@ export function NavigationRail({ healthStatus }: NavigationRailProps) {
 
       {/* Navigation Items */}
       <div className="flex flex-col gap-1 w-full px-2">
-        {navItems.map((item) => {
+        {navItems.filter((item) => !item.adminOnly || isAdmin).map((item) => {
           const Icon = item.icon;
           const isActive = activeItem === item.id;
 

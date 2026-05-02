@@ -16,7 +16,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { type Group } from "@/lib/api";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { type Group, listOrganizations, type Organization } from "@/lib/api";
 
 // ============================================================================
 // Types
@@ -25,6 +32,7 @@ import { type Group } from "@/lib/api";
 export interface GroupFormData {
   name: string;
   description: string;
+  org_id?: number | null;
 }
 
 interface GroupFormDialogProps {
@@ -81,9 +89,11 @@ export function GroupFormDialog({
   const [formData, setFormData] = useState<GroupFormData>({
     name: "",
     description: "",
+    org_id: null,
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [rootError, setRootError] = useState<string | null>(null);
+  const [orgs, setOrgs] = useState<Organization[]>([]);
 
   // Reset form when dialog opens/closes or group changes
   useEffect(() => {
@@ -92,12 +102,14 @@ export function GroupFormDialog({
         setFormData({
           name: group.name,
           description: group.description || "",
+          org_id: group.org_id,
         });
       } else {
-        setFormData({
-          name: "",
-          description: "",
-        });
+        setFormData({ name: "", description: "", org_id: null });
+        listOrganizations().then((data) => {
+          setOrgs(data);
+          if (data.length === 1) setFormData((prev) => ({ ...prev, org_id: data[0].id }));
+        }).catch(() => {});
       }
       setErrors({});
       setRootError(null);
@@ -207,6 +219,35 @@ export function GroupFormDialog({
                 </p>
               )}
             </div>
+
+            {/* Organization Field — create mode only */}
+            {!isEdit && orgs.length > 0 && (
+              <div className="grid gap-2">
+                <Label htmlFor="group-org">
+                  Organization {orgs.length > 1 && <span className="text-destructive">*</span>}
+                </Label>
+                {orgs.length === 1 ? (
+                  <Input id="group-org" value={orgs[0].name} disabled aria-readonly="true" />
+                ) : (
+                  <Select
+                    value={formData.org_id !== null && formData.org_id !== undefined ? String(formData.org_id) : ""}
+                    onValueChange={(v) => setFormData((prev) => ({ ...prev, org_id: v ? Number(v) : null }))}
+                    disabled={isLoading}
+                  >
+                    <SelectTrigger id="group-org" aria-label="Select organization">
+                      <SelectValue placeholder="Select organization…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {orgs.map((org) => (
+                        <SelectItem key={org.id} value={String(org.id)}>
+                          {org.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+            )}
           </div>
 
           <DialogFooter className="flex-col gap-2 sm:flex-row">

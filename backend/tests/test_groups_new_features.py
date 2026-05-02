@@ -227,17 +227,17 @@ def _create_group(org_id: int, name: str, description: str = "Test group"):
 
 def admin1_token():
     """Token for admin1 - org_id=1"""
-    return create_access_token(2, "admin1", "admin", org_id=1)
+    return create_access_token(2, "admin1", "admin")
 
 
 def admin2_token():
     """Token for admin2 - org_id=2"""
-    return create_access_token(3, "admin2", "admin", org_id=2)
+    return create_access_token(3, "admin2", "admin")
 
 
 def superadmin_token():
     """Token for superadmin - org_id=1"""
-    return create_access_token(1, "superadmin", "superadmin", org_id=1)
+    return create_access_token(1, "superadmin", "superadmin")
 
 
 def auth_headers(token_fn):
@@ -521,40 +521,32 @@ class TestAutoOrgId:
         assert data["org_id"] == 2  # admin2's org_id
         assert data["organization_name"] == "Other Org"
 
-    def test_create_group_does_not_accept_org_id(self, client):
-        """create_group ignores org_id in request body (uses token context)."""
-        # Even if request includes org_id, should use token's org_id
+    def test_create_group_explicit_org_id_validated(self, client):
+        """Explicit org_id in request body is used but validated to exist."""
         response = client.post(
             "/api/groups",
             json={
                 "name": "Test Group",
                 "description": "Test",
-                "org_id": 999,  # This should be ignored
+                "org_id": 999,  # Non-existent org
             },
             headers=auth_headers(admin1_token),
         )
-        assert response.status_code == 200
-        data = response.json()
-        # Should be org_id from token (1), not from request (999)
-        assert data["org_id"] == 1
+        # Org 999 does not exist; expect 404
+        assert response.status_code == 404
 
-    def test_create_group_user_without_org_id_fails(self, client):
-        """create_group fails if user has no org_id in token."""
+    def test_create_group_non_admin_fails(self, client):
+        """create_group requires admin role; members get 403."""
         from app.services.auth_service import create_access_token
 
-        # Create a token without org_id
-        token_no_org = create_access_token(4, "member1", "member", org_id=None)
+        token_member = create_access_token(4, "member1", "member")
 
         response = client.post(
             "/api/groups",
-            json={
-                "name": "Should Fail",
-                "description": "No org_id in token",
-            },
-            headers={"Authorization": f"Bearer {token_no_org}"},
+            json={"name": "Should Fail", "description": "No admin"},
+            headers={"Authorization": f"Bearer {token_member}"},
         )
-        assert response.status_code == 400
-        assert "not associated with an organization" in response.json()["detail"]
+        assert response.status_code == 403
 
     def test_create_group_superadmin_uses_own_org(self, client):
         """Superadmin also gets org_id from their token context."""
@@ -570,3 +562,70 @@ class TestAutoOrgId:
         assert response.status_code == 200
         data = response.json()
         assert data["org_id"] == 1
+
+
+class TestEligibleMembers:
+    """Tests for GET /groups/{group_id}/eligible-members endpoint."""
+
+    def _add_org_member(self, org_id: int, user_id: int, role: str = "member"):
+        conn = _get_db_conn()
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute(
+            "INSERT OR IGNORE INTO org_members (org_id, user_id, role) VALUES (?, ?, ?)",
+            (org_id, user_id, role),
+        )
+        conn.commit()
+        conn.close()
+
+    def test_returns_org_members_only(self, client):
+        """Eligible members includes only users in the group's org."""
+        # org 1: user 2 (admin1), user 4 (member1) are members
+        self._add_org_member(1, 2, "member")
+        self._add_org_member(1, 4, "member")
+        group_id = _create_group(1, "Test Group Eligible")
+
+        response = client.get(
+            f"/api/groups/{group_id}/eligible-members",
+            headers=auth_headers(admin1_token),
+        )
+        assert response.status_code == 200
+        data = response.json()
+        user_ids = [u["id"] for u in data]
+        assert 2 in user_ids
+        assert 4 in user_ids
+        # user 3 is in org 2, not org 1
+        assert 3 not in user_ids
+
+    def test_nonexistent_group_returns_404(self, client):
+        """Non-existent group returns 404."""
+        response = client.get(
+            "/api/groups/9999/eligible-members",
+            headers=auth_headers(admin1_token),
+        )
+        assert response.status_code == 404
+
+    def test_member_role_cannot_access(self, client):
+        """Member role cannot access eligible members (403)."""
+        group_id = _create_group(1, "Auth Test Group")
+        token = create_access_token(4, "user4", "member")
+
+        response = client.get(
+            f"/api/groups/{group_id}/eligible-members",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 403
+
+    def test_response_shape(self, client):
+        """Response items have id, username, full_name fields."""
+        self._add_org_member(1, 2, "member")
+        group_id = _create_group(1, "Shape Test Group")
+
+        response = client.get(
+            f"/api/groups/{group_id}/eligible-members",
+            headers=auth_headers(admin1_token),
+        )
+        assert response.status_code == 200
+        for item in response.json():
+            assert "id" in item
+            assert "username" in item
+            assert "full_name" in item

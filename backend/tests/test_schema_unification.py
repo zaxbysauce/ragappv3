@@ -145,24 +145,21 @@ class TestRunMigrations:
                 f"Orphaned migration should not be called: {orphaned}"
             )
 
-    def test_run_migrations_calls_exactly_seven_operations(self):
-        """Verify run_migrations contains exactly 7 migration calls (init + 6 migrations)."""
+    def test_run_migrations_calls_expected_operations(self):
+        """Verify run_migrations contains all required migration calls."""
         import inspect
         import re
 
         source = inspect.getsource(run_migrations)
 
-        # Extract just the function body (after docstring)
-        # Find lines that look like migration calls
         migration_pattern = r"(\w+)\(sqlite_path\)"
         matches = re.findall(migration_pattern, source)
 
-        # Filter to actual migration calls (functions that migrate_ or init_db)
         migration_calls = [
             m for m in matches if m.startswith("migrate_") or m == "init_db"
         ]
 
-        # Should be exactly 7 calls: init_db + 6 migrations
+        # All original migrations plus newer ones must be present
         expected = [
             "init_db",
             "migrate_add_vaults",
@@ -173,12 +170,9 @@ class TestRunMigrations:
             "migrate_add_org_slug_column",
         ]
 
-        assert len(migration_calls) == 7, (
-            f"Expected 7 migration calls, got {len(migration_calls)}: {migration_calls}"
-        )
         for exp in expected:
             assert exp in migration_calls, (
-                f"Expected migration {exp} not found in calls"
+                f"Expected migration {exp} not found in calls: {migration_calls}"
             )
 
 

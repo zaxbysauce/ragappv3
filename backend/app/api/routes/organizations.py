@@ -611,6 +611,75 @@ async def remove_org_member(
         pool.release_connection(conn)
 
 
+class TransferOwnershipRequest(BaseModel):
+    new_owner_user_id: int = Field(..., gt=0)
+
+
+@router.post("/{org_id}/transfer-ownership")
+async def transfer_ownership(
+    org_id: int,
+    req: TransferOwnershipRequest,
+    user: dict = Depends(require_role("member")),
+):
+    """Transfer organization ownership to another member (current owner or superadmin only)."""
+    pool = get_pool(str(settings.sqlite_path))
+    conn = pool.get_connection()
+    try:
+        cursor = conn.execute("SELECT id FROM organizations WHERE id = ?", (org_id,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Organization not found")
+
+        if user.get("role") != "superadmin":
+            cursor = conn.execute(
+                "SELECT role FROM org_members WHERE org_id = ? AND user_id = ?",
+                (org_id, user["id"]),
+            )
+            row = cursor.fetchone()
+            if not row or row[0] != "owner":
+                raise HTTPException(
+                    status_code=403,
+                    detail="Only the organization owner or a superadmin can transfer ownership",
+                )
+
+        if req.new_owner_user_id == user.get("id"):
+            raise HTTPException(status_code=400, detail="Cannot transfer ownership to yourself")
+
+        cursor = conn.execute(
+            """SELECT u.id FROM users u
+               JOIN org_members om ON u.id = om.user_id
+               WHERE u.id = ? AND om.org_id = ? AND u.is_active = 1""",
+            (req.new_owner_user_id, org_id),
+        )
+        if not cursor.fetchone():
+            raise HTTPException(
+                status_code=400,
+                detail="New owner must be an active member of the organization",
+            )
+
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "UPDATE org_members SET role = 'admin' WHERE org_id = ? AND role = 'owner'",
+                (org_id,),
+            )
+            conn.execute(
+                "UPDATE org_members SET role = 'owner' WHERE org_id = ? AND user_id = ?",
+                (org_id, req.new_owner_user_id),
+            )
+            conn.commit()
+        except sqlite3.Error:
+            conn.rollback()
+            raise HTTPException(status_code=500, detail="Failed to transfer ownership")
+
+        return {
+            "message": "Ownership transferred successfully",
+            "org_id": org_id,
+            "new_owner_user_id": req.new_owner_user_id,
+        }
+    finally:
+        pool.release_connection(conn)
+
+
 @router.delete("/{org_id}")
 async def delete_organization(
     org_id: int,

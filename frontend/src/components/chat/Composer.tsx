@@ -216,14 +216,23 @@ export function Composer({ onSend, onStop, isStreaming, className, inputRef }: C
       toast.error("Please wait for file uploads to complete.");
       return;
     }
-    const indexingNames = attachments
-      .filter((a) => a.status === "indexing" || a.status === "uploaded")
-      .map((a) => a.file.name);
-    if (indexingNames.length > 0) {
+    const indexingAttachments = attachments.filter(
+      (a) => a.status === "indexing" || a.status === "uploaded"
+    );
+    if (indexingAttachments.length > 0) {
+      const indexingIds = new Set(indexingAttachments.map((a) => a.id));
       toast.warning("Some files are still indexing", {
-        description:
-          `${indexingNames.join(", ")} may not be searchable until indexing completes.`,
+        description: `${indexingAttachments.map((a) => a.file.name).join(", ")} may not be searchable yet.`,
+        action: {
+          label: "Send without these files",
+          onClick: () => {
+            setAttachments((prev) => prev.filter((a) => !indexingIds.has(a.id)));
+            persistDraft("");
+            onSend();
+          },
+        },
       });
+      return;
     }
     persistDraft("");
     onSend();

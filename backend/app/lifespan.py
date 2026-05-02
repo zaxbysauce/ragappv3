@@ -422,6 +422,19 @@ async def lifespan(app: FastAPI):
     )
     logger.info("RAGEngine singleton initialized")
 
+    # Start memory embedding backfill as a non-blocking background task.
+    # Memories created before the embedding column existed (or with a stale model)
+    # will be embedded so hybrid/semantic retrieval can use them.
+    async def _run_memory_backfill() -> None:
+        try:
+            summary = await app.state.memory_store.backfill_missing_embeddings()
+            if summary["total"] > 0:
+                logger.info("Memory embedding backfill summary: %s", summary)
+        except Exception as exc:
+            logger.warning("Memory embedding backfill startup task failed: %s", exc)
+
+    asyncio.create_task(_run_memory_backfill())
+
     # Start LLM keep-alive task to prevent LM Studio from unloading model
     keepalive_task = None
     try:
