@@ -3,9 +3,13 @@ import type { Vault } from "@/lib/api";
 import { listVaults, createVault, updateVault, deleteVault } from "@/lib/api";
 import type { VaultCreateRequest, VaultUpdateRequest } from "@/lib/api";
 
-const storedVaultId = localStorage.getItem("kv_active_vault_id");
-const parsed = storedVaultId ? parseInt(storedVaultId, 10) : NaN;
-const initialVaultId = Number.isNaN(parsed) ? null : parsed;
+// Defer localStorage access to avoid errors in test environments where setup hasn't run yet
+const getInitialVaultId = () => {
+  if (typeof window === 'undefined') return null;
+  const storedVaultId = localStorage.getItem("kv_active_vault_id");
+  const parsed = storedVaultId ? parseInt(storedVaultId, 10) : NaN;
+  return Number.isNaN(parsed) ? null : parsed;
+};
 
 export interface VaultState {
   // State
@@ -25,7 +29,7 @@ export interface VaultState {
 export const useVaultStore = create<VaultState>((set, get) => ({
   // Initial state
   vaults: [],
-  activeVaultId: initialVaultId,
+  activeVaultId: getInitialVaultId(),
   loading: false,
   error: null,
 

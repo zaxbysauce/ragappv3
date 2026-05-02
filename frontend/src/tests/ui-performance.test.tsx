@@ -24,7 +24,9 @@ class MockResizeObserver {
 global.ResizeObserver = MockResizeObserver as unknown as typeof ResizeObserver;
 
 // Mock scrollTo — JSDOM does not implement it
-Element.prototype.scrollTo = vi.fn();
+if (typeof Element !== 'undefined' && !Element.prototype.scrollTo) {
+  Element.prototype.scrollTo = vi.fn();
+}
 
 // =============================================================================
 // MOCK @tanstack/react-virtual - Track calls for verification
@@ -62,7 +64,7 @@ vi.mock("@tanstack/react-virtual", () => ({
 // MOCK STORES
 // =============================================================================
 
-const mockChatState = vi.hoisted(() => ({
+const mockChatState = {
   messageIds: [] as string[],
   messagesById: {} as Record<string, { id: string; role: string; content: string }>,
   input: "",
@@ -83,7 +85,7 @@ const mockChatState = vi.hoisted(() => ({
   stopStreaming: vi.fn(),
   loadChat: vi.fn(),
   newChat: vi.fn(),
-}));
+};
 
 vi.mock("@/stores/useChatStore", () => ({
   useChatStore: vi.fn((selector?: (s: typeof mockChatState) => unknown) =>
@@ -198,7 +200,9 @@ describe("SC-001: TranscriptPane Document-Flow Rendering", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     virtualizerCalls = [];
-    (Element.prototype.scrollTo as ReturnType<typeof vi.fn>).mockReset?.();
+    if (typeof Element !== 'undefined' && (Element.prototype.scrollTo as ReturnType<typeof vi.fn>)?.mockReset) {
+      (Element.prototype.scrollTo as ReturnType<typeof vi.fn>).mockReset?.();
+    }
   });
 
   it("renders all 200 messages in normal document flow", async () => {
