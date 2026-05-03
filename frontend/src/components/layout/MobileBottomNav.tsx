@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { MessageSquare, FileText, Brain, MoreHorizontal, Database, Settings, Users, X, User, Building2, UserCog } from "lucide-react";
+import { MessageSquare, FileText, Brain, MoreHorizontal, Database, Settings, Users, X, User, Building2, UserCog, BookOpen } from "lucide-react";
 import {
   Sheet,
   SheetContent,
@@ -26,6 +26,7 @@ const primaryNavItems = [
 
 // Secondary items shown in "More" drawer
 const moreNavItems: { id: NavItemId; label: string; icon: React.ComponentType<{ className?: string }>; adminOnly?: boolean }[] = [
+  { id: "wiki", label: "Wiki", icon: BookOpen },
   { id: "vaults", label: "Vaults", icon: Database },
   { id: "settings", label: "Settings", icon: Settings },
   { id: "groups", label: "Groups", icon: Users, adminOnly: true },

@@ -289,6 +289,186 @@ CREATE INDEX IF NOT EXISTS idx_user_sessions_expires ON user_sessions(expires_at
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_user_id ON chat_sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_memories_vault_id ON memories(vault_id);
 CREATE INDEX IF NOT EXISTS idx_memories_created_at ON memories(created_at);
+
+-- ============================================================
+-- Wiki / Knowledge Compiler tables
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS wiki_pages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    vault_id INTEGER NOT NULL,
+    slug TEXT NOT NULL,
+    title TEXT NOT NULL,
+    page_type TEXT NOT NULL CHECK (page_type IN (
+        'entity','procedure','system','acronym','qa',
+        'contradiction','open_question','overview','manual')),
+    markdown TEXT NOT NULL DEFAULT '',
+    summary TEXT DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN (
+        'draft','verified','stale','needs_review','archived')),
+    confidence REAL DEFAULT 0.0,
+    created_by INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_compiled_at TIMESTAMP,
+    UNIQUE(vault_id, slug)
+);
+
+CREATE TABLE IF NOT EXISTS wiki_entities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    vault_id INTEGER NOT NULL,
+    canonical_name TEXT NOT NULL,
+    entity_type TEXT NOT NULL DEFAULT 'unknown',
+    aliases_json TEXT DEFAULT '[]',
+    description TEXT DEFAULT '',
+    page_id INTEGER REFERENCES wiki_pages(id) ON DELETE SET NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(vault_id, canonical_name)
+);
+
+CREATE TABLE IF NOT EXISTS wiki_claims (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    vault_id INTEGER NOT NULL,
+    page_id INTEGER REFERENCES wiki_pages(id) ON DELETE SET NULL,
+    claim_text TEXT NOT NULL,
+    claim_type TEXT NOT NULL DEFAULT 'fact',
+    subject TEXT,
+    predicate TEXT,
+    object TEXT,
+    source_type TEXT NOT NULL CHECK (source_type IN (
+        'document','memory','chat_synthesis','manual','mixed')),
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN (
+        'active','contradicted','superseded','unverified','archived')),
+    confidence REAL DEFAULT 0.0,
+    created_by INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS wiki_claim_sources (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    claim_id INTEGER NOT NULL REFERENCES wiki_claims(id) ON DELETE CASCADE,
+    source_kind TEXT NOT NULL CHECK (source_kind IN (
+        'document','memory','chat_message','manual')),
+    file_id INTEGER,
+    chunk_id TEXT,
+    memory_id INTEGER,
+    chat_message_id INTEGER,
+    source_label TEXT,
+    quote TEXT,
+    char_start INTEGER,
+    char_end INTEGER,
+    page_number INTEGER,
+    confidence REAL DEFAULT 0.0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS wiki_relations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    vault_id INTEGER NOT NULL,
+    subject_entity_id INTEGER REFERENCES wiki_entities(id) ON DELETE CASCADE,
+    predicate TEXT NOT NULL,
+    object_entity_id INTEGER REFERENCES wiki_entities(id) ON DELETE CASCADE,
+    object_text TEXT,
+    claim_id INTEGER REFERENCES wiki_claims(id) ON DELETE CASCADE,
+    confidence REAL DEFAULT 0.0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS wiki_compile_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    vault_id INTEGER NOT NULL,
+    trigger_type TEXT NOT NULL CHECK (trigger_type IN (
+        'ingest','query','memory','manual','settings_reindex')),
+    trigger_id TEXT,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN (
+        'pending','running','completed','failed','cancelled')),
+    error TEXT,
+    result_json TEXT DEFAULT '{}',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS wiki_lint_findings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    vault_id INTEGER NOT NULL,
+    finding_type TEXT NOT NULL CHECK (finding_type IN (
+        'contradiction','stale','orphan','missing_page',
+        'unsupported_claim','duplicate_entity','weak_provenance')),
+    severity TEXT NOT NULL DEFAULT 'medium' CHECK (severity IN (
+        'low','medium','high','critical')),
+    title TEXT NOT NULL,
+    details TEXT DEFAULT '',
+    related_page_ids_json TEXT DEFAULT '[]',
+    related_claim_ids_json TEXT DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN (
+        'open','acknowledged','resolved','dismissed')),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- FTS virtual tables for wiki search
+CREATE VIRTUAL TABLE IF NOT EXISTS wiki_pages_fts USING fts5(
+    title, summary, markdown,
+    content='wiki_pages', content_rowid='id'
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS wiki_claims_fts USING fts5(
+    claim_text, subject, predicate, object,
+    content='wiki_claims', content_rowid='id'
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS wiki_entities_fts USING fts5(
+    canonical_name, aliases_json, description,
+    content='wiki_entities', content_rowid='id'
+);
+
+-- FTS triggers for wiki_pages
+CREATE TRIGGER IF NOT EXISTS wiki_pages_fts_insert AFTER INSERT ON wiki_pages BEGIN
+    INSERT INTO wiki_pages_fts(rowid, title, summary, markdown) VALUES (new.id, new.title, new.summary, new.markdown);
+END;
+CREATE TRIGGER IF NOT EXISTS wiki_pages_fts_delete AFTER DELETE ON wiki_pages BEGIN
+    INSERT INTO wiki_pages_fts(wiki_pages_fts, rowid, title, summary, markdown) VALUES ('delete', old.id, old.title, old.summary, old.markdown);
+END;
+CREATE TRIGGER IF NOT EXISTS wiki_pages_fts_update AFTER UPDATE ON wiki_pages BEGIN
+    INSERT INTO wiki_pages_fts(wiki_pages_fts, rowid, title, summary, markdown) VALUES ('delete', old.id, old.title, old.summary, old.markdown);
+    INSERT INTO wiki_pages_fts(rowid, title, summary, markdown) VALUES (new.id, new.title, new.summary, new.markdown);
+END;
+
+-- FTS triggers for wiki_claims
+CREATE TRIGGER IF NOT EXISTS wiki_claims_fts_insert AFTER INSERT ON wiki_claims BEGIN
+    INSERT INTO wiki_claims_fts(rowid, claim_text, subject, predicate, object) VALUES (new.id, new.claim_text, new.subject, new.predicate, new.object);
+END;
+CREATE TRIGGER IF NOT EXISTS wiki_claims_fts_delete AFTER DELETE ON wiki_claims BEGIN
+    INSERT INTO wiki_claims_fts(wiki_claims_fts, rowid, claim_text, subject, predicate, object) VALUES ('delete', old.id, old.claim_text, old.subject, old.predicate, old.object);
+END;
+CREATE TRIGGER IF NOT EXISTS wiki_claims_fts_update AFTER UPDATE ON wiki_claims BEGIN
+    INSERT INTO wiki_claims_fts(wiki_claims_fts, rowid, claim_text, subject, predicate, object) VALUES ('delete', old.id, old.claim_text, old.subject, old.predicate, old.object);
+    INSERT INTO wiki_claims_fts(rowid, claim_text, subject, predicate, object) VALUES (new.id, new.claim_text, new.subject, new.predicate, new.object);
+END;
+
+-- FTS triggers for wiki_entities
+CREATE TRIGGER IF NOT EXISTS wiki_entities_fts_insert AFTER INSERT ON wiki_entities BEGIN
+    INSERT INTO wiki_entities_fts(rowid, canonical_name, aliases_json, description) VALUES (new.id, new.canonical_name, new.aliases_json, new.description);
+END;
+CREATE TRIGGER IF NOT EXISTS wiki_entities_fts_delete AFTER DELETE ON wiki_entities BEGIN
+    INSERT INTO wiki_entities_fts(wiki_entities_fts, rowid, canonical_name, aliases_json, description) VALUES ('delete', old.id, old.canonical_name, old.aliases_json, old.description);
+END;
+CREATE TRIGGER IF NOT EXISTS wiki_entities_fts_update AFTER UPDATE ON wiki_entities BEGIN
+    INSERT INTO wiki_entities_fts(wiki_entities_fts, rowid, canonical_name, aliases_json, description) VALUES ('delete', old.id, old.canonical_name, old.aliases_json, old.description);
+    INSERT INTO wiki_entities_fts(rowid, canonical_name, aliases_json, description) VALUES (new.id, new.canonical_name, new.aliases_json, new.description);
+END;
+
+-- Indexes for wiki tables
+CREATE INDEX IF NOT EXISTS idx_wiki_pages_vault_type_status ON wiki_pages(vault_id, page_type, status);
+CREATE INDEX IF NOT EXISTS idx_wiki_pages_vault_slug ON wiki_pages(vault_id, slug);
+CREATE INDEX IF NOT EXISTS idx_wiki_entities_vault_name ON wiki_entities(vault_id, canonical_name);
+CREATE INDEX IF NOT EXISTS idx_wiki_claims_vault_page_status ON wiki_claims(vault_id, page_id, status);
+CREATE INDEX IF NOT EXISTS idx_wiki_claim_sources_claim_id ON wiki_claim_sources(claim_id);
+CREATE INDEX IF NOT EXISTS idx_wiki_compile_jobs_vault_status ON wiki_compile_jobs(vault_id, status);
+CREATE INDEX IF NOT EXISTS idx_wiki_lint_findings_vault_status_severity ON wiki_lint_findings(vault_id, status, severity);
 """
 
 
@@ -392,6 +572,7 @@ def run_migrations(sqlite_path: str) -> None:
     migrate_add_memory_embedding_column(sqlite_path)
     migrate_sanitize_existing_chat_messages(sqlite_path)
     migrate_backfill_default_vault_org(sqlite_path)
+    migrate_add_wiki_tables(sqlite_path)
 
     # Add partial unique index for duplicate hash detection (HIGH-10)
     # Wrapped in IntegrityError handler: existing databases may have duplicate
@@ -862,6 +1043,194 @@ def migrate_backfill_default_vault_org(sqlite_path: str) -> None:
             "Backfilled Default vault (id=1) to Default organization (id=%d)",
             default_org_id,
         )
+    finally:
+        conn.close()
+
+
+def migrate_add_wiki_tables(sqlite_path: str) -> None:
+    """
+    Migration: Add wiki / Knowledge Compiler tables for existing databases.
+
+    Idempotent — safe to run multiple times. All tables, FTS virtual tables,
+    triggers, and indexes use IF NOT EXISTS guards.
+
+    Args:
+        sqlite_path: Path to the SQLite database file.
+    """
+    conn = sqlite3.connect(sqlite_path)
+    try:
+        conn.execute("PRAGMA foreign_keys = ON;")
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS wiki_pages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vault_id INTEGER NOT NULL,
+                slug TEXT NOT NULL,
+                title TEXT NOT NULL,
+                page_type TEXT NOT NULL CHECK (page_type IN (
+                    'entity','procedure','system','acronym','qa',
+                    'contradiction','open_question','overview','manual')),
+                markdown TEXT NOT NULL DEFAULT '',
+                summary TEXT DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN (
+                    'draft','verified','stale','needs_review','archived')),
+                confidence REAL DEFAULT 0.0,
+                created_by INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_compiled_at TIMESTAMP,
+                UNIQUE(vault_id, slug)
+            );
+
+            CREATE TABLE IF NOT EXISTS wiki_entities (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vault_id INTEGER NOT NULL,
+                canonical_name TEXT NOT NULL,
+                entity_type TEXT NOT NULL DEFAULT 'unknown',
+                aliases_json TEXT DEFAULT '[]',
+                description TEXT DEFAULT '',
+                page_id INTEGER REFERENCES wiki_pages(id) ON DELETE SET NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(vault_id, canonical_name)
+            );
+
+            CREATE TABLE IF NOT EXISTS wiki_claims (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vault_id INTEGER NOT NULL,
+                page_id INTEGER REFERENCES wiki_pages(id) ON DELETE SET NULL,
+                claim_text TEXT NOT NULL,
+                claim_type TEXT NOT NULL DEFAULT 'fact',
+                subject TEXT,
+                predicate TEXT,
+                object TEXT,
+                source_type TEXT NOT NULL CHECK (source_type IN (
+                    'document','memory','chat_synthesis','manual','mixed')),
+                status TEXT NOT NULL DEFAULT 'active' CHECK (status IN (
+                    'active','contradicted','superseded','unverified','archived')),
+                confidence REAL DEFAULT 0.0,
+                created_by INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS wiki_claim_sources (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                claim_id INTEGER NOT NULL REFERENCES wiki_claims(id) ON DELETE CASCADE,
+                source_kind TEXT NOT NULL CHECK (source_kind IN (
+                    'document','memory','chat_message','manual')),
+                file_id INTEGER,
+                chunk_id TEXT,
+                memory_id INTEGER,
+                chat_message_id INTEGER,
+                source_label TEXT,
+                quote TEXT,
+                char_start INTEGER,
+                char_end INTEGER,
+                page_number INTEGER,
+                confidence REAL DEFAULT 0.0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS wiki_relations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vault_id INTEGER NOT NULL,
+                subject_entity_id INTEGER REFERENCES wiki_entities(id) ON DELETE CASCADE,
+                predicate TEXT NOT NULL,
+                object_entity_id INTEGER REFERENCES wiki_entities(id) ON DELETE CASCADE,
+                object_text TEXT,
+                claim_id INTEGER REFERENCES wiki_claims(id) ON DELETE CASCADE,
+                confidence REAL DEFAULT 0.0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS wiki_compile_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vault_id INTEGER NOT NULL,
+                trigger_type TEXT NOT NULL CHECK (trigger_type IN (
+                    'ingest','query','memory','manual','settings_reindex')),
+                trigger_id TEXT,
+                status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN (
+                    'pending','running','completed','failed','cancelled')),
+                error TEXT,
+                result_json TEXT DEFAULT '{}',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                started_at TIMESTAMP,
+                completed_at TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS wiki_lint_findings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vault_id INTEGER NOT NULL,
+                finding_type TEXT NOT NULL CHECK (finding_type IN (
+                    'contradiction','stale','orphan','missing_page',
+                    'unsupported_claim','duplicate_entity','weak_provenance')),
+                severity TEXT NOT NULL DEFAULT 'medium' CHECK (severity IN (
+                    'low','medium','high','critical')),
+                title TEXT NOT NULL,
+                details TEXT DEFAULT '',
+                related_page_ids_json TEXT DEFAULT '[]',
+                related_claim_ids_json TEXT DEFAULT '[]',
+                status TEXT NOT NULL DEFAULT 'open' CHECK (status IN (
+                    'open','acknowledged','resolved','dismissed')),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE VIRTUAL TABLE IF NOT EXISTS wiki_pages_fts USING fts5(
+                title, summary, markdown,
+                content='wiki_pages', content_rowid='id'
+            );
+            CREATE VIRTUAL TABLE IF NOT EXISTS wiki_claims_fts USING fts5(
+                claim_text, subject, predicate, object,
+                content='wiki_claims', content_rowid='id'
+            );
+            CREATE VIRTUAL TABLE IF NOT EXISTS wiki_entities_fts USING fts5(
+                canonical_name, aliases_json, description,
+                content='wiki_entities', content_rowid='id'
+            );
+
+            CREATE TRIGGER IF NOT EXISTS wiki_pages_fts_insert AFTER INSERT ON wiki_pages BEGIN
+                INSERT INTO wiki_pages_fts(rowid, title, summary, markdown) VALUES (new.id, new.title, new.summary, new.markdown);
+            END;
+            CREATE TRIGGER IF NOT EXISTS wiki_pages_fts_delete AFTER DELETE ON wiki_pages BEGIN
+                INSERT INTO wiki_pages_fts(wiki_pages_fts, rowid, title, summary, markdown) VALUES ('delete', old.id, old.title, old.summary, old.markdown);
+            END;
+            CREATE TRIGGER IF NOT EXISTS wiki_pages_fts_update AFTER UPDATE ON wiki_pages BEGIN
+                INSERT INTO wiki_pages_fts(wiki_pages_fts, rowid, title, summary, markdown) VALUES ('delete', old.id, old.title, old.summary, old.markdown);
+                INSERT INTO wiki_pages_fts(rowid, title, summary, markdown) VALUES (new.id, new.title, new.summary, new.markdown);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS wiki_claims_fts_insert AFTER INSERT ON wiki_claims BEGIN
+                INSERT INTO wiki_claims_fts(rowid, claim_text, subject, predicate, object) VALUES (new.id, new.claim_text, new.subject, new.predicate, new.object);
+            END;
+            CREATE TRIGGER IF NOT EXISTS wiki_claims_fts_delete AFTER DELETE ON wiki_claims BEGIN
+                INSERT INTO wiki_claims_fts(wiki_claims_fts, rowid, claim_text, subject, predicate, object) VALUES ('delete', old.id, old.claim_text, old.subject, old.predicate, old.object);
+            END;
+            CREATE TRIGGER IF NOT EXISTS wiki_claims_fts_update AFTER UPDATE ON wiki_claims BEGIN
+                INSERT INTO wiki_claims_fts(wiki_claims_fts, rowid, claim_text, subject, predicate, object) VALUES ('delete', old.id, old.claim_text, old.subject, old.predicate, old.object);
+                INSERT INTO wiki_claims_fts(rowid, claim_text, subject, predicate, object) VALUES (new.id, new.claim_text, new.subject, new.predicate, new.object);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS wiki_entities_fts_insert AFTER INSERT ON wiki_entities BEGIN
+                INSERT INTO wiki_entities_fts(rowid, canonical_name, aliases_json, description) VALUES (new.id, new.canonical_name, new.aliases_json, new.description);
+            END;
+            CREATE TRIGGER IF NOT EXISTS wiki_entities_fts_delete AFTER DELETE ON wiki_entities BEGIN
+                INSERT INTO wiki_entities_fts(wiki_entities_fts, rowid, canonical_name, aliases_json, description) VALUES ('delete', old.id, old.canonical_name, old.aliases_json, old.description);
+            END;
+            CREATE TRIGGER IF NOT EXISTS wiki_entities_fts_update AFTER UPDATE ON wiki_entities BEGIN
+                INSERT INTO wiki_entities_fts(wiki_entities_fts, rowid, canonical_name, aliases_json, description) VALUES ('delete', old.id, old.canonical_name, old.aliases_json, old.description);
+                INSERT INTO wiki_entities_fts(rowid, canonical_name, aliases_json, description) VALUES (new.id, new.canonical_name, new.aliases_json, new.description);
+            END;
+
+            CREATE INDEX IF NOT EXISTS idx_wiki_pages_vault_type_status ON wiki_pages(vault_id, page_type, status);
+            CREATE INDEX IF NOT EXISTS idx_wiki_pages_vault_slug ON wiki_pages(vault_id, slug);
+            CREATE INDEX IF NOT EXISTS idx_wiki_entities_vault_name ON wiki_entities(vault_id, canonical_name);
+            CREATE INDEX IF NOT EXISTS idx_wiki_claims_vault_page_status ON wiki_claims(vault_id, page_id, status);
+            CREATE INDEX IF NOT EXISTS idx_wiki_claim_sources_claim_id ON wiki_claim_sources(claim_id);
+            CREATE INDEX IF NOT EXISTS idx_wiki_compile_jobs_vault_status ON wiki_compile_jobs(vault_id, status);
+            CREATE INDEX IF NOT EXISTS idx_wiki_lint_findings_vault_status_severity ON wiki_lint_findings(vault_id, status, severity);
+        """)
+        conn.commit()
     finally:
         conn.close()
 

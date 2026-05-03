@@ -22,6 +22,7 @@ const AdminGroupsPage = lazy(() => import("@/pages/AdminGroupsPage"));
 const OrgsPage = lazy(() => import("@/pages/OrgsPage"));
 const ProfilePage = lazy(() => import("@/pages/ProfilePage"));
 const NotFoundPage = lazy(() => import("@/pages/NotFoundPage"));
+const WikiPage = lazy(() => import("@/pages/WikiPage"));
 
 function PageLoader() {
   return (
@@ -42,6 +43,7 @@ function MainAppShell({ children }: { children: React.ReactNode }) {
     if (pathname.startsWith("/chat")) return "chat";
     if (pathname.startsWith("/documents")) return "documents";
     if (pathname.startsWith("/memory")) return "memory";
+    if (pathname.startsWith("/wiki")) return "wiki";
     if (pathname.startsWith("/vaults")) return "vaults";
     if (pathname.startsWith("/settings")) return "settings";
     if (pathname.startsWith("/admin/groups")) return "groups";
@@ -66,6 +68,9 @@ function MainAppShell({ children }: { children: React.ReactNode }) {
         break;
       case "memory":
         navigate("/memory");
+        break;
+      case "wiki":
+        navigate("/wiki");
         break;
       case "vaults":
         navigate("/vaults");
@@ -219,6 +224,16 @@ function App() {
                   <ProtectedRoute>
                     <MainAppShell>
                       <ProfilePage />
+                    </MainAppShell>
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/wiki"
+                element={
+                  <ProtectedRoute>
+                    <MainAppShell>
+                      <WikiPage />
                     </MainAppShell>
                   </ProtectedRoute>
                 }
