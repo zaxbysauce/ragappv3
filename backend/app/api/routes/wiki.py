@@ -522,8 +522,17 @@ async def get_document_wiki_status(
         wiki_status = "failed"
     elif latest_job.status == "cancelled":
         wiki_status = "not_compiled"
+    elif latest_job.status == "completed":
+        try:
+            result = json.loads(latest_job.result_json or "{}")
+        except (json.JSONDecodeError, TypeError):
+            result = {}
+        if result.get("skipped"):
+            wiki_status = "skipped"
+        else:
+            wiki_status = "compiled"
     else:
-        wiki_status = "compiled"
+        wiki_status = "not_compiled"
 
     # Count claims sourced from this file
     claims_rows = db.execute(
@@ -546,6 +555,10 @@ async def get_document_wiki_status(
         ).fetchone()
         if row:
             pages_info.append(dict(row))
+
+    # A completed job with zero extracted claims is "skipped" (no extractable knowledge)
+    if wiki_status == "compiled" and claims_total == 0 and not pages_info:
+        wiki_status = "skipped"
 
     # Count open lint findings related to linked pages
     lint_count = 0

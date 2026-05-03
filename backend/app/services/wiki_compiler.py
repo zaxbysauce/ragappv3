@@ -183,6 +183,79 @@ class WikiCompiler:
         self._db = db
         self._store = store or WikiStore(db)
 
+    def _find_or_create_claim(
+        self,
+        vault_id: int,
+        claim_text: str,
+        source_kind: str,
+        source_identity: dict,
+        **create_kwargs,
+    ) -> tuple:
+        """Return (claim, created). If claim exists, attach missing source; otherwise create.
+
+        source_identity is used to detect duplicate sources; keys vary by kind:
+          document → file_id (int)
+          memory   → memory_id (int)
+          manual   → source_label (str)
+        """
+        existing = self._store.find_claim_by_text(vault_id, claim_text)
+        if existing:
+            # Attach source if not already present
+            already = any(
+                s.source_kind == source_kind and self._source_matches(s, source_kind, source_identity)
+                for s in existing.sources
+            )
+            if not already:
+                self._store.attach_source(
+                    claim_id=existing.id,
+                    source_kind=source_kind,
+                    **source_identity,
+                    **{k: v for k, v in create_kwargs.items() if k in (
+                        "quote", "confidence", "chunk_id", "source_label"
+                    )},
+                )
+                self._db.commit()
+            return existing, False
+        # create_claim doesn't accept source-level fields; strip them before forwarding
+        _claim_fields = {
+            k: v for k, v in create_kwargs.items()
+            if k not in ("quote", "chunk_id")
+        }
+        claim = self._store.create_claim(
+            vault_id=vault_id,
+            claim_text=claim_text,
+            **_claim_fields,
+        )
+        return claim, True
+
+    @staticmethod
+    def _source_matches(source, kind: str, identity: dict) -> bool:
+        if kind == "document":
+            return source.file_id == identity.get("file_id")
+        if kind == "memory":
+            return source.memory_id == identity.get("memory_id")
+        return source.source_label == identity.get("source_label")
+
+    def _find_or_create_relation(
+        self,
+        vault_id: int,
+        predicate: str,
+        subject_entity_id,
+        object_entity_id,
+        **create_kwargs,
+    ):
+        """Return existing relation or create a new one."""
+        existing = self._store.find_relation(vault_id, predicate, subject_entity_id, object_entity_id)
+        if existing:
+            return existing
+        return self._store.create_relation(
+            vault_id=vault_id,
+            predicate=predicate,
+            subject_entity_id=subject_entity_id,
+            object_entity_id=object_entity_id,
+            **create_kwargs,
+        )
+
     def promote_memory(
         self,
         memory_id: int,
@@ -285,17 +358,18 @@ class WikiCompiler:
         for e in entities_created:
             entity_id_map[e.canonical_name] = e.id
 
-        # Create claims and relations from role_claims
+        # Create claims and relations from role_claims (idempotent)
         for role_claim in extraction.role_claims:
             subj_name = role_claim["subject"]
             pred = role_claim["predicate"]
             obj_name = role_claim["object_person"]
             sentence = role_claim["sentence"]
 
-            claim_text = sentence
-            claim = self._store.create_claim(
+            claim, _created = self._find_or_create_claim(
                 vault_id=vault_id,
-                claim_text=claim_text,
+                claim_text=sentence,
+                source_kind="memory",
+                source_identity={"memory_id": memory_id, "source_label": f"memory:{memory_id}"},
                 source_type="memory",
                 page_id=page_id,
                 claim_type="fact",
@@ -305,23 +379,24 @@ class WikiCompiler:
                 status="active",
                 confidence=0.8,
                 created_by=created_by,
+                quote=sentence,
             )
-            # Attach provenance source
-            self._store.attach_source(
-                claim_id=claim.id,
-                source_kind="memory",
-                memory_id=memory_id,
-                source_label=f"memory:{memory_id}",
-                quote=content,
-                confidence=0.8,
-            )
-            self._db.commit()
+            if _created:
+                self._store.attach_source(
+                    claim_id=claim.id,
+                    source_kind="memory",
+                    memory_id=memory_id,
+                    source_label=f"memory:{memory_id}",
+                    quote=content,
+                    confidence=0.8,
+                )
+                self._db.commit()
             claims_created.append(self._store.get_claim(claim.id))
 
-            # Create relation if both entities are known
+            # Create relation if both entities are known (idempotent)
             subj_id = entity_id_map.get(subj_name)
             obj_id = entity_id_map.get(obj_name)
-            relation = self._store.create_relation(
+            relation = self._find_or_create_relation(
                 vault_id=vault_id,
                 predicate=pred,
                 subject_entity_id=subj_id,
@@ -434,9 +509,28 @@ class WikiCompiler:
             else:
                 source_type = "chat_synthesis"
 
-            claim = self._store.create_claim(
+            # For dedup identity, use the first citation's source_kind+id if available
+            if has_specific_citations:
+                first_src = claim_citations[0]
+                first_kind = first_src.get("source_kind", "manual")
+                if first_kind == "document":
+                    dedup_kind = "document"
+                    dedup_identity = {"file_id": first_src.get("file_id"), "source_label": first_src.get("source_label", "")}
+                elif first_kind == "memory":
+                    dedup_kind = "memory"
+                    dedup_identity = {"memory_id": first_src.get("memory_id"), "source_label": first_src.get("source_label", "")}
+                else:
+                    dedup_kind = "manual"
+                    dedup_identity = {"source_label": first_src.get("source_label", first_src.get("wiki_label", ""))}
+            else:
+                dedup_kind = "manual"
+                dedup_identity = {"source_label": "chat_synthesis"}
+
+            claim, _created = self._find_or_create_claim(
                 vault_id=vault_id,
                 claim_text=sentence,
+                source_kind=dedup_kind,
+                source_identity=dedup_identity,
                 source_type=source_type,
                 claim_type="fact",
                 subject=subj_name,
@@ -444,77 +538,78 @@ class WikiCompiler:
                 object=obj_name,
                 status=claim_status,
                 confidence=confidence,
+                quote=sentence,
             )
 
-            if has_specific_citations:
-                # Attach only the sources explicitly cited for this claim
-                for src in claim_citations:
-                    kind = src.get("source_kind", "manual")
-                    if kind == "document":
-                        self._store.attach_source(
-                            claim_id=claim.id,
-                            source_kind="document",
-                            file_id=src.get("file_id"),
-                            chunk_id=src.get("chunk_id"),
-                            source_label=src.get("source_label", ""),
-                            quote=sentence,
-                            confidence=confidence,
-                        )
-                    elif kind == "memory":
-                        self._store.attach_source(
-                            claim_id=claim.id,
-                            source_kind="memory",
-                            memory_id=src.get("memory_id"),
-                            source_label=src.get("source_label", ""),
-                            quote=sentence,
-                            confidence=confidence,
-                        )
-                    else:
-                        self._store.attach_source(
-                            claim_id=claim.id,
-                            source_kind="manual",
-                            source_label=src.get("source_label", src.get("wiki_label", "")),
-                            quote=sentence,
-                            confidence=confidence,
-                        )
-            else:
-                # No per-claim citations: attach answer-level refs for context only
-                for ref in wiki_refs:
-                    if ref.get("wiki_label"):
-                        self._store.attach_source(
-                            claim_id=claim.id,
-                            source_kind="manual",
-                            source_label=ref["wiki_label"],
-                            quote=sentence,
-                            confidence=confidence,
-                        )
-                for src in doc_sources:
-                    if src.get("source_label"):
-                        self._store.attach_source(
-                            claim_id=claim.id,
-                            source_kind="document",
-                            file_id=src.get("file_id"),
-                            chunk_id=src.get("chunk_id"),
-                            source_label=src["source_label"],
-                            quote=sentence,
-                            confidence=confidence,
-                        )
-                for mem in memories:
-                    if isinstance(mem, dict) and mem.get("memory_label"):
-                        self._store.attach_source(
-                            claim_id=claim.id,
-                            source_kind="memory",
-                            memory_id=mem.get("memory_id"),
-                            source_label=mem["memory_label"],
-                            quote=sentence,
-                            confidence=confidence,
-                        )
+            if _created:
+                if has_specific_citations:
+                    for src in claim_citations:
+                        kind = src.get("source_kind", "manual")
+                        if kind == "document":
+                            self._store.attach_source(
+                                claim_id=claim.id,
+                                source_kind="document",
+                                file_id=src.get("file_id"),
+                                chunk_id=src.get("chunk_id"),
+                                source_label=src.get("source_label", ""),
+                                quote=sentence,
+                                confidence=confidence,
+                            )
+                        elif kind == "memory":
+                            self._store.attach_source(
+                                claim_id=claim.id,
+                                source_kind="memory",
+                                memory_id=src.get("memory_id"),
+                                source_label=src.get("source_label", ""),
+                                quote=sentence,
+                                confidence=confidence,
+                            )
+                        else:
+                            self._store.attach_source(
+                                claim_id=claim.id,
+                                source_kind="manual",
+                                source_label=src.get("source_label", src.get("wiki_label", "")),
+                                quote=sentence,
+                                confidence=confidence,
+                            )
+                else:
+                    # No per-claim citations: attach answer-level refs for context only
+                    for ref in wiki_refs:
+                        if ref.get("wiki_label"):
+                            self._store.attach_source(
+                                claim_id=claim.id,
+                                source_kind="manual",
+                                source_label=ref["wiki_label"],
+                                quote=sentence,
+                                confidence=confidence,
+                            )
+                    for src in doc_sources:
+                        if src.get("source_label"):
+                            self._store.attach_source(
+                                claim_id=claim.id,
+                                source_kind="document",
+                                file_id=src.get("file_id"),
+                                chunk_id=src.get("chunk_id"),
+                                source_label=src["source_label"],
+                                quote=sentence,
+                                confidence=confidence,
+                            )
+                    for mem in memories:
+                        if isinstance(mem, dict) and mem.get("memory_label"):
+                            self._store.attach_source(
+                                claim_id=claim.id,
+                                source_kind="memory",
+                                memory_id=mem.get("memory_id"),
+                                source_label=mem["memory_label"],
+                                quote=sentence,
+                                confidence=confidence,
+                            )
 
             self._db.commit()
             claims_created.append(self._store.get_claim(claim.id))
 
-            # Lint finding for every unverified claim
-            if claim_status == "unverified":
+            # Lint finding for every unverified claim (only on first creation)
+            if _created and claim_status == "unverified":
                 self._db.execute(
                     """INSERT INTO wiki_lint_findings
                        (vault_id, finding_type, severity, title, details,
@@ -532,7 +627,7 @@ class WikiCompiler:
 
             subj_id = entity_id_map.get(subj_name)
             obj_id = entity_id_map.get(obj_name)
-            relation = self._store.create_relation(
+            relation = self._find_or_create_relation(
                 vault_id=vault_id,
                 predicate=pred,
                 subject_entity_id=subj_id,
@@ -570,12 +665,13 @@ class WikiCompiler:
             raise ValueError(f"File {file_id} not found in vault {vault_id}")
 
         file_data = dict(file_row)
-        text: str = input_json.get("text") or ""
+        # Prefer text embedded in the job, fall back to durable parsed_text on the files row.
+        text: str = input_json.get("text") or file_data.get("parsed_text") or ""
 
         if not text:
             logger.warning(
-                "compile_ingest_job: no parsed text in input_json for file_id=%d; "
-                "caller must pass pre-parsed text via input_json['text']",
+                "compile_ingest_job: no parsed text for file_id=%d "
+                "(neither input_json['text'] nor files.parsed_text is populated)",
                 file_id,
             )
             return {"page": None, "claims": [], "entities": [], "relations_count": 0, "skipped": True}
@@ -639,9 +735,11 @@ class WikiCompiler:
             obj_name = role_claim["object_person"]
             sentence = role_claim["sentence"]
 
-            claim = self._store.create_claim(
+            claim, _created = self._find_or_create_claim(
                 vault_id=vault_id,
                 claim_text=sentence,
+                source_kind="document",
+                source_identity={"file_id": file_id, "source_label": f"file:{file_id}"},
                 source_type="document",
                 page_id=page_id,
                 claim_type="fact",
@@ -650,21 +748,23 @@ class WikiCompiler:
                 object=obj_name,
                 status="unverified",
                 confidence=0.7,
-            )
-            self._store.attach_source(
-                claim_id=claim.id,
-                source_kind="document",
-                file_id=file_id,
-                source_label=f"file:{file_id}",
                 quote=sentence,
-                confidence=0.7,
             )
-            self._db.commit()
-            claims_created.append({"id": claim.id, "status": "needs_review"})
+            if _created:
+                self._store.attach_source(
+                    claim_id=claim.id,
+                    source_kind="document",
+                    file_id=file_id,
+                    source_label=f"file:{file_id}",
+                    quote=sentence,
+                    confidence=0.7,
+                )
+                self._db.commit()
+            claims_created.append({"id": claim.id, "status": claim.status})
 
             subj_id = entity_id_map.get(subj_name)
             obj_id = entity_id_map.get(obj_name)
-            self._store.create_relation(
+            self._find_or_create_relation(
                 vault_id=vault_id,
                 predicate=pred,
                 subject_entity_id=subj_id,

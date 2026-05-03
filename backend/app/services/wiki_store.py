@@ -562,6 +562,18 @@ class WikiStore:
             claim.sources = self._load_sources(claim.id)
         return claims
 
+    def find_claim_by_text(self, vault_id: int, claim_text: str) -> Optional[WikiClaim]:
+        """Return an existing claim matching vault + claim_text, or None."""
+        row = self._db.execute(
+            "SELECT * FROM wiki_claims WHERE vault_id = ? AND claim_text = ? LIMIT 1",
+            (vault_id, claim_text),
+        ).fetchone()
+        if not row:
+            return None
+        claim = _to_wiki_claim(row)
+        claim.sources = self._load_sources(claim.id)
+        return claim
+
     def update_claim(self, claim_id: int, vault_id: int, **kwargs: Any) -> Optional[WikiClaim]:
         allowed = {"claim_text", "claim_type", "subject", "predicate", "object", "source_type", "status", "confidence", "page_id"}
         updates = {k: v for k, v in kwargs.items() if k in allowed}
@@ -666,6 +678,23 @@ class WikiStore:
         row = self._db.execute("SELECT * FROM wiki_relations WHERE id = ?", (cur.lastrowid,)).fetchone()
         return _to_wiki_relation(row)
 
+    def find_relation(
+        self,
+        vault_id: int,
+        predicate: str,
+        subject_entity_id: Optional[int],
+        object_entity_id: Optional[int],
+    ) -> Optional[WikiRelation]:
+        """Return an existing relation matching vault + key triple, or None."""
+        row = self._db.execute(
+            """SELECT * FROM wiki_relations
+               WHERE vault_id = ? AND predicate = ?
+                 AND subject_entity_id IS ? AND object_entity_id IS ?
+               LIMIT 1""",
+            (vault_id, predicate, subject_entity_id, object_entity_id),
+        ).fetchone()
+        return _to_wiki_relation(row) if row else None
+
     def list_relations(self, vault_id: int, entity_id: Optional[int] = None) -> list[WikiRelation]:
         if entity_id is not None:
             rows = self._db.execute(
@@ -766,12 +795,15 @@ class WikiStore:
         self._db.commit()
 
     def fail_job(self, job_id: int, error: str) -> int:
-        """Mark job failed, increment retry_count. Returns new retry_count."""
+        """Mark job failed, increment retry_count. Returns new retry_count.
+
+        No-op if the job is already cancelled.
+        """
         now = datetime.utcnow().isoformat()
         self._db.execute(
             """UPDATE wiki_compile_jobs
                SET status = 'failed', completed_at = ?, error = ?, retry_count = retry_count + 1
-               WHERE id = ?""",
+               WHERE id = ? AND status != 'cancelled'""",
             (now, error[:2000], job_id),
         )
         self._db.commit()

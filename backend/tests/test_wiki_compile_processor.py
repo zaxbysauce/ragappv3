@@ -518,6 +518,20 @@ class TestRetryCountAndCancellation(unittest.TestCase):
         fetched2 = self.store.get_job(job.id, vault_id=1)
         self.assertEqual(fetched2.retry_count, 1)
 
+    def test_fail_job_does_not_overwrite_cancelled(self):
+        """fail_job must not change a cancelled job's status to failed."""
+        job = self.store.create_job(vault_id=1, trigger_type="manual")
+        self.store.claim_next_pending_job()
+        # Cancel while running
+        self.store.cancel_job(job.id, vault_id=1)
+        # Processor raises and calls fail_job — must be a no-op
+        self.store.fail_job(job.id, "handler raised")
+        row = self.conn.execute(
+            "SELECT status, retry_count FROM wiki_compile_jobs WHERE id = ?", (job.id,)
+        ).fetchone()
+        self.assertEqual(dict(row)["status"], "cancelled")
+        self.assertEqual(dict(row)["retry_count"], 0)
+
 
 # ---------------------------------------------------------------------------
 # Per-claim citation precision
@@ -606,3 +620,127 @@ class TestPerClaimCitationPrecision(unittest.TestCase):
             ).fetchall()
             labels = {dict(s)["source_label"] for s in sources}
             self.assertIn("W1", labels)
+
+
+# ---------------------------------------------------------------------------
+# Idempotent compilation (issues 4 + 6)
+# ---------------------------------------------------------------------------
+
+class TestIdempotentCompilation(unittest.TestCase):
+
+    def setUp(self):
+        self.conn, self.store, self.compiler = _make_env()
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_recompile_ingest_does_not_duplicate_claims(self):
+        inp = {"file_id": 1, "text": AFOMIS_ANSWER}
+        r1 = self.compiler.compile_ingest_job(vault_id=1, input_json=inp)
+        self.compiler.compile_ingest_job(vault_id=1, input_json=inp)
+        count_after_two = self.conn.execute(
+            "SELECT COUNT(*) FROM wiki_claims WHERE vault_id = 1"
+        ).fetchone()[0]
+        unique_after_one = len({c["id"] for c in r1["claims"]})
+        self.assertEqual(count_after_two, unique_after_one, "Recompile must not duplicate claims")
+
+    def test_recompile_ingest_does_not_duplicate_relations(self):
+        inp = {"file_id": 1, "text": AFOMIS_ANSWER}
+        self.compiler.compile_ingest_job(vault_id=1, input_json=inp)
+        self.compiler.compile_ingest_job(vault_id=1, input_json=inp)
+        count = self.conn.execute(
+            "SELECT COUNT(*) FROM wiki_relations WHERE vault_id = 1"
+        ).fetchone()[0]
+        # Same relations as after first compile
+        r1 = self.compiler.compile_ingest_job(vault_id=1, input_json=inp)
+        count_after_third = self.conn.execute(
+            "SELECT COUNT(*) FROM wiki_relations WHERE vault_id = 1"
+        ).fetchone()[0]
+        self.assertEqual(count, count_after_third)
+
+    def test_recompile_query_does_not_duplicate_claims(self):
+        inp = {
+            "assistant_answer": AFOMIS_ANSWER,
+            "wiki_refs": [],
+            "doc_sources": [],
+            "memories": [],
+        }
+        r1 = self.compiler.compile_query_job(vault_id=1, input_json=inp)
+        self.compiler.compile_query_job(vault_id=1, input_json=inp)
+        count_after_two = self.conn.execute(
+            "SELECT COUNT(*) FROM wiki_claims WHERE vault_id = 1"
+        ).fetchone()[0]
+        unique_after_one = len({c["id"] for c in r1["claims"]})
+        self.assertEqual(count_after_two, unique_after_one, "Recompile must not duplicate claims")
+
+    def test_promote_memory_twice_no_duplicate_claims(self):
+        # Insert a real memory row
+        self.conn.execute(
+            "INSERT OR IGNORE INTO memories (id, vault_id, content) VALUES (1, 1, ?)",
+            (AFOMIS_ANSWER,),
+        )
+        self.conn.commit()
+        r1 = self.compiler.promote_memory(memory_id=1, vault_id=1)
+        self.compiler.promote_memory(memory_id=1, vault_id=1)
+        count_after_two = self.conn.execute(
+            "SELECT COUNT(*) FROM wiki_claims WHERE vault_id = 1"
+        ).fetchone()[0]
+        unique_after_one = len({c.id for c in r1["claims"]})
+        self.assertEqual(count_after_two, unique_after_one, "Re-promotion must not duplicate claims")
+
+    def test_promote_memory_twice_no_duplicate_relations(self):
+        self.conn.execute(
+            "INSERT OR IGNORE INTO memories (id, vault_id, content) VALUES (1, 1, ?)",
+            (AFOMIS_ANSWER,),
+        )
+        self.conn.commit()
+        self.compiler.promote_memory(memory_id=1, vault_id=1)
+        self.compiler.promote_memory(memory_id=1, vault_id=1)
+        count = self.conn.execute(
+            "SELECT COUNT(*) FROM wiki_relations WHERE vault_id = 1"
+        ).fetchone()[0]
+        self.compiler.promote_memory(memory_id=1, vault_id=1)
+        count_after_third = self.conn.execute(
+            "SELECT COUNT(*) FROM wiki_relations WHERE vault_id = 1"
+        ).fetchone()[0]
+        self.assertEqual(count, count_after_third)
+
+
+# ---------------------------------------------------------------------------
+# compile_ingest_job text fallback to files.parsed_text (issue 1)
+# ---------------------------------------------------------------------------
+
+class TestIngestJobParsedTextFallback(unittest.TestCase):
+
+    def setUp(self):
+        self.conn, self.store, self.compiler = _make_env()
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_fallback_to_parsed_text_when_no_text_in_input_json(self):
+        # Set parsed_text on the files row (simulates what document_processor now saves)
+        self.conn.execute(
+            "UPDATE files SET parsed_text = ? WHERE id = 1", (AFOMIS_ANSWER,)
+        )
+        self.conn.commit()
+        # input_json has no "text" key — compiler must fall back to files.parsed_text
+        result = self.compiler.compile_ingest_job(
+            vault_id=1, input_json={"file_id": 1}
+        )
+        self.assertFalse(result.get("skipped"))
+        self.assertGreater(len(result["claims"]), 0)
+
+    def test_input_json_text_takes_precedence_over_parsed_text(self):
+        # Set parsed_text to empty/wrong content
+        self.conn.execute(
+            "UPDATE files SET parsed_text = 'no entities here' WHERE id = 1"
+        )
+        self.conn.commit()
+        # input_json has explicit text with entities — that must win
+        result = self.compiler.compile_ingest_job(
+            vault_id=1, input_json={"file_id": 1, "text": AFOMIS_ANSWER}
+        )
+        self.assertFalse(result.get("skipped"))
+        entity_names = {e["name"] for e in result["entities"]}
+        self.assertIn("AFOMIS", entity_names)

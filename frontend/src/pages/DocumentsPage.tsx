@@ -896,7 +896,7 @@ export default function DocumentsPage() {
                             {(() => {
                               const ws = wikiStatusMap[docId];
                               const isCompiling = compilingDocIds.has(docId) || ws?.wiki_status === "compiling";
-                              if (!ws || ws.wiki_status === "not_compiled") {
+                              if (!ws || ws.wiki_status === "not_compiled" || ws.wiki_status === "skipped") {
                                 return (
                                   <button
                                     className="text-xs text-muted-foreground hover:text-foreground underline"
@@ -908,10 +908,15 @@ export default function DocumentsPage() {
                                   </button>
                                 );
                               }
-                              const color = ws.wiki_status === "compiled" ? "text-green-600" : ws.wiki_status === "failed" ? "text-destructive" : "text-blue-500";
+                              const color = ws.wiki_status === "compiled" ? "text-green-600"
+                                : ws.wiki_status === "failed" ? "text-destructive"
+                                : ws.wiki_status === "skipped" ? "text-muted-foreground"
+                                : "text-blue-500";
                               const label = ws.wiki_status === "compiled"
                                 ? `${ws.pages_count}p / ${ws.claims_count}c`
-                                : ws.wiki_status === "compiling" ? "Compiling…" : "Failed";
+                                : ws.wiki_status === "compiling" ? "Compiling…"
+                                : ws.wiki_status === "skipped" ? "No content"
+                                : "Failed";
                               return (
                                 <span
                                   className={`text-xs font-mono cursor-pointer ${color}`}

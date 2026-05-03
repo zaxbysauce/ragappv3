@@ -1429,7 +1429,7 @@ export interface WikiCompileJob {
 
 export interface DocumentWikiStatus {
   file_id: number;
-  wiki_status: "not_compiled" | "compiling" | "compiled" | "failed";
+  wiki_status: "not_compiled" | "compiling" | "compiled" | "failed" | "skipped";
   pages_count: number;
   claims_count: number;
   active_claims: number;

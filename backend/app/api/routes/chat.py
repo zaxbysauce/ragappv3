@@ -127,6 +127,68 @@ class FeedbackRequest(BaseModel):
     rating: Optional[str] = None
 
 
+def _build_per_claim_sources(
+    answer: str,
+    doc_sources: List[Dict[str, Any]],
+    memories_as_dicts: List[Dict[str, Any]],
+    wiki_refs: List[Dict[str, Any]],
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Parse [S#]/[M#]/[W#] labels in each sentence and map them to source objects.
+
+    Returns per_claim_sources: {sentence_text: [source_dicts]} for sentences that
+    have at least one citation. The dict is passed directly to compile_query_job so
+    cited claims can be created as 'active' rather than 'unverified'.
+
+    Sentence splitting uses the same regex as extract_entities_from_text so the
+    keys match exactly what the compiler will look up.
+    """
+    import re as _re
+    _CITE_RE = _re.compile(r"\[(S|M|W)(\d+)\]")
+
+    # Index memories by their citation label number (M1 → memories_as_dicts[?])
+    mem_by_num: Dict[str, Dict[str, Any]] = {}
+    for m in memories_as_dicts:
+        label = m.get("memory_label", "")
+        if label.startswith("M") and label[1:].isdigit():
+            mem_by_num[label[1:]] = m
+
+    wiki_by_num: Dict[str, Dict[str, Any]] = {}
+    for w in wiki_refs:
+        label = w.get("wiki_label", "")
+        if label.startswith("W") and label[1:].isdigit():
+            wiki_by_num[label[1:]] = w
+
+    result: Dict[str, List[Dict[str, Any]]] = {}
+    sentences = _re.split(r"(?<=[.!?])\s+", answer.strip())
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        matches = _CITE_RE.findall(sentence)
+        if not matches:
+            continue
+        sources_for: List[Dict[str, Any]] = []
+        for prefix, num_str in matches:
+            idx = int(num_str) - 1
+            if prefix == "S" and 0 <= idx < len(doc_sources):
+                src = dict(doc_sources[idx])
+                src["source_kind"] = "document"
+                sources_for.append(src)
+            elif prefix == "M" and num_str in mem_by_num:
+                mem = dict(mem_by_num[num_str])
+                mem["source_kind"] = "memory"
+                raw_id = mem.get("memory_id") or mem.get("id")
+                mem["memory_id"] = int(raw_id) if str(raw_id).isdigit() else None
+                sources_for.append(mem)
+            elif prefix == "W" and num_str in wiki_by_num:
+                ref = dict(wiki_by_num[num_str])
+                ref["source_kind"] = "manual"
+                sources_for.append(ref)
+        if sources_for:
+            result[sentence] = sources_for
+    return result
+
+
 async def _enqueue_wiki_compile_job(
     vault_id: int,
     user_query: str,
@@ -144,6 +206,11 @@ async def _enqueue_wiki_compile_job(
         def _mem_to_dict(m: Any) -> dict:
             return m if isinstance(m, dict) else (m.__dict__ if hasattr(m, "__dict__") else {})
 
+        memories_as_dicts = [_mem_to_dict(m) for m in memories]
+        per_claim_sources = _build_per_claim_sources(
+            assistant_answer, doc_sources, memories_as_dicts, wiki_refs
+        )
+
         input_data = {
             "user_query": user_query,
             "assistant_answer": assistant_answer,
@@ -153,10 +220,11 @@ async def _enqueue_wiki_compile_job(
             "assistant_message_id": assistant_message_id,
             "cited_wiki_labels": [r.get("wiki_label") for r in wiki_refs if r.get("wiki_label")],
             "cited_source_labels": [s.get("source_label") for s in doc_sources if s.get("source_label")],
-            "cited_memory_labels": [_mem_to_dict(m).get("memory_label") for m in memories if _mem_to_dict(m).get("memory_label")],
+            "cited_memory_labels": [m.get("memory_label") for m in memories_as_dicts if m.get("memory_label")],
             "wiki_refs": wiki_refs,
             "doc_sources": doc_sources,
-            "memories": [_mem_to_dict(m) for m in memories],
+            "memories": memories_as_dicts,
+            "per_claim_sources": per_claim_sources,
         }
 
         trigger_id = f"session:{session_id}" if session_id else "session:unknown"

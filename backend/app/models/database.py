@@ -575,6 +575,7 @@ def run_migrations(sqlite_path: str) -> None:
     migrate_add_wiki_tables(sqlite_path)
     migrate_add_wiki_refs_and_job_input(sqlite_path)
     migrate_add_wiki_jobs_retry_count(sqlite_path)
+    migrate_add_files_parsed_text(sqlite_path)
 
     # Add partial unique index for duplicate hash detection (HIGH-10)
     # Wrapped in IntegrityError handler: existing databases may have duplicate
@@ -1274,6 +1275,20 @@ def migrate_add_wiki_jobs_retry_count(sqlite_path: str) -> None:
             conn.execute(
                 "ALTER TABLE wiki_compile_jobs ADD COLUMN retry_count INTEGER DEFAULT 0"
             )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def migrate_add_files_parsed_text(sqlite_path: str) -> None:
+    """Migration: add parsed_text to files table for wiki recompile. Idempotent."""
+    conn = sqlite3.connect(sqlite_path)
+    try:
+        existing_cols = [
+            row[1] for row in conn.execute("PRAGMA table_info(files)").fetchall()
+        ]
+        if "parsed_text" not in existing_cols:
+            conn.execute("ALTER TABLE files ADD COLUMN parsed_text TEXT")
         conn.commit()
     finally:
         conn.close()
