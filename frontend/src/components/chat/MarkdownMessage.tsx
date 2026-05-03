@@ -4,7 +4,7 @@ import remarkGfm from "remark-gfm";
 import rehypeSanitize from "rehype-sanitize";
 import { CopyButton } from "@/components/shared/CopyButton";
 import { SourceCitation } from "./SourceCitation";
-import type { Source, UsedMemory } from "@/lib/api";
+import type { Source, UsedMemory, WikiReference } from "@/lib/api";
 
 // =============================================================================
 // Syntax highlighter — lazily loaded so first chat render is not penalized
@@ -116,20 +116,19 @@ const CodeBlock = memo(function CodeBlock({ language, code }: CodeBlockProps) {
 // =============================================================================
 
 interface ParsedSegment {
-  type: "text" | "citation" | "memory_citation";
+  type: "text" | "citation" | "memory_citation" | "wiki_citation";
   content?: string;
   sourceName?: string;
   memoryLabel?: string;
+  wikiLabel?: string;
 }
 
 /**
  * Parse citation markers from assistant text:
- * - ``[S1]``, ``[S2]`` — document citations (new style)
+ * - ``[S1]``, ``[S2]`` — document citations
  * - ``[M1]``, ``[M2]`` — memory citations (durable user context)
+ * - ``[W1]``, ``[W2]`` — wiki knowledge citations
  * - ``[Source: filename]`` — legacy filename citation
- *
- * Memory and document labels share lookup but are kept distinct so memory
- * chips never resolve to a non-existent ``S#`` document.
  *
  * Returns text/citation segments so a single ReactMarkdown pass runs per
  * text segment while citations are rendered as interactive chips.
@@ -137,18 +136,22 @@ interface ParsedSegment {
 export function parseCitationSegments(
   content: string,
   sources: Source[] | undefined,
-  memories?: UsedMemory[]
-): { segments: ParsedSegment[]; citedSources: Source[]; citedMemories: UsedMemory[] } {
+  memories?: UsedMemory[],
+  wikiRefs?: WikiReference[]
+): { segments: ParsedSegment[]; citedSources: Source[]; citedMemories: UsedMemory[]; citedWikis: WikiReference[] } {
   // Capture groups:
   //  1. document number (e.g. "2" from "[S2]")
   //  2. memory number   (e.g. "1" from "[M1]")
-  //  3. legacy filename (e.g. "report.pdf" from "[Source: report.pdf]")
-  const regex = /\[S(\d+)\]|\[M(\d+)\]|\[Source:\s*([^\]]+)\]/g;
+  //  3. wiki number     (e.g. "3" from "[W3]")
+  //  4. legacy filename (e.g. "report.pdf" from "[Source: report.pdf]")
+  const regex = /\[S(\d+)\]|\[M(\d+)\]|\[W(\d+)\]|\[Source:\s*([^\]]+)\]/g;
   const segments: ParsedSegment[] = [];
   const citedSources: Source[] = [];
   const citedMemories: UsedMemory[] = [];
+  const citedWikis: WikiReference[] = [];
   const seenSourceIds = new Set<string>();
   const seenMemoryIds = new Set<string>();
+  const seenWikiLabels = new Set<string>();
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
@@ -184,8 +187,21 @@ export function parseCitationSegments(
         seenMemoryIds.add(memory.id);
       }
     } else if (match[3]) {
+      // Wiki citation [W#]
+      const label = `W${match[3]}`;
+      let wiki = wikiRefs?.find((w) => w.wiki_label === label);
+      if (!wiki) {
+        const idx = parseInt(match[3], 10) - 1;
+        if (wikiRefs && idx >= 0 && idx < wikiRefs.length) wiki = wikiRefs[idx];
+      }
+      segments.push({ type: "wiki_citation", wikiLabel: label });
+      if (wiki && !seenWikiLabels.has(label)) {
+        citedWikis.push(wiki);
+        seenWikiLabels.add(label);
+      }
+    } else if (match[4]) {
       // Legacy [Source: filename]
-      const sourceName = match[3].trim();
+      const sourceName = match[4].trim();
       const source = sources?.find((s) => s.filename === sourceName);
       segments.push({ type: "citation", sourceName });
       if (source && !seenSourceIds.has(source.id)) {
@@ -201,7 +217,7 @@ export function parseCitationSegments(
     segments.push({ type: "text", content: content.slice(lastIndex) });
   }
 
-  return { segments, citedSources, citedMemories };
+  return { segments, citedSources, citedMemories, citedWikis };
 }
 
 // Stable plugin arrays — prevent re-creating on every render
@@ -212,9 +228,11 @@ interface MarkdownMessageProps {
   content: string;
   sources?: Source[];
   memories?: UsedMemory[];
+  wikiRefs?: WikiReference[];
   isStreaming?: boolean;
   onCitationClick?: (source: Source) => void;
   onMemoryCitationClick?: (memory: UsedMemory) => void;
+  onWikiCitationClick?: (wiki: WikiReference) => void;
   citedSources?: Source[];
 }
 
@@ -230,20 +248,53 @@ export const MarkdownMessage = memo(function MarkdownMessage({
   content,
   sources,
   memories,
+  wikiRefs,
   isStreaming,
   onCitationClick,
   onMemoryCitationClick,
+  onWikiCitationClick,
   citedSources: externalCitedSources,
 }: MarkdownMessageProps) {
   const { segments, citedSources: internalCitedSources } = useMemo(
-    () => parseCitationSegments(content, sources, memories),
-    [content, sources, memories]
+    () => parseCitationSegments(content, sources, memories, wikiRefs),
+    [content, sources, memories, wikiRefs]
   );
 
   const citedSources = externalCitedSources ?? internalCitedSources;
 
   const nodes = useMemo(() => {
     return segments.map((segment, i) => {
+      if (segment.type === "wiki_citation") {
+        const label = segment.wikiLabel ?? "";
+        const wiki =
+          wikiRefs?.find((w) => w.wiki_label === label) ??
+          (() => {
+            const m = label.match(/^W(\d+)$/);
+            if (m && wikiRefs) {
+              const idx = parseInt(m[1], 10) - 1;
+              return idx >= 0 && idx < wikiRefs.length ? wikiRefs[idx] : undefined;
+            }
+            return undefined;
+          })();
+        const titleText = wiki
+          ? `Wiki ${label}: ${wiki.title}${wiki.claim_text ? ` — ${wiki.claim_text.slice(0, 100)}` : ""}`
+          : `Wiki ${label}`;
+        return (
+          <button
+            key={`wiki-${i}`}
+            type="button"
+            className="inline-flex items-center align-baseline px-1.5 py-0.5 mx-0.5 rounded-md border border-indigo-500/40 bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 text-[10px] font-semibold tracking-wide hover:bg-indigo-500/20 hover:border-indigo-500/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={() => wiki && onWikiCitationClick?.(wiki)}
+            disabled={!wiki}
+            title={titleText}
+            aria-label={titleText}
+            data-citation-type="wiki"
+            data-citation-label={label}
+          >
+            {label}
+          </button>
+        );
+      }
       if (segment.type === "memory_citation") {
         const label = segment.memoryLabel ?? "";
         const memory =
@@ -332,7 +383,7 @@ export const MarkdownMessage = memo(function MarkdownMessage({
         </ReactMarkdown>
       );
     });
-  }, [segments, citedSources, sources, memories, onCitationClick, onMemoryCitationClick]);
+  }, [segments, citedSources, sources, memories, wikiRefs, onCitationClick, onMemoryCitationClick, onWikiCitationClick]);
 
   return (
     <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:font-semibold prose-headings:font-sans prose-headings:mt-4 prose-headings:mb-1 prose-strong:font-semibold prose-p:leading-relaxed prose-p:mb-3 prose-p:mt-0 prose-li:my-0.5 prose-ul:my-2 prose-ol:my-2 prose-blockquote:border-l-2 prose-blockquote:border-primary/40 prose-blockquote:pl-3 prose-blockquote:italic prose-code:font-mono">

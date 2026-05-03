@@ -43,20 +43,19 @@ class TestCircuitBreakerAdversarial:
     """Attack vectors against circuit breaker state machine."""
 
     def test_negative_fail_max(self):
-        """Attack: Negative failure threshold should be handled."""
-        cb = AsyncCircuitBreaker(fail_max=-5, reset_timeout=60, name="test")
-        # Should not crash but behavior is undefined - verify it doesn't raise
-        assert cb.fail_max == -5
+        """Attack: Negative failure threshold should be rejected."""
+        with pytest.raises(ValueError, match="fail_max must be >= 1"):
+            AsyncCircuitBreaker(fail_max=-5, reset_timeout=60, name="test")
 
     def test_zero_fail_max(self):
-        """Attack: Zero failure threshold - circuit opens immediately?"""
-        cb = AsyncCircuitBreaker(fail_max=0, reset_timeout=60, name="test")
-        assert cb.fail_max == 0
+        """Attack: Zero failure threshold should be rejected."""
+        with pytest.raises(ValueError, match="fail_max must be >= 1"):
+            AsyncCircuitBreaker(fail_max=0, reset_timeout=60, name="test")
 
     def test_negative_reset_timeout(self):
-        """Attack: Negative reset timeout could cause immediate transitions."""
-        cb = AsyncCircuitBreaker(fail_max=5, reset_timeout=-30, name="test")
-        assert cb.reset_timeout == -30
+        """Attack: Negative reset timeout should be rejected."""
+        with pytest.raises(ValueError, match="reset_timeout must be > 0"):
+            AsyncCircuitBreaker(fail_max=5, reset_timeout=-30, name="test")
 
     def test_extreme_reset_timeout(self):
         """Attack: Extremely large reset timeout could cause overflow."""

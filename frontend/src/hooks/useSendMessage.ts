@@ -5,6 +5,7 @@ import {
   addChatMessage,
   type ChatMessage,
   type ChatSessionMessage,
+  type WikiReference,
 } from "@/lib/api";
 import { useChatStore, type Message } from "@/stores/useChatStore";
 import type { UsedMemory } from "@/lib/api";
@@ -100,6 +101,9 @@ export function useSendMessage(
         setInputError(null);
       }
 
+      // Accumulate wiki refs from the SSE stream so they can be persisted with the message.
+      let streamedWikiRefs: WikiReference[] = [];
+
       const abort = chatStream(
         chatMessages,
         {
@@ -111,6 +115,10 @@ export function useSendMessage(
           },
           onMemories: (memories: UsedMemory[]) => {
             updateMessage(assistantMessageId, { memoriesUsed: memories });
+          },
+          onWiki: (wikiRefs: WikiReference[]) => {
+            streamedWikiRefs = wikiRefs;
+            updateMessage(assistantMessageId, { wikiRefs });
           },
           onError: (error) => {
             console.error("Chat stream error:", error);
@@ -154,6 +162,7 @@ export function useSendMessage(
                     content: assistantMsg.content,
                     sources: assistantMsg.sources ?? undefined,
                     memories: assistantMsg.memoriesUsed ?? undefined,
+                    wiki_refs: streamedWikiRefs.length > 0 ? streamedWikiRefs : undefined,
                   })
                 );
               }

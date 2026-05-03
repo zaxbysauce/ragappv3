@@ -383,12 +383,12 @@ describe("AssistantMessage - Citations and Sources", () => {
       createSource({ id: "src-1", filename: "file1.pdf" }),
       createSource({ id: "src-2", filename: "file2.pdf" }),
     ];
-    const message = createMessage({ sources });
+    const message = createMessage({ content: "[S1] [S2] Test message", sources });
     render(<AssistantMessage message={message} />);
 
     expect(screen.getByText("Sources:")).toBeInTheDocument();
-    expect(screen.getByLabelText("Source S1: file1.pdf")).toBeInTheDocument();
-    expect(screen.getByLabelText("Source S2: file2.pdf")).toBeInTheDocument();
+    expect(screen.getAllByLabelText("Source S1: file1.pdf").length).toBeGreaterThan(0);
+    expect(screen.getAllByLabelText("Source S2: file2.pdf").length).toBeGreaterThan(0);
   });
 
   it("should show '+N more' when there are more than 3 sources", () => {
@@ -398,7 +398,7 @@ describe("AssistantMessage - Citations and Sources", () => {
       createSource({ id: "src-3", filename: "file3.pdf" }),
       createSource({ id: "src-4", filename: "file4.pdf" }),
     ];
-    const message = createMessage({ sources });
+    const message = createMessage({ content: "[S1] [S2] [S3] [S4] Test message", sources });
     render(<AssistantMessage message={message} />);
 
     expect(screen.getByText("+1 more")).toBeInTheDocument();
@@ -411,7 +411,7 @@ describe("AssistantMessage - Citations and Sources", () => {
       createSource({ id: "src-3", filename: "file3.pdf" }),
       createSource({ id: "src-4", filename: "file4.pdf" }),
     ];
-    const message = createMessage({ sources });
+    const message = createMessage({ content: "[S1] [S2] [S3] [S4] Test message", sources });
     render(<AssistantMessage message={message} />);
 
     // View all only shows when sources.length > 3
@@ -425,7 +425,7 @@ describe("AssistantMessage - Citations and Sources", () => {
       createSource({ id: "src-3", filename: "file3.pdf" }),
       createSource({ id: "src-4", filename: "file4.pdf" }),
     ];
-    const message = createMessage({ sources });
+    const message = createMessage({ content: "[S1] [S2] [S3] [S4] Test message", sources });
     render(<AssistantMessage message={message} />);
 
     const moreButton = screen.getByLabelText("View all 4 sources");
@@ -440,7 +440,7 @@ describe("AssistantMessage - Citations and Sources", () => {
       createSource({ id: "src-1", filename: "relevant.pdf", score: 0.2, score_type: "distance" }),
       createSource({ id: "src-2", filename: "highly-relevant.pdf", score: 0.1, score_type: "distance" }),
     ];
-    const message = createMessage({ sources });
+    const message = createMessage({ content: "[S1] [S2] Test message", sources });
     render(<AssistantMessage message={message} />);
 
     // Should show "Relevant" and "Highly Relevant" badges
@@ -474,13 +474,13 @@ describe("AssistantMessage - onSourceClick", () => {
   it("should handle source click from evidence strip", () => {
     const onSourceClick = vi.fn();
     const sources = [createSource({ id: "src-1", filename: "evidence.pdf" })];
-    const message = createMessage({ sources });
+    const message = createMessage({ content: "[S1] Test message", sources });
     render(
       <AssistantMessage message={message} onSourceClick={onSourceClick} />
     );
 
-    const sourceChip = screen.getByLabelText("Source S1: evidence.pdf");
-    fireEvent.click(sourceChip);
+    const sourceChips = screen.getAllByLabelText("Source S1: evidence.pdf");
+    fireEvent.click(sourceChips[0]);
 
     expect(onSourceClick).toHaveBeenCalledWith(sources[0]);
     expect(mockSetSelectedEvidenceSource).toHaveBeenCalledWith(sources[0]);
@@ -516,7 +516,7 @@ describe("AssistantMessage - Hover Actions", () => {
       createSource({ id: "src-3", filename: "file3.pdf" }),
       createSource({ id: "src-4", filename: "file4.pdf" }),
     ];
-    const message = createMessage({ sources });
+    const message = createMessage({ content: "[S1] [S2] [S3] [S4] Test message", sources });
     render(
       <AssistantMessage message={message} onViewAllSources={onViewAllSources} />
     );

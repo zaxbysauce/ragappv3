@@ -67,10 +67,12 @@ vi.mock("@/stores/useChatStore", () => {
       .map((m: any) => m.id ?? "");
     return JSON.stringify(ids);
   });
+  const useLastCompletedAssistantWikiRefsMock = vi.fn(() => undefined);
   return {
     useChatStore: chatStoreMock,
     useChatMessages: useChatMessagesMock,
     useLastCompletedAssistantSources: useLastCompletedAssistantSourcesMock,
+    useLastCompletedAssistantWikiRefs: useLastCompletedAssistantWikiRefsMock,
     useLastUserContent: useLastUserContentMock,
     useSourcesForSourceId: useSourcesForSourceIdMock,
     useCompletedAssistantMessageIdsKey: useCompletedAssistantMessageIdsKeyMock,

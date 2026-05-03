@@ -504,10 +504,36 @@ export interface CitationValidationDebug {
   has_evidence: boolean;
 }
 
+/**
+ * A wiki knowledge entry cited as [W#] in an assistant response.
+ * Mirrors WikiEvidence.to_dict() from the backend.
+ */
+export interface WikiReference {
+  /** Stable label like "W1", "W2" — matches the [W#] cited in answer text. */
+  wiki_label: string;
+  page_id: number | null;
+  claim_id: number | null;
+  title: string;
+  slug: string | null;
+  page_type: string | null;
+  claim_text: string | null;
+  excerpt: string | null;
+  confidence: number;
+  /** Combined status: claim_status takes precedence over page_status. */
+  status: string | null;
+  page_status: string | null;
+  claim_status: string | null;
+  score: number;
+  score_type: string | null;
+  source_count: number;
+  provenance_summary: string;
+}
+
 export interface ChatStreamCallbacks {
   onMessage: (chunk: string) => void;
   onSources?: (sources: Source[]) => void;
   onMemories?: (memories: UsedMemory[]) => void;
+  onWiki?: (wikiRefs: WikiReference[]) => void;
   onCitationValidation?: (validation: CitationValidationDebug) => void;
   onError?: (error: Error) => void;
   onComplete?: () => void;
@@ -539,6 +565,8 @@ export interface ChatSessionMessage {
   sources: Source[] | null;
   /** Memories used to generate this assistant message. May be null on legacy rows. */
   memories?: UsedMemory[] | null;
+  /** Wiki evidence cited as [W#] in this assistant message. Null on legacy rows. */
+  wiki_refs?: WikiReference[] | null;
   created_at: string;
   feedback?: "up" | "down" | null;
 }
@@ -557,6 +585,7 @@ export interface AddMessageRequest {
   content: string;
   sources?: Source[];
   memories?: UsedMemory[];
+  wiki_refs?: WikiReference[];
 }
 
 export interface Organization {
@@ -885,6 +914,9 @@ export async function parseSSEStream(
               }
             );
             callbacks.onMemories?.(normalized);
+          }
+          if (Array.isArray(parsed.wiki_used) && parsed.wiki_used.length > 0) {
+            callbacks.onWiki?.(parsed.wiki_used as WikiReference[]);
           }
           if (parsed.citation_validation && typeof parsed.citation_validation === "object") {
             callbacks.onCitationValidation?.(parsed.citation_validation as CitationValidationDebug);

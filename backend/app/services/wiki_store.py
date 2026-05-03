@@ -118,6 +118,7 @@ class WikiCompileJob:
     created_at: str
     started_at: Optional[str]
     completed_at: Optional[str]
+    input_json: Optional[str] = None
 
 
 @dataclass
@@ -254,6 +255,7 @@ def _to_compile_job(row: sqlite3.Row) -> WikiCompileJob:
         created_at=d["created_at"],
         started_at=d.get("started_at"),
         completed_at=d.get("completed_at"),
+        input_json=d.get("input_json"),
     )
 
 
@@ -683,12 +685,15 @@ class WikiStore:
         vault_id: int,
         trigger_type: str,
         trigger_id: Optional[str] = None,
+        input_json: Optional[Any] = None,
     ) -> WikiCompileJob:
         now = datetime.utcnow().isoformat()
+        if isinstance(input_json, dict):
+            input_json = json.dumps(input_json)
         cur = self._db.execute(
-            """INSERT INTO wiki_compile_jobs (vault_id, trigger_type, trigger_id, status, created_at)
-               VALUES (?, ?, ?, 'pending', ?)""",
-            (vault_id, trigger_type, trigger_id, now),
+            """INSERT INTO wiki_compile_jobs (vault_id, trigger_type, trigger_id, status, input_json, created_at)
+               VALUES (?, ?, ?, 'pending', ?, ?)""",
+            (vault_id, trigger_type, trigger_id, input_json or "{}", now),
         )
         self._db.commit()
         row = self._db.execute("SELECT * FROM wiki_compile_jobs WHERE id = ?", (cur.lastrowid,)).fetchone()

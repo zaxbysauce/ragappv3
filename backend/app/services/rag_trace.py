@@ -50,6 +50,13 @@ class RAGTrace:
     answer_supported: Optional[bool] = None
     exact_match_promoted: bool = False
     multi_scale_used: bool = False
+    # Wiki retrieval fields
+    wiki_query: str = ""
+    wiki_candidates_total: int = 0
+    wiki_injected: int = 0
+    wiki_cited: List[str] = field(default_factory=list)
+    wiki_filtered: List[str] = field(default_factory=list)
+    answer_source_mode: str = "documents"
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -78,6 +85,12 @@ class RAGTrace:
             "answer_supported": self.answer_supported,
             "exact_match_promoted": self.exact_match_promoted,
             "multi_scale_used": self.multi_scale_used,
+            "wiki_query": self.wiki_query,
+            "wiki_candidates_total": self.wiki_candidates_total,
+            "wiki_injected": self.wiki_injected,
+            "wiki_cited": list(self.wiki_cited),
+            "wiki_filtered": list(self.wiki_filtered),
+            "answer_source_mode": self.answer_source_mode,
         }
 
     def log(self) -> None:

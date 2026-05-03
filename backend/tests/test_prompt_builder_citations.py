@@ -18,6 +18,7 @@ class MockRAGSource:
     file_id: str
     score: float
     metadata: Dict[str, Any] = field(default_factory=dict)
+    parent_window_text: Any = None
 
 
 @dataclass
@@ -32,6 +33,10 @@ class TestPromptBuilderCitations(unittest.TestCase):
         # Mock settings to avoid env dependencies
         with patch("app.config.settings") as mock_settings:
             mock_settings.max_context_chunks = 10
+            mock_settings.primary_evidence_count = 0
+            mock_settings.anchor_best_chunk = False
+            mock_settings.context_max_tokens = 6000
+            mock_settings.parent_retrieval_enabled = False
             from app.services.prompt_builder import PromptBuilderService
             self.builder = PromptBuilderService()
 
