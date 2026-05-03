@@ -64,9 +64,10 @@ class TestChatStreaming(unittest.TestCase):
         self.client = TestClient(app)
 
     def tearDown(self):
-        from app.api.deps import get_rag_engine
+        from app.api.deps import get_rag_engine, get_current_active_user
         from app.main import app
         app.dependency_overrides.pop(get_rag_engine, None)
+        app.dependency_overrides.pop(get_current_active_user, None)
         # Clean up app.state services
         if hasattr(app.state, '_test_services'):
             for key in app.state._test_services:
@@ -78,12 +79,21 @@ class TestChatStreaming(unittest.TestCase):
 
     def _set_mock_rag_engine(self, mock_query_fn):
         """Helper to override get_rag_engine with a mock that uses the given query function."""
-        from app.api.deps import get_rag_engine
+        from app.api.deps import get_rag_engine, get_current_active_user
         from app.main import app
 
         mock_engine = MagicMock()
         mock_engine.query = mock_query_fn
         app.dependency_overrides[get_rag_engine] = lambda: mock_engine
+
+        # Mock authentication to return a test user with admin access
+        mock_user = {
+            "id": "test-user-1",
+            "username": "testuser",
+            "email": "testuser@example.com",
+            "role": "admin",
+        }
+        app.dependency_overrides[get_current_active_user] = lambda: mock_user
 
         # Set up app.state services that might be needed
         if not hasattr(app.state, '_test_services'):
