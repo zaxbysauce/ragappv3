@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 POLL_INTERVAL = 5  # seconds between polls when queue is empty
+MAX_RETRIES = 3    # max automatic retries before a job is permanently failed
 
 
 class WikiCompileProcessor:
@@ -90,7 +91,22 @@ class WikiCompileProcessor:
                         "WikiCompileProcessor: job id=%d failed: %s", job.id, exc
                     )
                     try:
-                        await asyncio.to_thread(self._fail_job, job.id, str(exc))
+                        new_retry_count = await asyncio.to_thread(
+                            self._fail_job, job.id, str(exc)
+                        )
+                        if new_retry_count < MAX_RETRIES:
+                            backoff = 2.0 ** new_retry_count
+                            logger.info(
+                                "WikiCompileProcessor: job id=%d will auto-retry (%d/%d) in %.0fs",
+                                job.id, new_retry_count, MAX_RETRIES, backoff,
+                            )
+                            await asyncio.sleep(backoff)
+                            await asyncio.to_thread(self._reset_job_to_pending, job.id)
+                        else:
+                            logger.error(
+                                "WikiCompileProcessor: job id=%d permanently failed after %d retries",
+                                job.id, new_retry_count,
+                            )
                     except Exception as e2:
                         logger.error(
                             "WikiCompileProcessor: could not mark job id=%d failed: %s", job.id, e2
@@ -118,11 +134,18 @@ class WikiCompileProcessor:
         with self._pool.connection() as conn:
             WikiStore(conn).complete_job(job_id, result)
 
-    def _fail_job(self, job_id: int, error: str) -> None:
+    def _fail_job(self, job_id: int, error: str) -> int:
+        """Fail a job and return the new retry_count."""
         from app.services.wiki_store import WikiStore
 
         with self._pool.connection() as conn:
-            WikiStore(conn).fail_job(job_id, error)
+            return WikiStore(conn).fail_job(job_id, error)
+
+    def _reset_job_to_pending(self, job_id: int) -> None:
+        from app.services.wiki_store import WikiStore
+
+        with self._pool.connection() as conn:
+            WikiStore(conn).reset_job_to_pending(job_id)
 
     def _dispatch(self, job) -> dict:
         """Dispatch a job to the appropriate handler. Runs in a thread."""

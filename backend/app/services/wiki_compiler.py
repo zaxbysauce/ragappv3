@@ -346,10 +346,25 @@ class WikiCompiler:
         """
         Extract entities/claims from an assistant answer and persist to wiki.
 
-        A claim is 'active' when the answer had citations; 'unverified' when not.
-        Creates a 'unsupported_claim' lint finding for every unverified claim.
+        Per-claim citation attribution is driven by the optional ``per_claim_sources``
+        field in input_json, which maps sentence text → list of source dicts.
+        Each source dict must have at minimum a ``source_kind`` key.
+
+        When ``per_claim_sources`` is present:
+          - Claims that appear in the map with non-empty sources → status='active'
+          - Claims with no entry or empty sources → status='unverified' + lint finding
+
+        When ``per_claim_sources`` is absent (legacy / answer-level citations):
+          - All claims default to status='unverified'
+          - Answer-level refs (wiki_refs, doc_sources, memories) are attached for
+            context, but status stays 'unverified'
+
+        source_type is derived per-claim from the kinds of sources actually cited.
         """
         assistant_answer: str = input_json.get("assistant_answer") or ""
+        # Per-claim source mapping: {"sentence text": [source_dicts]}
+        per_claim_sources: dict = input_json.get("per_claim_sources") or {}
+        # Answer-level fallback refs (backward compat)
         wiki_refs: list = input_json.get("wiki_refs") or []
         doc_sources: list = input_json.get("doc_sources") or []
         memories: list = input_json.get("memories") or []
@@ -360,10 +375,6 @@ class WikiCompiler:
         extraction = extract_entities_from_text(assistant_answer)
         if not extraction.acronyms and not extraction.role_claims:
             return {"page": None, "claims": [], "entities": [], "relations": [], "skipped": True}
-
-        has_citations = bool(wiki_refs or doc_sources or memories)
-        claim_status = "active" if has_citations else "unverified"
-        confidence = 0.8 if has_citations else 0.5
 
         entities_created: list = []
         claims_created: list = []
@@ -399,10 +410,34 @@ class WikiCompiler:
             obj_name = role_claim["object_person"]
             sentence = role_claim["sentence"]
 
+            # Determine which sources are cited for this specific claim
+            if per_claim_sources:
+                claim_citations: list = per_claim_sources.get(sentence) or []
+            else:
+                # Legacy: answer-level sources — no per-sentence attribution available
+                claim_citations = []
+
+            has_specific_citations = bool(claim_citations)
+            claim_status = "active" if has_specific_citations else "unverified"
+            confidence = 0.8 if has_specific_citations else 0.5
+
+            # Derive source_type from the kinds of sources actually cited for this claim
+            cited_kinds = {s.get("source_kind") for s in claim_citations if s.get("source_kind")}
+            if not cited_kinds:
+                source_type = "chat_synthesis"
+            elif len(cited_kinds) > 1:
+                source_type = "mixed"
+            elif "document" in cited_kinds:
+                source_type = "document"
+            elif "memory" in cited_kinds:
+                source_type = "memory"
+            else:
+                source_type = "chat_synthesis"
+
             claim = self._store.create_claim(
                 vault_id=vault_id,
                 claim_text=sentence,
-                source_type="chat_synthesis",
+                source_type=source_type,
                 claim_type="fact",
                 subject=subj_name,
                 predicate=pred,
@@ -411,40 +446,74 @@ class WikiCompiler:
                 confidence=confidence,
             )
 
-            for ref in wiki_refs:
-                if ref.get("wiki_label"):
-                    self._store.attach_source(
-                        claim_id=claim.id,
-                        source_kind="manual",
-                        source_label=ref["wiki_label"],
-                        quote=sentence,
-                        confidence=confidence,
-                    )
-            for src in doc_sources:
-                if src.get("source_label"):
-                    self._store.attach_source(
-                        claim_id=claim.id,
-                        source_kind="document",
-                        file_id=src.get("file_id"),
-                        chunk_id=src.get("chunk_id"),
-                        source_label=src["source_label"],
-                        quote=sentence,
-                        confidence=confidence,
-                    )
-            for mem in memories:
-                if isinstance(mem, dict) and mem.get("memory_label"):
-                    self._store.attach_source(
-                        claim_id=claim.id,
-                        source_kind="memory",
-                        memory_id=mem.get("memory_id"),
-                        source_label=mem["memory_label"],
-                        quote=sentence,
-                        confidence=confidence,
-                    )
+            if has_specific_citations:
+                # Attach only the sources explicitly cited for this claim
+                for src in claim_citations:
+                    kind = src.get("source_kind", "manual")
+                    if kind == "document":
+                        self._store.attach_source(
+                            claim_id=claim.id,
+                            source_kind="document",
+                            file_id=src.get("file_id"),
+                            chunk_id=src.get("chunk_id"),
+                            source_label=src.get("source_label", ""),
+                            quote=sentence,
+                            confidence=confidence,
+                        )
+                    elif kind == "memory":
+                        self._store.attach_source(
+                            claim_id=claim.id,
+                            source_kind="memory",
+                            memory_id=src.get("memory_id"),
+                            source_label=src.get("source_label", ""),
+                            quote=sentence,
+                            confidence=confidence,
+                        )
+                    else:
+                        self._store.attach_source(
+                            claim_id=claim.id,
+                            source_kind="manual",
+                            source_label=src.get("source_label", src.get("wiki_label", "")),
+                            quote=sentence,
+                            confidence=confidence,
+                        )
+            else:
+                # No per-claim citations: attach answer-level refs for context only
+                for ref in wiki_refs:
+                    if ref.get("wiki_label"):
+                        self._store.attach_source(
+                            claim_id=claim.id,
+                            source_kind="manual",
+                            source_label=ref["wiki_label"],
+                            quote=sentence,
+                            confidence=confidence,
+                        )
+                for src in doc_sources:
+                    if src.get("source_label"):
+                        self._store.attach_source(
+                            claim_id=claim.id,
+                            source_kind="document",
+                            file_id=src.get("file_id"),
+                            chunk_id=src.get("chunk_id"),
+                            source_label=src["source_label"],
+                            quote=sentence,
+                            confidence=confidence,
+                        )
+                for mem in memories:
+                    if isinstance(mem, dict) and mem.get("memory_label"):
+                        self._store.attach_source(
+                            claim_id=claim.id,
+                            source_kind="memory",
+                            memory_id=mem.get("memory_id"),
+                            source_label=mem["memory_label"],
+                            quote=sentence,
+                            confidence=confidence,
+                        )
 
             self._db.commit()
             claims_created.append(self._store.get_claim(claim.id))
 
+            # Lint finding for every unverified claim
             if claim_status == "unverified":
                 self._db.execute(
                     """INSERT INTO wiki_lint_findings
@@ -453,7 +522,7 @@ class WikiCompiler:
                        VALUES (?, 'unsupported_claim', 'low', ?, ?, '[]', ?, 'open', ?, ?)""",
                     (
                         vault_id,
-                        "Unverified claim: extracted from query answer with no citations",
+                        "Unverified claim: extracted from query answer with no per-claim citations",
                         sentence[:200],
                         json.dumps([claim.id]),
                         now, now,
@@ -463,7 +532,7 @@ class WikiCompiler:
 
             subj_id = entity_id_map.get(subj_name)
             obj_id = entity_id_map.get(obj_name)
-            self._store.create_relation(
+            relation = self._store.create_relation(
                 vault_id=vault_id,
                 predicate=pred,
                 subject_entity_id=subj_id,
@@ -472,6 +541,7 @@ class WikiCompiler:
                 claim_id=claim.id,
                 confidence=confidence,
             )
+            relations_created.append(relation)
 
         return {
             "page": None,
@@ -502,16 +572,12 @@ class WikiCompiler:
         file_data = dict(file_row)
         text: str = input_json.get("text") or ""
 
-        if not text and file_data.get("file_path"):
-            try:
-                with open(file_data["file_path"], "r", encoding="utf-8", errors="ignore") as fh:
-                    text = fh.read(50_000)
-            except OSError:
-                logger.warning(
-                    "compile_ingest_job: cannot read file %s, skipping", file_data["file_path"]
-                )
-
         if not text:
+            logger.warning(
+                "compile_ingest_job: no parsed text in input_json for file_id=%d; "
+                "caller must pass pre-parsed text via input_json['text']",
+                file_id,
+            )
             return {"page": None, "claims": [], "entities": [], "relations_count": 0, "skipped": True}
 
         extraction = extract_entities_from_text(text)

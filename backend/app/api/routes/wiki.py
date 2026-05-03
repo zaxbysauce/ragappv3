@@ -4,6 +4,7 @@ Wiki / Knowledge Compiler API routes.
 All endpoints are vault-scoped. Access follows vault access permissions.
 """
 
+import json
 import logging
 import sqlite3
 from dataclasses import asdict
@@ -498,18 +499,80 @@ async def get_document_wiki_status(
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_active_user),
 ):
-    """Return the most recent wiki ingest job for a document."""
+    """Return semantic wiki status, counts, linked pages/claims, and latest job for a document."""
     await _require_vault_read(user, vault_id)
+    db.row_factory = sqlite3.Row
     store = WikiStore(db)
+
+    # Collect ingest jobs for this file
     jobs = store.list_jobs(vault_id)
-    file_jobs = [
-        j for j in jobs
-        if j.trigger_type == "ingest" and j.trigger_id == f"file:{file_id}"
-    ]
-    if not file_jobs:
-        return {"file_id": file_id, "job": None}
-    latest = sorted(file_jobs, key=lambda j: j.created_at, reverse=True)[0]
-    return {"file_id": file_id, "job": _as_dict(latest)}
+    file_jobs = sorted(
+        [j for j in jobs if j.trigger_type == "ingest" and j.trigger_id == f"file:{file_id}"],
+        key=lambda j: j.created_at,
+        reverse=True,
+    )
+    latest_job = file_jobs[0] if file_jobs else None
+
+    # Derive semantic status
+    if latest_job is None:
+        wiki_status = "not_compiled"
+    elif latest_job.status == "running":
+        wiki_status = "compiling"
+    elif latest_job.status == "failed":
+        wiki_status = "failed"
+    elif latest_job.status == "cancelled":
+        wiki_status = "not_compiled"
+    else:
+        wiki_status = "compiled"
+
+    # Count claims sourced from this file
+    claims_rows = db.execute(
+        """SELECT wc.id, wc.status, wc.page_id
+           FROM wiki_claims wc
+           JOIN wiki_claim_sources wcs ON wcs.claim_id = wc.id
+           WHERE wcs.file_id = ? AND wc.vault_id = ?""",
+        (file_id, vault_id),
+    ).fetchall()
+    claims_total = len(claims_rows)
+    active_claims = sum(1 for r in claims_rows if dict(r)["status"] == "active")
+
+    # Collect linked page IDs
+    page_ids = {dict(r)["page_id"] for r in claims_rows if dict(r)["page_id"]}
+    pages_info = []
+    for pid in page_ids:
+        row = db.execute(
+            "SELECT id, slug, title, page_type, status FROM wiki_pages WHERE id = ? AND vault_id = ?",
+            (pid, vault_id),
+        ).fetchone()
+        if row:
+            pages_info.append(dict(row))
+
+    # Count open lint findings related to linked pages
+    lint_count = 0
+    if page_ids:
+        lint_rows = db.execute(
+            "SELECT related_page_ids_json FROM wiki_lint_findings WHERE vault_id = ? AND status = 'open'",
+            (vault_id,),
+        ).fetchall()
+        for lr in lint_rows:
+            try:
+                related = json.loads(dict(lr)["related_page_ids_json"] or "[]")
+                if any(pid in page_ids for pid in related):
+                    lint_count += 1
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+    return {
+        "file_id": file_id,
+        "wiki_status": wiki_status,
+        "pages_count": len(pages_info),
+        "claims_count": claims_total,
+        "active_claims": active_claims,
+        "lint_count": lint_count,
+        "pages": pages_info,
+        "latest_job": _as_dict(latest_job) if latest_job else None,
+        "job_count": len(file_jobs),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -523,18 +586,68 @@ async def get_memory_wiki_status(
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_active_user),
 ):
-    """Return the most recent wiki memory job for a memory record."""
+    """Return semantic wiki status, linked pages/claims, and latest job for a memory record."""
     await _require_vault_read(user, vault_id)
+    db.row_factory = sqlite3.Row
     store = WikiStore(db)
+
+    # Collect memory jobs
     jobs = store.list_jobs(vault_id)
-    mem_jobs = [
-        j for j in jobs
-        if j.trigger_type == "memory" and j.trigger_id == f"memory:{memory_id}"
-    ]
-    if not mem_jobs:
-        return {"memory_id": memory_id, "job": None}
-    latest = sorted(mem_jobs, key=lambda j: j.created_at, reverse=True)[0]
-    return {"memory_id": memory_id, "job": _as_dict(latest)}
+    mem_jobs = sorted(
+        [j for j in jobs
+         if j.trigger_type in ("memory", "manual")
+         and j.trigger_id == f"memory:{memory_id}"],
+        key=lambda j: j.created_at,
+        reverse=True,
+    )
+    latest_job = mem_jobs[0] if mem_jobs else None
+
+    # Claims sourced from this memory
+    claims_rows = db.execute(
+        """SELECT wc.id, wc.status, wc.page_id, wc.claim_text
+           FROM wiki_claims wc
+           JOIN wiki_claim_sources wcs ON wcs.claim_id = wc.id
+           WHERE wcs.memory_id = ? AND wc.vault_id = ?""",
+        (memory_id, vault_id),
+    ).fetchall()
+
+    claims_data = [dict(r) for r in claims_rows]
+    active_claims = sum(1 for c in claims_data if c["status"] == "active")
+    stale_claims = sum(1 for c in claims_data if c["status"] == "superseded")
+
+    # Linked pages
+    page_ids = {c["page_id"] for c in claims_data if c["page_id"]}
+    linked_pages = []
+    for pid in page_ids:
+        row = db.execute(
+            "SELECT id, slug, title, page_type, status FROM wiki_pages WHERE id = ? AND vault_id = ?",
+            (pid, vault_id),
+        ).fetchone()
+        if row:
+            linked_pages.append(dict(row))
+
+    # Semantic status
+    if latest_job and latest_job.status == "running":
+        wiki_status = "promoting"
+    elif stale_claims > 0 and active_claims == 0:
+        wiki_status = "stale"
+    elif active_claims > 0:
+        wiki_status = "promoted"
+    elif len(claims_data) > 0:
+        wiki_status = "promoted"
+    else:
+        wiki_status = "not_promoted"
+
+    return {
+        "memory_id": memory_id,
+        "wiki_status": wiki_status,
+        "claims_count": len(claims_data),
+        "active_claims": active_claims,
+        "stale_claims": stale_claims,
+        "linked_pages": linked_pages,
+        "latest_job": _as_dict(latest_job) if latest_job else None,
+        "job_count": len(mem_jobs),
+    }
 
 
 # ---------------------------------------------------------------------------

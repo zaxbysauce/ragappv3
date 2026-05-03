@@ -574,6 +574,7 @@ def run_migrations(sqlite_path: str) -> None:
     migrate_backfill_default_vault_org(sqlite_path)
     migrate_add_wiki_tables(sqlite_path)
     migrate_add_wiki_refs_and_job_input(sqlite_path)
+    migrate_add_wiki_jobs_retry_count(sqlite_path)
 
     # Add partial unique index for duplicate hash detection (HIGH-10)
     # Wrapped in IntegrityError handler: existing databases may have duplicate
@@ -1256,6 +1257,22 @@ def migrate_add_wiki_refs_and_job_input(sqlite_path: str) -> None:
         if "input_json" not in existing_job_cols:
             conn.execute(
                 "ALTER TABLE wiki_compile_jobs ADD COLUMN input_json TEXT DEFAULT '{}'"
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def migrate_add_wiki_jobs_retry_count(sqlite_path: str) -> None:
+    """Migration: add retry_count to wiki_compile_jobs. Idempotent."""
+    conn = sqlite3.connect(sqlite_path)
+    try:
+        existing_cols = [
+            row[1] for row in conn.execute("PRAGMA table_info(wiki_compile_jobs)").fetchall()
+        ]
+        if "retry_count" not in existing_cols:
+            conn.execute(
+                "ALTER TABLE wiki_compile_jobs ADD COLUMN retry_count INTEGER DEFAULT 0"
             )
         conn.commit()
     finally:

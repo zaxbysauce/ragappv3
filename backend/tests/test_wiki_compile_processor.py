@@ -34,6 +34,13 @@ AFOMIS_ANSWER = (
     "Justice Sakyi is the AFOMIS Chief and Major Justin Woods is his deputy."
 )
 
+# Two separate role-claim sentences for per-claim citation tests
+TWO_CLAIM_ANSWER = (
+    "Justice Sakyi is the AFOMIS Chief. "
+    "AFOMIS stands for Air Force Operational Medicine. "
+    "Major Justin Woods is the AFOMIS Director."
+)
+
 
 # ---------------------------------------------------------------------------
 # WikiCompiler.compile_query_job
@@ -72,19 +79,25 @@ class TestCompileQueryJob(unittest.TestCase):
         entity_names = {e["name"] for e in result["entities"]}
         self.assertIn("AFOMIS", entity_names)
 
-    def test_creates_active_claims_with_citations(self):
+    def test_creates_active_claims_with_per_claim_citations(self):
+        # Extract the role-claim sentences from TWO_CLAIM_ANSWER so we can key per_claim_sources
+        from app.services.wiki_compiler import extract_entities_from_text
+        ext = extract_entities_from_text(TWO_CLAIM_ANSWER)
+        self.assertGreaterEqual(len(ext.role_claims), 2, "Need at least 2 role claims for this test")
+        first_sentence = ext.role_claims[0]["sentence"]
+        per_claim_sources = {
+            first_sentence: [{"source_kind": "document", "source_label": "S1", "file_id": 1}]
+        }
         result = self.compiler.compile_query_job(
             vault_id=1,
             input_json={
-                "assistant_answer": AFOMIS_ANSWER,
-                "wiki_refs": [{"wiki_label": "W1"}],
-                "doc_sources": [],
-                "memories": [],
+                "assistant_answer": TWO_CLAIM_ANSWER,
+                "per_claim_sources": per_claim_sources,
             },
         )
         statuses = {c["status"] for c in result["claims"]}
         self.assertIn("active", statuses)
-        self.assertNotIn("unverified", statuses)
+        self.assertIn("unverified", statuses)
 
     def test_creates_unverified_claims_without_citations(self):
         result = self.compiler.compile_query_job(
@@ -115,14 +128,18 @@ class TestCompileQueryJob(unittest.TestCase):
         finding_types = {dict(r)["finding_type"] for r in rows}
         self.assertIn("unsupported_claim", finding_types)
 
-    def test_no_lint_finding_with_citations(self):
+    def test_no_lint_finding_when_all_claims_cited(self):
+        from app.services.wiki_compiler import extract_entities_from_text
+        ext = extract_entities_from_text(TWO_CLAIM_ANSWER)
+        per_claim_sources = {
+            rc["sentence"]: [{"source_kind": "document", "source_label": "S1", "file_id": 1}]
+            for rc in ext.role_claims
+        }
         self.compiler.compile_query_job(
             vault_id=1,
             input_json={
-                "assistant_answer": AFOMIS_ANSWER,
-                "wiki_refs": [{"wiki_label": "W1"}],
-                "doc_sources": [],
-                "memories": [],
+                "assistant_answer": TWO_CLAIM_ANSWER,
+                "per_claim_sources": per_claim_sources,
             },
         )
         rows = self.conn.execute(
@@ -173,21 +190,21 @@ class TestCompileIngestJob(unittest.TestCase):
 
     def test_creates_page_for_document(self):
         result = self.compiler.compile_ingest_job(
-            vault_id=1, input_json={"file_id": 1}
+            vault_id=1, input_json={"file_id": 1, "text": AFOMIS_ANSWER}
         )
         self.assertIsNotNone(result.get("page"))
         self.assertIn("document", result["page"]["slug"])
 
     def test_extracts_entities_from_file(self):
         result = self.compiler.compile_ingest_job(
-            vault_id=1, input_json={"file_id": 1}
+            vault_id=1, input_json={"file_id": 1, "text": AFOMIS_ANSWER}
         )
         entity_names = {e["name"] for e in result["entities"]}
         self.assertIn("AFOMIS", entity_names)
 
     def test_creates_claims_with_document_provenance(self):
         result = self.compiler.compile_ingest_job(
-            vault_id=1, input_json={"file_id": 1}
+            vault_id=1, input_json={"file_id": 1, "text": AFOMIS_ANSWER}
         )
         self.assertGreater(len(result["claims"]), 0)
         claim_ids = [c["id"] for c in result["claims"]]
@@ -212,11 +229,22 @@ class TestCompileIngestJob(unittest.TestCase):
         )
         self.assertFalse(result.get("skipped"))
 
-    def test_returns_skipped_when_text_empty_and_file_missing(self):
-        self.conn.execute("UPDATE files SET file_path = '/nonexistent/path.txt' WHERE id = 1")
+    def test_returns_skipped_when_no_text_in_input_json(self):
+        # Raw file fallback was removed; callers must supply parsed text in input_json["text"]
+        result = self.compiler.compile_ingest_job(
+            vault_id=1, input_json={"file_id": 1}  # no "text" key
+        )
+        self.assertTrue(result.get("skipped"))
+
+    def test_does_not_open_raw_file_bytes(self):
+        # Provide a binary-looking file path; without text key, job must skip cleanly
+        # (not raise a UnicodeDecodeError from trying to open bytes as UTF-8)
+        self.conn.execute(
+            "UPDATE files SET file_path = '/dev/zero' WHERE id = 1"
+        )
         self.conn.commit()
         result = self.compiler.compile_ingest_job(
-            vault_id=1, input_json={"file_id": 1}
+            vault_id=1, input_json={"file_id": 1}  # no text → skip
         )
         self.assertTrue(result.get("skipped"))
 
@@ -423,3 +451,158 @@ class TestWikiCompileProcessorLifecycle(unittest.IsolatedAsyncioTestCase):
             row = conn.execute("SELECT status FROM wiki_compile_jobs").fetchone()
         # After start+stop, the orphan should have been reset to pending (then possibly processed)
         self.assertNotEqual(dict(row)["status"], "running")
+
+
+# ---------------------------------------------------------------------------
+# retry_count tracking and cancellation semantics
+# ---------------------------------------------------------------------------
+
+class TestRetryCountAndCancellation(unittest.TestCase):
+
+    def setUp(self):
+        from app.models.database import run_migrations
+        from app.services.wiki_store import WikiStore
+
+        td = tempfile.mkdtemp()
+        db_path = str(Path(td) / "test.db")
+        run_migrations(db_path)
+        self.conn = sqlite3.connect(db_path)
+        self.conn.row_factory = sqlite3.Row
+        self.conn.execute("INSERT OR IGNORE INTO vaults (id, name) VALUES (1, 'T')")
+        self.conn.commit()
+        self.store = WikiStore(self.conn)
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_fail_job_increments_retry_count(self):
+        job = self.store.create_job(vault_id=1, trigger_type="manual")
+        self.store.claim_next_pending_job()
+        count1 = self.store.fail_job(job.id, "err1")
+        self.assertEqual(count1, 1)
+        # Reset to pending and fail again
+        self.store.reset_job_to_pending(job.id)
+        self.store.claim_next_pending_job()
+        count2 = self.store.fail_job(job.id, "err2")
+        self.assertEqual(count2, 2)
+
+    def test_fail_job_returns_retry_count(self):
+        job = self.store.create_job(vault_id=1, trigger_type="manual")
+        self.store.claim_next_pending_job()
+        returned = self.store.fail_job(job.id, "error")
+        row = self.conn.execute(
+            "SELECT retry_count FROM wiki_compile_jobs WHERE id = ?", (job.id,)
+        ).fetchone()
+        self.assertEqual(returned, dict(row)["retry_count"])
+
+    def test_cancelled_job_not_overwritten_by_complete(self):
+        job = self.store.create_job(vault_id=1, trigger_type="manual")
+        self.store.claim_next_pending_job()
+        # Cancel while running
+        cancelled = self.store.cancel_job(job.id, vault_id=1)
+        self.assertTrue(cancelled)
+        # Processor tries to complete it after cancellation — must be no-op
+        self.store.complete_job(job.id, {"ok": True})
+        row = self.conn.execute(
+            "SELECT status FROM wiki_compile_jobs WHERE id = ?", (job.id,)
+        ).fetchone()
+        self.assertEqual(dict(row)["status"], "cancelled")
+
+    def test_wiki_job_dataclass_has_retry_count(self):
+        job = self.store.create_job(vault_id=1, trigger_type="manual")
+        fetched = self.store.get_job(job.id, vault_id=1)
+        self.assertIsNotNone(fetched)
+        self.assertEqual(fetched.retry_count, 0)
+        self.store.claim_next_pending_job()
+        self.store.fail_job(job.id, "boom")
+        fetched2 = self.store.get_job(job.id, vault_id=1)
+        self.assertEqual(fetched2.retry_count, 1)
+
+
+# ---------------------------------------------------------------------------
+# Per-claim citation precision
+# ---------------------------------------------------------------------------
+
+class TestPerClaimCitationPrecision(unittest.TestCase):
+
+    def setUp(self):
+        self.conn, self.store, self.compiler = _make_env()
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_cited_claim_is_active_uncited_is_unverified(self):
+        from app.services.wiki_compiler import extract_entities_from_text
+        ext = extract_entities_from_text(TWO_CLAIM_ANSWER)
+        role_claims = ext.role_claims
+        self.assertGreaterEqual(len(role_claims), 2, "Need ≥2 role claims in TWO_CLAIM_ANSWER")
+
+        cited_sentence = role_claims[0]["sentence"]
+        # Only the first claim sentence gets a citation
+        per_claim_sources = {
+            cited_sentence: [{"source_kind": "document", "source_label": "S1", "file_id": 1}]
+        }
+        result = self.compiler.compile_query_job(
+            vault_id=1,
+            input_json={
+                "assistant_answer": TWO_CLAIM_ANSWER,
+                "per_claim_sources": per_claim_sources,
+            },
+        )
+        statuses = {c["status"] for c in result["claims"]}
+        self.assertIn("active", statuses, "Cited claim must be active")
+        self.assertIn("unverified", statuses, "Uncited claim must be unverified")
+
+    def test_only_cited_sources_attached_to_active_claim(self):
+        from app.services.wiki_compiler import extract_entities_from_text
+        ext = extract_entities_from_text(TWO_CLAIM_ANSWER)
+        role_claims = ext.role_claims
+        self.assertGreaterEqual(len(role_claims), 2)
+
+        s1_sentence = role_claims[0]["sentence"]
+        s2_sentence = role_claims[1]["sentence"]
+        per_claim_sources = {
+            s1_sentence: [{"source_kind": "document", "source_label": "S1", "file_id": 1}],
+            s2_sentence: [{"source_kind": "memory", "source_label": "M1", "memory_id": 1}],
+        }
+        result = self.compiler.compile_query_job(
+            vault_id=1,
+            input_json={
+                "assistant_answer": TWO_CLAIM_ANSWER,
+                "per_claim_sources": per_claim_sources,
+            },
+        )
+        # Find the two claims
+        all_claims = result["claims"]
+        self.assertEqual(len(all_claims), 2)
+        claim_ids = [c["id"] for c in all_claims]
+        # Check sources for each claim
+        for cid in claim_ids:
+            sources = self.conn.execute(
+                "SELECT source_kind, source_label FROM wiki_claim_sources WHERE claim_id = ?",
+                (cid,),
+            ).fetchall()
+            source_labels = {dict(s)["source_label"] for s in sources}
+            # Each claim should have exactly ONE source, not both S1 and M1
+            self.assertEqual(len(source_labels), 1)
+
+    def test_answer_level_refs_attached_when_no_per_claim_sources(self):
+        result = self.compiler.compile_query_job(
+            vault_id=1,
+            input_json={
+                "assistant_answer": AFOMIS_ANSWER,
+                "wiki_refs": [{"wiki_label": "W1"}],
+                "doc_sources": [],
+                "memories": [],
+            },
+        )
+        # Without per_claim_sources: all claims are unverified
+        statuses = {c["status"] for c in result["claims"]}
+        self.assertTrue(all(s == "unverified" for s in statuses))
+        # But sources are still attached for context
+        for c in result["claims"]:
+            sources = self.conn.execute(
+                "SELECT source_label FROM wiki_claim_sources WHERE claim_id = ?", (c["id"],)
+            ).fetchall()
+            labels = {dict(s)["source_label"] for s in sources}
+            self.assertIn("W1", labels)

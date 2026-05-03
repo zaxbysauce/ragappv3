@@ -20,7 +20,7 @@ import {
 import { FileText, Upload, Search, Trash2, ScanLine, AlertCircle, Loader2, X, RotateCcw, Trash, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FileIcon } from "@/lib/fileIcon";
-import { listDocuments, scanDocuments, deleteDocument, deleteDocuments, deleteAllDocumentsInVault, getDocumentStats, type Document, type DocumentStatsResponse } from "@/lib/api";
+import { listDocuments, scanDocuments, deleteDocument, deleteDocuments, deleteAllDocumentsInVault, getDocumentStats, getDocumentWikiStatus, compileDocumentWiki, type Document, type DocumentStatsResponse, type DocumentWikiStatus } from "@/lib/api";
 import { formatFileSize, formatDate } from "@/lib/formatters";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useVaultStore } from "@/stores/useVaultStore";
@@ -77,6 +77,8 @@ export default function DocumentsPage() {
   const pollIntervalMsRef = useRef(2_000);
   const tableScrollRef = useRef<HTMLDivElement>(null);
   const mobileScrollRef = useRef<HTMLDivElement>(null);
+  const [wikiStatusMap, setWikiStatusMap] = useState<Record<string, DocumentWikiStatus>>({});
+  const [compilingDocIds, setCompilingDocIds] = useState<Set<string>>(new Set());
   // Optimistic delete state
   const [optimisticallyDeletedIds, setOptimisticallyDeletedIds] = useState<Set<string>>(new Set());
   const pendingDeleteTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
@@ -110,6 +112,36 @@ export default function DocumentsPage() {
       setDocuments([]);
     }
   }, [activeVaultId]);
+
+  const fetchWikiStatuses = useCallback(async (docs: Document[]) => {
+    if (!activeVaultId) return;
+    const indexed = docs.filter((d) => d.metadata?.status === "indexed");
+    const results = await Promise.allSettled(
+      indexed.map((d) => getDocumentWikiStatus(Number(d.id), activeVaultId))
+    );
+    setWikiStatusMap((prev) => {
+      const next = { ...prev };
+      indexed.forEach((d, i) => {
+        const r = results[i];
+        if (r.status === "fulfilled") next[String(d.id)] = r.value;
+      });
+      return next;
+    });
+  }, [activeVaultId]);
+
+  const handleCompileDocument = useCallback(async (docId: string) => {
+    if (!activeVaultId) return;
+    setCompilingDocIds((prev) => new Set(prev).add(docId));
+    try {
+      await compileDocumentWiki(Number(docId), activeVaultId);
+      toast.success("Wiki compile job queued");
+      setTimeout(() => fetchWikiStatuses(documents), 2000);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to queue wiki compile");
+    } finally {
+      setCompilingDocIds((prev) => { const s = new Set(prev); s.delete(docId); return s; });
+    }
+  }, [activeVaultId, documents, fetchWikiStatuses]);
 
   const fetchStats = useCallback(async () => {
     try {
@@ -188,6 +220,11 @@ export default function DocumentsPage() {
 
     return () => clearTimeout(timer);
   }, [documents, fetchDocuments, fetchStats]);
+
+  // Fetch wiki statuses whenever the document list changes (non-blocking, best-effort)
+  useEffect(() => {
+    if (documents.length > 0) fetchWikiStatuses(documents);
+  }, [documents, fetchWikiStatuses]);
 
   // Refresh documents when uploads complete
   useEffect(() => {
@@ -788,6 +825,7 @@ export default function DocumentsPage() {
                       </th>
                       <th scope="col" className="text-left p-4 font-medium flex-none w-[120px]">Status</th>
                       <th scope="col" className="text-left p-4 font-medium flex-none w-20">Chunks</th>
+                      <th scope="col" className="text-left p-4 font-medium flex-none w-[120px]">Wiki</th>
                       <th scope="col" className="text-left p-4 font-medium flex-none w-[100px]">Size</th>
                       <th scope="col" className="text-left p-4 font-medium flex-none w-[140px]">Uploaded</th>
                       <th scope="col" className="text-right p-4 font-medium flex-none w-[60px]">Actions</th>
@@ -850,6 +888,37 @@ export default function DocumentsPage() {
                                   )}
                                 >
                                   {count}
+                                </span>
+                              );
+                            })()}
+                          </td>
+                          <td className="p-4 flex-none w-[120px]">
+                            {(() => {
+                              const ws = wikiStatusMap[docId];
+                              const isCompiling = compilingDocIds.has(docId) || ws?.wiki_status === "compiling";
+                              if (!ws || ws.wiki_status === "not_compiled") {
+                                return (
+                                  <button
+                                    className="text-xs text-muted-foreground hover:text-foreground underline"
+                                    onClick={() => handleCompileDocument(docId)}
+                                    disabled={isCompiling}
+                                    title="Compile wiki for this document"
+                                  >
+                                    {isCompiling ? "Queuing…" : "Compile"}
+                                  </button>
+                                );
+                              }
+                              const color = ws.wiki_status === "compiled" ? "text-green-600" : ws.wiki_status === "failed" ? "text-destructive" : "text-blue-500";
+                              const label = ws.wiki_status === "compiled"
+                                ? `${ws.pages_count}p / ${ws.claims_count}c`
+                                : ws.wiki_status === "compiling" ? "Compiling…" : "Failed";
+                              return (
+                                <span
+                                  className={`text-xs font-mono cursor-pointer ${color}`}
+                                  onClick={() => handleCompileDocument(docId)}
+                                  title={`Wiki: ${ws.wiki_status} — ${ws.pages_count} pages, ${ws.claims_count} claims, ${ws.lint_count} lint issues. Click to recompile.`}
+                                >
+                                  {label}
                                 </span>
                               );
                             })()}

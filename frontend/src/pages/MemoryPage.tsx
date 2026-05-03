@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,7 +20,7 @@ import { useVaultStore } from "@/stores/useVaultStore";
 import { VaultSelector } from "@/components/vault/VaultSelector";
 import { useMemorySearch } from "@/hooks/useMemorySearch";
 import { useMemoryCrud, getCategoryFromMetadata, getTagsFromMetadata, getSourceFromMetadata, MAX_MEMORY_CONTENT_LENGTH } from "@/hooks/useMemoryCrud";
-import { updateMemory, promoteMemoryToWiki, type MemoryResult } from "@/lib/api";
+import { updateMemory, promoteMemoryToWiki, getMemoryWikiStatus, type MemoryResult, type MemoryWikiStatus } from "@/lib/api";
 
 export default function MemoryPage() {
   const { activeVaultId } = useVaultStore();
@@ -54,6 +54,28 @@ export default function MemoryPage() {
 
   // Promote-to-wiki state
   const [promotingId, setPromotingId] = useState<string | null>(null);
+
+  // Wiki status per memory
+  const [wikiStatusMap, setWikiStatusMap] = useState<Record<string, MemoryWikiStatus>>({});
+
+  const fetchWikiStatuses = useCallback(async (mems: MemoryResult[]) => {
+    if (!activeVaultId || !mems.length) return;
+    const results = await Promise.allSettled(
+      mems.map((m) => getMemoryWikiStatus(parseInt(m.id, 10), activeVaultId))
+    );
+    setWikiStatusMap((prev) => {
+      const next = { ...prev };
+      mems.forEach((m, i) => {
+        const r = results[i];
+        if (r.status === "fulfilled") next[m.id] = r.value;
+      });
+      return next;
+    });
+  }, [activeVaultId]);
+
+  useEffect(() => {
+    if (memories && memories.length > 0) fetchWikiStatuses(memories);
+  }, [memories, fetchWikiStatuses]);
 
   function openEdit(memory: MemoryResult) {
     setEditTarget(memory);
@@ -116,6 +138,8 @@ export default function MemoryPage() {
         `Promoted to wiki: "${result.page.title}" — open Wiki to view`,
         { duration: 6000 }
       );
+      // Refresh wiki status for this memory
+      setTimeout(() => fetchWikiStatuses([memory]), 1500);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Promote failed");
     } finally {
@@ -271,6 +295,28 @@ export default function MemoryPage() {
                           Source: {getSourceFromMetadata(memory.metadata)}
                         </span>
                       )}
+                      {(() => {
+                        const ws = wikiStatusMap[memory.id];
+                        if (!ws || ws.wiki_status === "not_promoted") return null;
+                        const colorMap: Record<string, string> = {
+                          promoted: "text-green-600",
+                          stale: "text-yellow-600",
+                          promoting: "text-blue-500",
+                        };
+                        const labelMap: Record<string, string> = {
+                          promoted: `Wiki: ${ws.active_claims}c / ${ws.linked_pages.length}p`,
+                          stale: `Wiki: stale (${ws.stale_claims} stale)`,
+                          promoting: "Wiki: promoting…",
+                        };
+                        return (
+                          <span
+                            className={`text-xs font-mono ${colorMap[ws.wiki_status] ?? "text-muted-foreground"}`}
+                            title={`Wiki status: ${ws.wiki_status} — ${ws.claims_count} claims, ${ws.linked_pages.length} pages`}
+                          >
+                            {labelMap[ws.wiki_status] ?? ws.wiki_status}
+                          </span>
+                        );
+                      })()}
                     </div>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">

@@ -1424,6 +1424,30 @@ export interface WikiCompileJob {
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
+  retry_count: number;
+}
+
+export interface DocumentWikiStatus {
+  file_id: number;
+  wiki_status: "not_compiled" | "compiling" | "compiled" | "failed";
+  pages_count: number;
+  claims_count: number;
+  active_claims: number;
+  lint_count: number;
+  pages: Array<{ id: number; slug: string; title: string; page_type: string; status: string }>;
+  latest_job: WikiCompileJob | null;
+  job_count: number;
+}
+
+export interface MemoryWikiStatus {
+  memory_id: number;
+  wiki_status: "not_promoted" | "promoted" | "stale" | "promoting";
+  claims_count: number;
+  active_claims: number;
+  stale_claims: number;
+  linked_pages: Array<{ id: number; slug: string; title: string; page_type: string; status: string }>;
+  latest_job: WikiCompileJob | null;
+  job_count: number;
 }
 
 export interface WikiLintFinding {
@@ -1597,6 +1621,31 @@ export async function recompileVaultWiki(vaultId: number): Promise<{ job_id: num
   const response = await apiClient.post<{ job_id: number; status: string }>(
     "/wiki/recompile",
     null,
+    { params: { vault_id: vaultId } }
+  );
+  return response.data;
+}
+
+export async function getDocumentWikiStatus(fileId: number, vaultId: number): Promise<DocumentWikiStatus> {
+  const response = await apiClient.get<DocumentWikiStatus>(
+    `/wiki/documents/${fileId}/status`,
+    { params: { vault_id: vaultId } }
+  );
+  return response.data;
+}
+
+export async function compileDocumentWiki(fileId: number, vaultId: number): Promise<{ job_id: number; status: string }> {
+  const response = await apiClient.post<{ job_id: number; status: string }>(
+    `/wiki/documents/${fileId}/compile`,
+    null,
+    { params: { vault_id: vaultId } }
+  );
+  return response.data;
+}
+
+export async function getMemoryWikiStatus(memoryId: number, vaultId: number): Promise<MemoryWikiStatus> {
+  const response = await apiClient.get<MemoryWikiStatus>(
+    `/wiki/memories/${memoryId}/status`,
     { params: { vault_id: vaultId } }
   );
   return response.data;

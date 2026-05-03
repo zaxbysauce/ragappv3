@@ -119,6 +119,7 @@ class WikiCompileJob:
     started_at: Optional[str]
     completed_at: Optional[str]
     input_json: Optional[str] = None
+    retry_count: int = 0
 
 
 @dataclass
@@ -256,6 +257,7 @@ def _to_compile_job(row: sqlite3.Row) -> WikiCompileJob:
         started_at=d.get("started_at"),
         completed_at=d.get("completed_at"),
         input_json=d.get("input_json"),
+        retry_count=d.get("retry_count") or 0,
     )
 
 
@@ -748,6 +750,12 @@ class WikiStore:
         return _to_compile_job(row) if row else None
 
     def complete_job(self, job_id: int, result_json: Any) -> None:
+        """Mark job completed. No-op if the job was already cancelled."""
+        row = self._db.execute(
+            "SELECT status FROM wiki_compile_jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+        if row and dict(row)["status"] == "cancelled":
+            return
         now = datetime.utcnow().isoformat()
         if isinstance(result_json, dict):
             result_json = json.dumps(result_json)
@@ -757,11 +765,26 @@ class WikiStore:
         )
         self._db.commit()
 
-    def fail_job(self, job_id: int, error: str) -> None:
+    def fail_job(self, job_id: int, error: str) -> int:
+        """Mark job failed, increment retry_count. Returns new retry_count."""
         now = datetime.utcnow().isoformat()
         self._db.execute(
-            "UPDATE wiki_compile_jobs SET status = 'failed', completed_at = ?, error = ? WHERE id = ?",
+            """UPDATE wiki_compile_jobs
+               SET status = 'failed', completed_at = ?, error = ?, retry_count = retry_count + 1
+               WHERE id = ?""",
             (now, error[:2000], job_id),
+        )
+        self._db.commit()
+        row = self._db.execute(
+            "SELECT retry_count FROM wiki_compile_jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+        return dict(row)["retry_count"] if row else 0
+
+    def reset_job_to_pending(self, job_id: int) -> None:
+        """Reset a failed job back to pending for auto-retry by the processor."""
+        self._db.execute(
+            "UPDATE wiki_compile_jobs SET status = 'pending', started_at = NULL, completed_at = NULL WHERE id = ?",
+            (job_id,),
         )
         self._db.commit()
 
