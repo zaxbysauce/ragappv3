@@ -35,6 +35,14 @@ from app.utils.retry import with_retry
 logger = logging.getLogger(__name__)
 
 
+# Stop words stripped before building the FTS5 AND query. Natural-language
+# questions ("who is the afomis chief?") contain these tokens, which are not
+# in memory content and cause implicit-AND matches to fail entirely.
+_FTS_STOP_WORDS = frozenset(
+    "who what when where why how is are was were the a an of for to in on about".split()
+)
+
+
 class MemoryStoreError(Exception):
     """General memory store error."""
 
@@ -380,11 +388,17 @@ class MemoryStore:
         if not query or not query.strip():
             return []
 
-        # Strip FTS5 special operators but preserve technical chars (+, ., -, #, @)
-        sanitized_query = re.sub(r'["\'^*(){}[\]|&~<>]', ' ', query)
-        sanitized_query = ' '.join(sanitized_query.split())
-        if not sanitized_query.strip():
+        # Tokenize and remove stop words so natural-language questions like
+        # "who is the afomis chief?" produce a valid FTS5 AND query ("afomis
+        # chief") rather than failing on punctuation or stop-word tokens that
+        # are absent from memory content.
+        tokens = [
+            t for t in re.findall(r'[a-zA-Z0-9]+', query)
+            if t.lower() not in _FTS_STOP_WORDS
+        ]
+        if not tokens:
             return []
+        sanitized_query = ' '.join(tokens)
 
         conn = self.pool.get_connection()
         try:
