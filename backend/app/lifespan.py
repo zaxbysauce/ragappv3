@@ -26,6 +26,7 @@ from app.services.reranking import RerankingService
 from app.services.secret_manager import SecretManager
 from app.services.toggle_manager import ToggleManager
 from app.services.vector_store import VectorStore, VectorStoreError
+from app.services.wiki_compile_processor import WikiCompileProcessor
 from app.services.wiki_retrieval import WikiRetrievalService
 
 logger = logging.getLogger(__name__)
@@ -417,6 +418,18 @@ async def lifespan(app: FastAPI):
     app.state.wiki_retrieval = WikiRetrievalService(pool=app.state.db_pool)
     logger.info("WikiRetrievalService initialized")
 
+    # Start WikiCompileProcessor (background wiki job worker)
+    try:
+        app.state.wiki_compile_processor = WikiCompileProcessor(pool=app.state.db_pool)
+        await _safe_await(
+            app.state.wiki_compile_processor.start(),
+            "WikiCompileProcessor start",
+            timeout=10,
+        )
+    except Exception as e:
+        logger.warning("WikiCompileProcessor start failed (continuing): %s", e)
+        app.state.wiki_compile_processor = None
+
     # Initialize RAGEngine singleton with cached services
     app.state.rag_engine = RAGEngine(
         embedding_service=app.state.embedding_service,
@@ -464,6 +477,8 @@ async def lifespan(app: FastAPI):
         await app.state.file_watcher.stop()
     if app.state.background_processor:
         await app.state.background_processor.stop()
+    if getattr(app.state, "wiki_compile_processor", None):
+        await app.state.wiki_compile_processor.stop()
     try:
         await app.state.llm_client.close()
     except Exception:

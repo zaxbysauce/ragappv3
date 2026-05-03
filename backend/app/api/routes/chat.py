@@ -26,6 +26,9 @@ from app.config import settings
 from app.models.database import get_pool
 from app.services.citation_validator import repair_against_sources_and_memories
 from app.services.rag_engine import RAGEngine, RAGEngineError
+from app.services.wiki_citation_helpers import (
+    build_per_claim_sources as _build_per_claim_sources_impl,
+)
 from app.services.wiki_store import WikiStore
 from app.utils.assistant_sanitizer import sanitize_chat_messages_content
 
@@ -127,6 +130,16 @@ class FeedbackRequest(BaseModel):
     rating: Optional[str] = None
 
 
+def _build_per_claim_sources(
+    answer: str,
+    doc_sources: List[Dict[str, Any]],
+    memories_as_dicts: List[Dict[str, Any]],
+    wiki_refs: List[Dict[str, Any]],
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Delegate to wiki_citation_helpers.build_per_claim_sources."""
+    return _build_per_claim_sources_impl(answer, doc_sources, memories_as_dicts, wiki_refs)
+
+
 async def _enqueue_wiki_compile_job(
     vault_id: int,
     user_query: str,
@@ -134,23 +147,45 @@ async def _enqueue_wiki_compile_job(
     wiki_refs: List[Dict[str, Any]],
     doc_sources: List[Dict[str, Any]],
     memories: List[Any],
+    session_id: Optional[int] = None,
+    assistant_message_id: Optional[int] = None,
 ) -> None:
     """Enqueue a post-answer wiki compile job. Runs as a background task."""
+    import datetime as _dt
     pool = get_pool(str(settings.sqlite_path))
     try:
+        def _mem_to_dict(m: Any) -> dict:
+            return m if isinstance(m, dict) else (m.__dict__ if hasattr(m, "__dict__") else {})
+
+        memories_as_dicts = [_mem_to_dict(m) for m in memories]
+        per_claim_sources = _build_per_claim_sources(
+            assistant_answer, doc_sources, memories_as_dicts, wiki_refs
+        )
+
         input_data = {
-            "user_query": user_query[:500],
-            "assistant_answer": assistant_answer[:1000],
-            "wiki_refs": [r.get("wiki_label") for r in wiki_refs if r.get("wiki_label")],
-            "doc_source_count": len(doc_sources),
-            "memory_count": len(memories),
+            "user_query": user_query,
+            "assistant_answer": assistant_answer,
+            "vault_id": vault_id,
+            "timestamp": _dt.datetime.utcnow().isoformat(),
+            "session_id": session_id,
+            "assistant_message_id": assistant_message_id,
+            "cited_wiki_labels": [r.get("wiki_label") for r in wiki_refs if r.get("wiki_label")],
+            "cited_source_labels": [s.get("source_label") for s in doc_sources if s.get("source_label")],
+            "cited_memory_labels": [m.get("memory_label") for m in memories_as_dicts if m.get("memory_label")],
+            "wiki_refs": wiki_refs,
+            "doc_sources": doc_sources,
+            "memories": memories_as_dicts,
+            "per_claim_sources": per_claim_sources,
         }
+
+        trigger_id = f"session:{session_id}" if session_id else "session:unknown"
 
         def _create_job(conn):
             store = WikiStore(conn)
             return store.create_job(
                 vault_id=vault_id,
-                trigger_type="chat_answer",
+                trigger_type="query",
+                trigger_id=trigger_id,
                 input_json=input_data,
             )
 
@@ -354,6 +389,21 @@ async def non_stream_chat_response(
     # Sanitize as final defense in depth — strips any residual thinking
     # traces before the response leaves the API boundary.
     full_content = sanitize_chat_messages_content(full_content)
+
+    # Enqueue post-answer wiki compile job (non-blocking, same as streaming path).
+    if vault_id is not None and (wiki_used or sources or memories_used):
+        task = asyncio.create_task(
+            _enqueue_wiki_compile_job(
+                vault_id=vault_id,
+                user_query=message,
+                assistant_answer=full_content,
+                wiki_refs=wiki_used,
+                doc_sources=sources,
+                memories=memories_used,
+            )
+        )
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
 
     return ChatResponse(
         content=full_content,

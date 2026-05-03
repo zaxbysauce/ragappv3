@@ -3,3 +3,13 @@
 {"id": "case-003", "vault_id": 1, "query": "Summarize the contract termination clauses.", "expected_chunk_ids": ["chunk-contract-7", "chunk-contract-8", "chunk-contract-9"], "expected_source_labels": ["S7", "S8", "S9"]}
 {"id": "case-004", "vault_id": 1, "query": "What is my preferred report format?", "expected_chunk_ids": [], "expected_memories": ["M1"]}
 {"id": "case-005", "vault_id": 1, "query": "List the unicorn flavors served on the moon.", "expected_chunk_ids": [], "expect_no_match": true}
+{"id": "wiki-001", "vault_id": 1, "query": "What does AFOMIS stand for?", "expected_chunk_ids": [], "expected_wiki_labels": ["W1"], "expected_facts": ["Air Force"]}
+{"id": "wiki-002", "vault_id": 1, "query": "Who is the AFOMIS chief?", "expected_chunk_ids": [], "expected_wiki_labels": ["W1", "W2"], "expected_facts": ["Chief"]}
+{"id": "wiki-003", "vault_id": 1, "query": "What is Justice Sakyi's role?", "expected_chunk_ids": [], "expected_wiki_labels": ["W2"], "expected_facts": ["AFOMIS"]}
+{"id": "wiki-004", "vault_id": 1, "query": "Who is the deputy of AFOMIS?", "expected_chunk_ids": [], "expected_wiki_labels": ["W1", "W2"], "expected_facts": ["deputy"]}
+{"id": "wiki-005", "vault_id": 1, "query": "List all AFOMIS leadership roles.", "expected_chunk_ids": [], "expected_wiki_labels": ["W1"], "expected_facts": ["Chief", "Deputy"]}
+{"id": "wiki-006", "vault_id": 1, "query": "What does MIS stand for in the context of AFOMIS?", "expected_chunk_ids": [], "expected_wiki_labels": ["W1"], "expected_facts": ["Information System"]}
+{"id": "wiki-007", "vault_id": 1, "query": "Who manages the AFOMIS system?", "expected_chunk_ids": [], "expected_wiki_labels": ["W1", "W2"], "expected_facts": ["manager", "AFOMIS"]}
+{"id": "wiki-008", "vault_id": 1, "query": "Explain the organizational structure of AFOMIS.", "expected_chunk_ids": [], "expected_wiki_labels": ["W1"], "expected_facts": ["Chief", "Director"]}
+{"id": "wiki-009", "vault_id": 1, "query": "What is the role of the AFOMIS coordinator?", "expected_chunk_ids": [], "expected_wiki_labels": ["W1"], "expected_facts": ["Coordinator"]}
+{"id": "wiki-010", "vault_id": 1, "query": "Has AFOMIS been referenced in any recent documents?", "expected_chunk_ids": [], "expected_wiki_labels": ["W1"], "expected_facts": ["AFOMIS"]}

@@ -29,6 +29,33 @@ except ImportError:
     _pa_stub.__version__ = "0.0.0"
     sys.modules["pyarrow"] = _pa_stub
 
+# Stub numpy when not installed. vector_store.py imports numpy at the top level;
+# tests that only exercise pure-Python logic (e.g. RAGEngine._raw_rag_required)
+# do not need the real array implementation.
+try:
+    import numpy  # noqa: F401
+except ImportError:
+    _np_stub = types.ModuleType("numpy")
+    _np_stub.__version__ = "0.0.0"
+    _np_stub.float32 = float
+    _np_stub.ndarray = list
+    _np_stub.array = lambda *a, **kw: list(a[0]) if a else []
+    sys.modules["numpy"] = _np_stub
+
+# Stub jwt (PyJWT) — system-level jwt has a broken C extension in this env.
+# Only stub when the real import fails so a working install is not replaced.
+try:
+    # Attempt to import the actual jwt; if the C extension is broken it raises.
+    _jwt_check = __import__("jwt")
+    _jwt_check.ExpiredSignatureError  # attribute probe to catch partially-broken installs
+except Exception:
+    _jwt_stub = types.ModuleType("jwt")
+    _jwt_stub.encode = lambda *a, **kw: "stub-token"
+    _jwt_stub.decode = lambda *a, **kw: {}
+    _jwt_stub.ExpiredSignatureError = type("ExpiredSignatureError", (Exception,), {})
+    _jwt_stub.InvalidTokenError = type("InvalidTokenError", (Exception,), {})
+    sys.modules["jwt"] = _jwt_stub
+
 # Stub unstructured
 _unstructured = types.ModuleType("unstructured")
 _unstructured.partition = types.ModuleType("unstructured.partition")

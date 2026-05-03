@@ -119,6 +119,7 @@ class WikiCompileJob:
     started_at: Optional[str]
     completed_at: Optional[str]
     input_json: Optional[str] = None
+    retry_count: int = 0
 
 
 @dataclass
@@ -256,6 +257,7 @@ def _to_compile_job(row: sqlite3.Row) -> WikiCompileJob:
         started_at=d.get("started_at"),
         completed_at=d.get("completed_at"),
         input_json=d.get("input_json"),
+        retry_count=d.get("retry_count") or 0,
     )
 
 
@@ -560,6 +562,18 @@ class WikiStore:
             claim.sources = self._load_sources(claim.id)
         return claims
 
+    def find_claim_by_text(self, vault_id: int, claim_text: str) -> Optional[WikiClaim]:
+        """Return an existing claim matching vault + claim_text, or None."""
+        row = self._db.execute(
+            "SELECT * FROM wiki_claims WHERE vault_id = ? AND claim_text = ? LIMIT 1",
+            (vault_id, claim_text),
+        ).fetchone()
+        if not row:
+            return None
+        claim = _to_wiki_claim(row)
+        claim.sources = self._load_sources(claim.id)
+        return claim
+
     def update_claim(self, claim_id: int, vault_id: int, **kwargs: Any) -> Optional[WikiClaim]:
         allowed = {"claim_text", "claim_type", "subject", "predicate", "object", "source_type", "status", "confidence", "page_id"}
         updates = {k: v for k, v in kwargs.items() if k in allowed}
@@ -664,6 +678,23 @@ class WikiStore:
         row = self._db.execute("SELECT * FROM wiki_relations WHERE id = ?", (cur.lastrowid,)).fetchone()
         return _to_wiki_relation(row)
 
+    def find_relation(
+        self,
+        vault_id: int,
+        predicate: str,
+        subject_entity_id: Optional[int],
+        object_entity_id: Optional[int],
+    ) -> Optional[WikiRelation]:
+        """Return an existing relation matching vault + key triple, or None."""
+        row = self._db.execute(
+            """SELECT * FROM wiki_relations
+               WHERE vault_id = ? AND predicate = ?
+                 AND subject_entity_id IS ? AND object_entity_id IS ?
+               LIMIT 1""",
+            (vault_id, predicate, subject_entity_id, object_entity_id),
+        ).fetchone()
+        return _to_wiki_relation(row) if row else None
+
     def list_relations(self, vault_id: int, entity_id: Optional[int] = None) -> list[WikiRelation]:
         if entity_id is not None:
             rows = self._db.execute(
@@ -711,6 +742,275 @@ class WikiStore:
                 (vault_id,),
             ).fetchall()
         return [_to_compile_job(r) for r in rows]
+
+    def get_job(self, job_id: int, vault_id: int) -> Optional[WikiCompileJob]:
+        row = self._db.execute(
+            "SELECT * FROM wiki_compile_jobs WHERE id = ? AND vault_id = ?",
+            (job_id, vault_id),
+        ).fetchone()
+        return _to_compile_job(row) if row else None
+
+    def claim_next_pending_job(self) -> Optional[WikiCompileJob]:
+        """Atomically claim the oldest pending job. Returns the claimed job or None.
+
+        Uses BEGIN IMMEDIATE so concurrent callers cannot claim the same row.
+        """
+        now = datetime.utcnow().isoformat()
+        try:
+            self._db.execute("BEGIN IMMEDIATE")
+            row = self._db.execute(
+                "SELECT * FROM wiki_compile_jobs WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1"
+            ).fetchone()
+            if not row:
+                self._db.rollback()
+                return None
+            job_id = dict(row)["id"]
+            self._db.execute(
+                "UPDATE wiki_compile_jobs SET status = 'running', started_at = ? WHERE id = ?",
+                (now, job_id),
+            )
+            self._db.commit()
+        except Exception:
+            self._db.rollback()
+            raise
+        row = self._db.execute(
+            "SELECT * FROM wiki_compile_jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+        return _to_compile_job(row) if row else None
+
+    def complete_job(self, job_id: int, result_json: Any) -> None:
+        """Mark job completed. No-op if the job was already cancelled."""
+        row = self._db.execute(
+            "SELECT status FROM wiki_compile_jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+        if row and dict(row)["status"] == "cancelled":
+            return
+        now = datetime.utcnow().isoformat()
+        if isinstance(result_json, dict):
+            result_json = json.dumps(result_json)
+        self._db.execute(
+            "UPDATE wiki_compile_jobs SET status = 'completed', completed_at = ?, result_json = ? WHERE id = ?",
+            (now, result_json or "{}", job_id),
+        )
+        self._db.commit()
+
+    def fail_job(self, job_id: int, error: str) -> int:
+        """Mark job failed, increment retry_count. Returns new retry_count.
+
+        No-op if the job is already cancelled.
+        """
+        now = datetime.utcnow().isoformat()
+        self._db.execute(
+            """UPDATE wiki_compile_jobs
+               SET status = 'failed', completed_at = ?, error = ?, retry_count = retry_count + 1
+               WHERE id = ? AND status != 'cancelled'""",
+            (now, error[:2000], job_id),
+        )
+        self._db.commit()
+        row = self._db.execute(
+            "SELECT retry_count FROM wiki_compile_jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+        return dict(row)["retry_count"] if row else 0
+
+    def reset_job_to_pending(self, job_id: int) -> None:
+        """Reset a failed job back to pending for auto-retry by the processor."""
+        self._db.execute(
+            "UPDATE wiki_compile_jobs SET status = 'pending', started_at = NULL, completed_at = NULL WHERE id = ?",
+            (job_id,),
+        )
+        self._db.commit()
+
+    def cancel_job(self, job_id: int, vault_id: int) -> bool:
+        """Cancel a pending or running job. Returns True if cancelled."""
+        row = self._db.execute(
+            "SELECT status FROM wiki_compile_jobs WHERE id = ? AND vault_id = ?",
+            (job_id, vault_id),
+        ).fetchone()
+        if not row or dict(row)["status"] not in ("pending", "running"):
+            return False
+        self._db.execute(
+            "UPDATE wiki_compile_jobs SET status = 'cancelled', completed_at = ? WHERE id = ?",
+            (datetime.utcnow().isoformat(), job_id),
+        )
+        self._db.commit()
+        return True
+
+    def retry_job(self, job_id: int, vault_id: int) -> Optional[WikiCompileJob]:
+        """Reset a failed job to pending. Returns the updated job or None."""
+        row = self._db.execute(
+            "SELECT status FROM wiki_compile_jobs WHERE id = ? AND vault_id = ?",
+            (job_id, vault_id),
+        ).fetchone()
+        if not row or dict(row)["status"] != "failed":
+            return None
+        self._db.execute(
+            "UPDATE wiki_compile_jobs SET status = 'pending', error = NULL, started_at = NULL, completed_at = NULL WHERE id = ?",
+            (job_id,),
+        )
+        self._db.commit()
+        row = self._db.execute(
+            "SELECT * FROM wiki_compile_jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+        return _to_compile_job(row) if row else None
+
+    def reset_running_jobs(self) -> int:
+        """Reset any jobs stuck in 'running' to 'pending' on processor startup.
+
+        Returns the number of jobs reset (orphans from a previous crash).
+        """
+        cur = self._db.execute(
+            "UPDATE wiki_compile_jobs SET status = 'pending', started_at = NULL WHERE status = 'running'"
+        )
+        self._db.commit()
+        return cur.rowcount
+
+    def mark_claims_stale_by_file(self, file_id: int, vault_id: int) -> dict:
+        """Mark wiki claims stale when their source document is deleted/reindexed.
+
+        - Claims whose ONLY source was this file are set status='stale'.
+        - Claims with other sources get a 'weak_provenance' lint finding only.
+        Returns counts of stale/weak findings created.
+        """
+        stale_count = 0
+        weak_count = 0
+        now = datetime.utcnow().isoformat()
+
+        source_rows = self._db.execute(
+            "SELECT DISTINCT claim_id FROM wiki_claim_sources WHERE file_id = ? AND claim_id IS NOT NULL",
+            (file_id,),
+        ).fetchall()
+
+        for sr in source_rows:
+            claim_id = dict(sr)["claim_id"]
+            claim_row = self._db.execute(
+                "SELECT vault_id, status, claim_text FROM wiki_claims WHERE id = ? AND vault_id = ?",
+                (claim_id, vault_id),
+            ).fetchone()
+            if not claim_row:
+                continue
+            other_sources = self._db.execute(
+                "SELECT COUNT(*) FROM wiki_claim_sources WHERE claim_id = ? AND (file_id != ? OR file_id IS NULL)",
+                (claim_id, file_id),
+            ).fetchone()[0]
+            if other_sources == 0:
+                self._db.execute(
+                    "UPDATE wiki_claims SET status = 'superseded', updated_at = ? WHERE id = ?",
+                    (now, claim_id),
+                )
+                self._db.execute(
+                    """INSERT INTO wiki_lint_findings
+                       (vault_id, finding_type, severity, title, details,
+                        related_page_ids_json, related_claim_ids_json, status, created_at, updated_at)
+                       VALUES (?, 'stale', 'medium', ?, ?, '[]', ?, 'open', ?, ?)""",
+                    (
+                        vault_id,
+                        f"Claim stale: source document deleted (file_id={file_id})",
+                        dict(claim_row)["claim_text"][:200],
+                        json.dumps([claim_id]),
+                        now, now,
+                    ),
+                )
+                stale_count += 1
+            else:
+                self._db.execute(
+                    """INSERT INTO wiki_lint_findings
+                       (vault_id, finding_type, severity, title, details,
+                        related_page_ids_json, related_claim_ids_json, status, created_at, updated_at)
+                       VALUES (?, 'weak_provenance', 'low', ?, ?, '[]', ?, 'open', ?, ?)""",
+                    (
+                        vault_id,
+                        f"Weak provenance: source document deleted (file_id={file_id})",
+                        dict(claim_row)["claim_text"][:200],
+                        json.dumps([claim_id]),
+                        now, now,
+                    ),
+                )
+                weak_count += 1
+
+        self._db.commit()
+        return {"stale": stale_count, "weak_provenance": weak_count}
+
+    def mark_claims_stale_by_memory(self, memory_id: int, vault_id: int) -> dict:
+        """Mark wiki claims stale when their source memory is edited or deleted.
+
+        Same policy as mark_claims_stale_by_file: sole-source → stale,
+        multi-source → weak_provenance lint finding.
+        """
+        stale_count = 0
+        weak_count = 0
+        now = datetime.utcnow().isoformat()
+
+        source_rows = self._db.execute(
+            "SELECT DISTINCT claim_id FROM wiki_claim_sources WHERE memory_id = ? AND claim_id IS NOT NULL",
+            (memory_id,),
+        ).fetchall()
+
+        for sr in source_rows:
+            claim_id = dict(sr)["claim_id"]
+            claim_row = self._db.execute(
+                "SELECT vault_id, status, claim_text FROM wiki_claims WHERE id = ? AND vault_id = ?",
+                (claim_id, vault_id),
+            ).fetchone()
+            if not claim_row:
+                continue
+            other_sources = self._db.execute(
+                "SELECT COUNT(*) FROM wiki_claim_sources WHERE claim_id = ? AND (memory_id != ? OR memory_id IS NULL)",
+                (claim_id, memory_id),
+            ).fetchone()[0]
+            if other_sources == 0:
+                self._db.execute(
+                    "UPDATE wiki_claims SET status = 'superseded', updated_at = ? WHERE id = ?",
+                    (now, claim_id),
+                )
+                self._db.execute(
+                    """INSERT INTO wiki_lint_findings
+                       (vault_id, finding_type, severity, title, details,
+                        related_page_ids_json, related_claim_ids_json, status, created_at, updated_at)
+                       VALUES (?, 'stale', 'medium', ?, ?, '[]', ?, 'open', ?, ?)""",
+                    (
+                        vault_id,
+                        f"Claim stale: source memory edited/deleted (memory_id={memory_id})",
+                        dict(claim_row)["claim_text"][:200],
+                        json.dumps([claim_id]),
+                        now, now,
+                    ),
+                )
+                stale_count += 1
+            else:
+                self._db.execute(
+                    """INSERT INTO wiki_lint_findings
+                       (vault_id, finding_type, severity, title, details,
+                        related_page_ids_json, related_claim_ids_json, status, created_at, updated_at)
+                       VALUES (?, 'weak_provenance', 'low', ?, ?, '[]', ?, 'open', ?, ?)""",
+                    (
+                        vault_id,
+                        f"Weak provenance: source memory edited/deleted (memory_id={memory_id})",
+                        dict(claim_row)["claim_text"][:200],
+                        json.dumps([claim_id]),
+                        now, now,
+                    ),
+                )
+                weak_count += 1
+
+        self._db.commit()
+        return {"stale": stale_count, "weak_provenance": weak_count}
+
+    def update_lint_finding(self, finding_id: int, vault_id: int, status: str) -> Optional[WikiLintFinding]:
+        """Resolve or dismiss a lint finding. Returns updated finding or None."""
+        if status not in ("resolved", "dismissed", "acknowledged"):
+            raise ValueError(f"Invalid lint finding status: {status!r}")
+        now = datetime.utcnow().isoformat()
+        cur = self._db.execute(
+            "UPDATE wiki_lint_findings SET status = ?, updated_at = ? WHERE id = ? AND vault_id = ?",
+            (status, now, finding_id, vault_id),
+        )
+        if cur.rowcount == 0:
+            return None
+        self._db.commit()
+        row = self._db.execute(
+            "SELECT * FROM wiki_lint_findings WHERE id = ?", (finding_id,)
+        ).fetchone()
+        return _to_lint_finding(row) if row else None
 
     # -----------------------------------------------------------------------
     # Lint Findings

@@ -5,16 +5,18 @@ import { WikiPageList } from "./WikiPageList";
 import { WikiPageDetail } from "./WikiPageDetail";
 import { WikiEditDialog } from "./WikiEditDialog";
 import { WikiLintPanel } from "./WikiLintPanel";
+import { WikiJobsPanel } from "./WikiJobsPanel";
 import { useWikiData } from "@/hooks/useWikiData";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, Layers } from "lucide-react";
 
 export default function WikiPage() {
   const { activeVaultId } = useVaultStore();
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editingPage, setEditingPage] = useState<import("@/lib/api").WikiPage | null>(null);
   const [lintPanelOpen, setLintPanelOpen] = useState(false);
+  const [jobsPanelOpen, setJobsPanelOpen] = useState(false);
 
   const {
     pages,
@@ -87,14 +89,24 @@ export default function WikiPage() {
           <h1 className="text-xl font-semibold">Wiki</h1>
           <VaultSelector />
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => setLintPanelOpen((v) => !v)}
-        >
-          <AlertCircle className="w-4 h-4 mr-1" />
-          Lint {lintFindings.length > 0 && `(${lintFindings.length})`}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => { setJobsPanelOpen((v) => !v); setLintPanelOpen(false); }}
+          >
+            <Layers className="w-4 h-4 mr-1" />
+            Jobs
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => { setLintPanelOpen((v) => !v); setJobsPanelOpen(false); }}
+          >
+            <AlertCircle className="w-4 h-4 mr-1" />
+            Lint {lintFindings.length > 0 && `(${lintFindings.length})`}
+          </Button>
+        </div>
       </div>
 
       {/* Main content */}
@@ -141,6 +153,13 @@ export default function WikiPage() {
               loading={loading}
               onRunLint={handleRunLint}
             />
+          </div>
+        )}
+
+        {/* Jobs panel: right side overlay */}
+        {jobsPanelOpen && activeVaultId && (
+          <div className="w-80 border-l border-border p-4 overflow-y-auto shrink-0">
+            <WikiJobsPanel vaultId={activeVaultId} />
           </div>
         )}
       </div>

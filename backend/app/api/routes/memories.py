@@ -434,6 +434,15 @@ async def update_memory(
                     "Could not recompute embedding for memory %d after content update",
                     memory_id,
                 )
+            # Mark wiki claims stale since the source memory content changed
+            if memory_vault_id is not None:
+                try:
+                    from app.services.wiki_store import WikiStore as _WikiStore
+                    await asyncio.to_thread(
+                        lambda: _WikiStore(conn).mark_claims_stale_by_memory(memory_id, memory_vault_id)
+                    )
+                except Exception as _wiki_exc:
+                    logger.warning("mark_claims_stale_by_memory(%d) failed: %s", memory_id, _wiki_exc)
 
         # Fetch updated record
         cursor = await asyncio.to_thread(
@@ -501,6 +510,16 @@ async def delete_memory(
     if memory_vault_id is not None:
         if not await evaluate_policy(user, "vault", memory_vault_id, "admin"):
             raise HTTPException(status_code=403, detail="No admin access to this vault")
+
+    # Mark wiki claims stale before removing the memory record
+    if memory_vault_id is not None:
+        try:
+            from app.services.wiki_store import WikiStore as _WikiStore
+            await asyncio.to_thread(
+                lambda: _WikiStore(conn).mark_claims_stale_by_memory(memory_id, memory_vault_id)
+            )
+        except Exception as _wiki_exc:
+            logger.warning("mark_claims_stale_by_memory(%d) failed: %s", memory_id, _wiki_exc)
 
     # Delete the memory
     await asyncio.to_thread(

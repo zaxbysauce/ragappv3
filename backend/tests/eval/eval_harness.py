@@ -58,6 +58,7 @@ class GoldenCase:
     expected_source_labels: List[str] = field(default_factory=list)
     expected_facts: List[str] = field(default_factory=list)
     expected_memories: List[str] = field(default_factory=list)
+    expected_wiki_labels: List[str] = field(default_factory=list)
     expect_no_match: bool = False
 
 
@@ -69,6 +70,7 @@ class CaseResult:
     answer: str = ""
     cited_source_labels: List[str] = field(default_factory=list)
     cited_memory_labels: List[str] = field(default_factory=list)
+    cited_wiki_labels: List[str] = field(default_factory=list)
     invalid_citations: List[str] = field(default_factory=list)
     no_match_returned: bool = False
 
@@ -83,6 +85,7 @@ class CaseMetrics:
     ndcg_at_k: Optional[float]
     citation_validity: Optional[float]
     memory_recall: Optional[float]
+    wiki_recall: Optional[float]
     unsupported_citations: int
     fact_coverage: Optional[float]
     no_match_correct: Optional[bool]
@@ -117,6 +120,7 @@ def _case_from_dict(obj: Dict[str, Any]) -> GoldenCase:
         expected_source_labels=list(obj.get("expected_source_labels") or []),
         expected_facts=list(obj.get("expected_facts") or []),
         expected_memories=list(obj.get("expected_memories") or []),
+        expected_wiki_labels=list(obj.get("expected_wiki_labels") or []),
         expect_no_match=bool(obj.get("expect_no_match", False)),
     )
 
@@ -222,6 +226,7 @@ class EvalRunner:
                         ndcg_at_k=None,
                         citation_validity=None,
                         memory_recall=None,
+                        wiki_recall=None,
                         unsupported_citations=0,
                         fact_coverage=None,
                         no_match_correct=None,
@@ -261,6 +266,12 @@ class EvalRunner:
                 if case.expected_facts
                 else None
             )
+            wiki_recall = (
+                recall_at_k(result.cited_wiki_labels, case.expected_wiki_labels, self.top_k)
+                if case.expected_wiki_labels
+                else None
+            )
+
             no_match_correct: Optional[bool]
             if case.expect_no_match:
                 no_match_correct = bool(result.no_match_returned)
@@ -279,6 +290,7 @@ class EvalRunner:
                     ndcg_at_k=ndcg,
                     citation_validity=cv,
                     memory_recall=mem_recall,
+                    wiki_recall=wiki_recall,
                     unsupported_citations=len(result.invalid_citations),
                     fact_coverage=facts,
                     no_match_correct=no_match_correct,
@@ -310,6 +322,7 @@ class EvalRunner:
             "ndcg_at_k_mean": _mean("ndcg_at_k"),
             "citation_validity_mean": _mean("citation_validity"),
             "memory_recall_mean": _mean("memory_recall"),
+            "wiki_recall_mean": _mean("wiki_recall"),
             "fact_coverage_mean": _mean("fact_coverage"),
             "unsupported_citation_total": sum(c.unsupported_citations for c in m),
             "no_match_correct_rate": no_match_rate,
@@ -335,6 +348,7 @@ class EvalRunner:
             f"nDCG@k:             {_fmt(s['ndcg_at_k_mean'])}",
             f"citation validity:  {_fmt(s['citation_validity_mean'])}",
             f"memory recall:      {_fmt(s['memory_recall_mean'])}",
+            f"wiki recall:        {_fmt(s['wiki_recall_mean'])}",
             f"fact coverage:      {_fmt(s['fact_coverage_mean'])}",
             f"unsupported cites:  {s['unsupported_citation_total']}",
             f"no-match correctness: {_fmt(s['no_match_correct_rate'])}",
@@ -357,4 +371,8 @@ __all__ = [
     "mean_reciprocal_rank",
     "ndcg_at_k",
     "recall_at_k",
+    "wiki_recall_mean",
 ]
+
+# Convenience re-export so callers can import the function directly.
+wiki_recall_mean = recall_at_k  # same algorithm, just different semantic label

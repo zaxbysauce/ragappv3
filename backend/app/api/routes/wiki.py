@@ -4,6 +4,7 @@ Wiki / Knowledge Compiler API routes.
 All endpoints are vault-scoped. Access follows vault access permissions.
 """
 
+import json
 import logging
 import sqlite3
 from dataclasses import asdict
@@ -404,3 +405,325 @@ async def search_wiki(
         "claims": [_as_dict(c) for c in results["claims"]],
         "entities": [_as_dict(e) for e in results["entities"]],
     }
+
+
+# ---------------------------------------------------------------------------
+# Job management routes
+# ---------------------------------------------------------------------------
+
+@router.get("/wiki/jobs/{job_id}")
+async def get_wiki_job(
+    job_id: int,
+    vault_id: int = Query(...),
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_active_user),
+):
+    await _require_vault_read(user, vault_id)
+    store = WikiStore(db)
+    job = store.get_job(job_id, vault_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    return _as_dict(job)
+
+
+@router.post("/wiki/jobs/{job_id}/retry", status_code=200)
+async def retry_wiki_job(
+    job_id: int,
+    vault_id: int = Query(...),
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_active_user),
+):
+    await _require_vault_write(user, vault_id)
+    store = WikiStore(db)
+    job = store.retry_job(job_id, vault_id)
+    if not job:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Job {job_id} not found or not in 'failed' state",
+        )
+    return _as_dict(job)
+
+
+@router.post("/wiki/jobs/{job_id}/cancel", status_code=200)
+async def cancel_wiki_job(
+    job_id: int,
+    vault_id: int = Query(...),
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_active_user),
+):
+    await _require_vault_write(user, vault_id)
+    store = WikiStore(db)
+    cancelled = store.cancel_job(job_id, vault_id)
+    if not cancelled:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Job {job_id} not found or not cancellable",
+        )
+    return {"job_id": job_id, "status": "cancelled"}
+
+
+# ---------------------------------------------------------------------------
+# Document wiki status routes
+# ---------------------------------------------------------------------------
+
+@router.post("/wiki/documents/{file_id}/compile", status_code=202)
+async def compile_document_wiki(
+    file_id: int,
+    vault_id: int = Query(...),
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_active_user),
+):
+    """Manually enqueue a wiki ingest job for an already-indexed document."""
+    await _require_vault_write(user, vault_id)
+    db.row_factory = sqlite3.Row
+    file_row = db.execute(
+        "SELECT id, file_name FROM files WHERE id = ? AND vault_id = ?",
+        (file_id, vault_id),
+    ).fetchone()
+    if not file_row:
+        raise HTTPException(status_code=404, detail=f"File {file_id} not found in vault {vault_id}")
+    store = WikiStore(db)
+    job = store.create_job(
+        vault_id=vault_id,
+        trigger_type="ingest",
+        trigger_id=f"file:{file_id}",
+        input_json={"file_id": file_id, "vault_id": vault_id},
+    )
+    return {"job_id": job.id, "status": job.status}
+
+
+@router.get("/wiki/documents/{file_id}/status")
+async def get_document_wiki_status(
+    file_id: int,
+    vault_id: int = Query(...),
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_active_user),
+):
+    """Return semantic wiki status, counts, linked pages/claims, and latest job for a document."""
+    await _require_vault_read(user, vault_id)
+    db.row_factory = sqlite3.Row
+    store = WikiStore(db)
+
+    # Collect ingest jobs for this file
+    jobs = store.list_jobs(vault_id)
+    file_jobs = sorted(
+        [j for j in jobs if j.trigger_type == "ingest" and j.trigger_id == f"file:{file_id}"],
+        key=lambda j: j.created_at,
+        reverse=True,
+    )
+    latest_job = file_jobs[0] if file_jobs else None
+
+    # Derive semantic status
+    if latest_job is None:
+        wiki_status = "not_compiled"
+    elif latest_job.status == "running":
+        wiki_status = "compiling"
+    elif latest_job.status == "failed":
+        wiki_status = "failed"
+    elif latest_job.status == "cancelled":
+        wiki_status = "not_compiled"
+    elif latest_job.status == "completed":
+        try:
+            result = json.loads(latest_job.result_json or "{}")
+        except (json.JSONDecodeError, TypeError):
+            result = {}
+        if result.get("skipped"):
+            wiki_status = "skipped"
+        else:
+            wiki_status = "compiled"
+    else:
+        wiki_status = "not_compiled"
+
+    # Count claims sourced from this file
+    claims_rows = db.execute(
+        """SELECT wc.id, wc.status, wc.page_id
+           FROM wiki_claims wc
+           JOIN wiki_claim_sources wcs ON wcs.claim_id = wc.id
+           WHERE wcs.file_id = ? AND wc.vault_id = ?""",
+        (file_id, vault_id),
+    ).fetchall()
+    claims_total = len(claims_rows)
+    active_claims = sum(1 for r in claims_rows if dict(r)["status"] == "active")
+
+    # Collect linked page IDs
+    page_ids = {dict(r)["page_id"] for r in claims_rows if dict(r)["page_id"]}
+    pages_info = []
+    for pid in page_ids:
+        row = db.execute(
+            "SELECT id, slug, title, page_type, status FROM wiki_pages WHERE id = ? AND vault_id = ?",
+            (pid, vault_id),
+        ).fetchone()
+        if row:
+            pages_info.append(dict(row))
+
+    # A completed job with zero extracted claims is "skipped" (no extractable knowledge)
+    if wiki_status == "compiled" and claims_total == 0 and not pages_info:
+        wiki_status = "skipped"
+
+    # Count open lint findings related to linked pages
+    lint_count = 0
+    if page_ids:
+        lint_rows = db.execute(
+            "SELECT related_page_ids_json FROM wiki_lint_findings WHERE vault_id = ? AND status = 'open'",
+            (vault_id,),
+        ).fetchall()
+        for lr in lint_rows:
+            try:
+                related = json.loads(dict(lr)["related_page_ids_json"] or "[]")
+                if any(pid in page_ids for pid in related):
+                    lint_count += 1
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+    return {
+        "file_id": file_id,
+        "wiki_status": wiki_status,
+        "pages_count": len(pages_info),
+        "claims_count": claims_total,
+        "active_claims": active_claims,
+        "lint_count": lint_count,
+        "pages": pages_info,
+        "latest_job": _as_dict(latest_job) if latest_job else None,
+        "job_count": len(file_jobs),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Memory wiki status route
+# ---------------------------------------------------------------------------
+
+@router.get("/wiki/memories/{memory_id}/status")
+async def get_memory_wiki_status(
+    memory_id: int,
+    vault_id: int = Query(...),
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_active_user),
+):
+    """Return semantic wiki status, linked pages/claims, and latest job for a memory record."""
+    await _require_vault_read(user, vault_id)
+    db.row_factory = sqlite3.Row
+    store = WikiStore(db)
+
+    # Collect memory jobs
+    jobs = store.list_jobs(vault_id)
+    mem_jobs = sorted(
+        [j for j in jobs
+         if j.trigger_type in ("memory", "manual")
+         and j.trigger_id == f"memory:{memory_id}"],
+        key=lambda j: j.created_at,
+        reverse=True,
+    )
+    latest_job = mem_jobs[0] if mem_jobs else None
+
+    # Claims sourced from this memory
+    claims_rows = db.execute(
+        """SELECT wc.id, wc.status, wc.page_id, wc.claim_text
+           FROM wiki_claims wc
+           JOIN wiki_claim_sources wcs ON wcs.claim_id = wc.id
+           WHERE wcs.memory_id = ? AND wc.vault_id = ?""",
+        (memory_id, vault_id),
+    ).fetchall()
+
+    claims_data = [dict(r) for r in claims_rows]
+    active_claims = sum(1 for c in claims_data if c["status"] == "active")
+    stale_claims = sum(1 for c in claims_data if c["status"] == "superseded")
+
+    # Linked pages
+    page_ids = {c["page_id"] for c in claims_data if c["page_id"]}
+    linked_pages = []
+    for pid in page_ids:
+        row = db.execute(
+            "SELECT id, slug, title, page_type, status FROM wiki_pages WHERE id = ? AND vault_id = ?",
+            (pid, vault_id),
+        ).fetchone()
+        if row:
+            linked_pages.append(dict(row))
+
+    # Semantic status
+    if latest_job and latest_job.status == "running":
+        wiki_status = "promoting"
+    elif stale_claims > 0 and active_claims == 0:
+        wiki_status = "stale"
+    elif active_claims > 0:
+        wiki_status = "promoted"
+    elif len(claims_data) > 0:
+        wiki_status = "promoted"
+    else:
+        wiki_status = "not_promoted"
+
+    return {
+        "memory_id": memory_id,
+        "wiki_status": wiki_status,
+        "claims_count": len(claims_data),
+        "active_claims": active_claims,
+        "stale_claims": stale_claims,
+        "linked_pages": linked_pages,
+        "latest_job": _as_dict(latest_job) if latest_job else None,
+        "job_count": len(mem_jobs),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Relations route
+# ---------------------------------------------------------------------------
+
+@router.get("/wiki/relations")
+async def list_wiki_relations(
+    vault_id: int = Query(...),
+    entity_id: Optional[int] = Query(None),
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_active_user),
+):
+    await _require_vault_read(user, vault_id)
+    store = WikiStore(db)
+    relations = store.list_relations(vault_id=vault_id, entity_id=entity_id)
+    return {"relations": [_as_dict(r) for r in relations]}
+
+
+# ---------------------------------------------------------------------------
+# Lint finding management
+# ---------------------------------------------------------------------------
+
+class LintFindingUpdateRequest(BaseModel):
+    status: str = Field(..., description="New status: resolved, dismissed, or acknowledged")
+
+
+@router.post("/wiki/lint/{finding_id}/resolve", status_code=200)
+async def resolve_lint_finding(
+    finding_id: int,
+    body: LintFindingUpdateRequest,
+    vault_id: int = Query(...),
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_active_user),
+):
+    await _require_vault_write(user, vault_id)
+    store = WikiStore(db)
+    try:
+        finding = store.update_lint_finding(finding_id, vault_id, body.status)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not finding:
+        raise HTTPException(status_code=404, detail=f"Lint finding {finding_id} not found")
+    return _as_dict(finding)
+
+
+# ---------------------------------------------------------------------------
+# Full vault recompile
+# ---------------------------------------------------------------------------
+
+@router.post("/wiki/recompile", status_code=202)
+async def recompile_vault_wiki(
+    vault_id: int = Query(...),
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_active_user),
+):
+    """Enqueue a settings_reindex job to re-derive all stale claims in a vault."""
+    await _require_vault_write(user, vault_id)
+    store = WikiStore(db)
+    job = store.create_job(
+        vault_id=vault_id,
+        trigger_type="settings_reindex",
+        trigger_id=f"vault:{vault_id}",
+        input_json={"vault_id": vault_id},
+    )
+    return {"job_id": job.id, "status": job.status}

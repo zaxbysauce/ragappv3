@@ -1266,4 +1266,30 @@ class DocumentProcessor:
         finally:
             self.pool.release_connection(conn)
 
+        # Save full parsed text and enqueue wiki compile job (fire-and-forget; non-blocking).
+        # parsed_text is stored on the files row so manual recompile can use it without
+        # re-parsing the original file.
+        try:
+            from app.services.wiki_store import WikiStore as _WikiStore
+
+            _full_text = document_text or ""
+            conn = self.pool.get_connection()
+            try:
+                if _full_text:
+                    conn.execute(
+                        "UPDATE files SET parsed_text = ? WHERE id = ?",
+                        (_full_text, file_id),
+                    )
+                    conn.commit()
+                _WikiStore(conn).create_job(
+                    vault_id=vault_id,
+                    trigger_type="ingest",
+                    trigger_id=f"file:{file_id}",
+                    input_json={"file_id": file_id, "vault_id": vault_id},
+                )
+            finally:
+                self.pool.release_connection(conn)
+        except Exception as _wiki_exc:
+            logger.warning("Failed to enqueue wiki ingest job for file_id=%d: %s", file_id, _wiki_exc)
+
         return ProcessedDocument(file_id=file_id, chunks=chunks)
