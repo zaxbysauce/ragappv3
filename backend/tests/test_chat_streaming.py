@@ -64,7 +64,7 @@ class TestChatStreaming(unittest.TestCase):
         self.client = TestClient(app)
 
     def tearDown(self):
-        from app.api.deps import get_rag_engine, get_current_active_user
+        from app.api.deps import get_current_active_user, get_rag_engine
         from app.main import app
         app.dependency_overrides.pop(get_rag_engine, None)
         app.dependency_overrides.pop(get_current_active_user, None)
@@ -79,7 +79,7 @@ class TestChatStreaming(unittest.TestCase):
 
     def _set_mock_rag_engine(self, mock_query_fn):
         """Helper to override get_rag_engine with a mock that uses the given query function."""
-        from app.api.deps import get_rag_engine, get_current_active_user
+        from app.api.deps import get_current_active_user, get_rag_engine
         from app.main import app
 
         mock_engine = MagicMock()
