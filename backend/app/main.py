@@ -14,8 +14,10 @@ from starlette.responses import FileResponse
 from app.api.routes.admin import router as admin_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.chat import router as chat_router
-from app.api.routes.documents import router as documents_router
-from app.api.routes.documents import validation_exception_handler
+from app.api.routes.documents import (
+    router as documents_router,
+    validation_exception_handler,
+)
 from app.api.routes.email import router as email_router
 from app.api.routes.eval import router as eval_router
 from app.api.routes.groups import router as groups_router
@@ -27,8 +29,8 @@ from app.api.routes.settings import router as settings_router
 from app.api.routes.users import router as users_router
 from app.api.routes.vault_members import (
     group_access_router as vault_group_access_router,
+    router as vault_members_router,
 )
-from app.api.routes.vault_members import router as vault_members_router
 from app.api.routes.vaults import router as vaults_router
 from app.api.routes.wiki import router as wiki_router
 from app.config import settings
