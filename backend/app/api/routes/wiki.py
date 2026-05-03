@@ -7,7 +7,7 @@ All endpoints are vault-scoped. Access follows vault access permissions.
 import logging
 import sqlite3
 from dataclasses import asdict
-from typing import Any, Optional
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field

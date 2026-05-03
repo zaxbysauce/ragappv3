@@ -8,10 +8,9 @@ FTS search is backed by wiki_pages_fts, wiki_claims_fts, wiki_entities_fts.
 import json
 import re
 import sqlite3
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Optional
-
 
 # ---------------------------------------------------------------------------
 # DTO dataclasses

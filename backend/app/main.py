@@ -16,6 +16,8 @@ from app.api.routes.auth import router as auth_router
 from app.api.routes.chat import router as chat_router
 from app.api.routes.documents import (
     router as documents_router,
+)
+from app.api.routes.documents import (
     validation_exception_handler,
 )
 from app.api.routes.email import router as email_router
@@ -29,6 +31,8 @@ from app.api.routes.settings import router as settings_router
 from app.api.routes.users import router as users_router
 from app.api.routes.vault_members import (
     group_access_router as vault_group_access_router,
+)
+from app.api.routes.vault_members import (
     router as vault_members_router,
 )
 from app.api.routes.vaults import router as vaults_router

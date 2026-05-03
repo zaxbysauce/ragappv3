@@ -58,7 +58,6 @@ from app.api.deps import get_current_active_user, get_db, get_vector_store
 from app.config import settings
 from app.main import app
 
-
 _MOCK_SUPERADMIN = {
     "id": 0,
     "username": "admin",
