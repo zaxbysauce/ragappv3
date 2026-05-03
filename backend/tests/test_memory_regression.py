@@ -46,7 +46,6 @@ from app.models.database import SQLiteConnectionPool, init_db
 from app.services.memory_store import MemoryRecord, MemoryStore
 from app.services.rag_engine import RAGEngine
 
-
 AFOMIS_MEMORY = (
     "AFOMIS stands for Air Force Operational Medicine Information Systems. "
     "Justice Sakyi is the AFOMIS Chief and Major Justin Woods is his deputy."
