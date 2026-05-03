@@ -1562,4 +1562,57 @@ export async function promoteMemoryToWiki(request: PromoteMemoryRequest): Promis
   return response.data;
 }
 
+export async function listWikiJobs(params: {
+  vault_id: number;
+  status?: string;
+}): Promise<{ jobs: WikiCompileJob[] }> {
+  const response = await apiClient.get<{ jobs: WikiCompileJob[] }>("/wiki/jobs", { params });
+  return response.data;
+}
+
+export async function getWikiJob(jobId: number, vaultId: number): Promise<WikiCompileJob> {
+  const response = await apiClient.get<WikiCompileJob>(`/wiki/jobs/${jobId}`, {
+    params: { vault_id: vaultId },
+  });
+  return response.data;
+}
+
+export async function retryWikiJob(jobId: number, vaultId: number): Promise<WikiCompileJob> {
+  const response = await apiClient.post<WikiCompileJob>(`/wiki/jobs/${jobId}/retry`, null, {
+    params: { vault_id: vaultId },
+  });
+  return response.data;
+}
+
+export async function cancelWikiJob(jobId: number, vaultId: number): Promise<{ job_id: number; status: string }> {
+  const response = await apiClient.post<{ job_id: number; status: string }>(
+    `/wiki/jobs/${jobId}/cancel`,
+    null,
+    { params: { vault_id: vaultId } }
+  );
+  return response.data;
+}
+
+export async function recompileVaultWiki(vaultId: number): Promise<{ job_id: number; status: string }> {
+  const response = await apiClient.post<{ job_id: number; status: string }>(
+    "/wiki/recompile",
+    null,
+    { params: { vault_id: vaultId } }
+  );
+  return response.data;
+}
+
+export async function resolveWikiLintFinding(
+  findingId: number,
+  vaultId: number,
+  status: "resolved" | "dismissed" | "acknowledged"
+): Promise<WikiLintFinding> {
+  const response = await apiClient.post<WikiLintFinding>(
+    `/wiki/lint/${findingId}/resolve`,
+    { status },
+    { params: { vault_id: vaultId } }
+  );
+  return response.data;
+}
+
 export default apiClient;

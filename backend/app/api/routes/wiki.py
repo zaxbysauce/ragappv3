@@ -404,3 +404,200 @@ async def search_wiki(
         "claims": [_as_dict(c) for c in results["claims"]],
         "entities": [_as_dict(e) for e in results["entities"]],
     }
+
+
+# ---------------------------------------------------------------------------
+# Job management routes
+# ---------------------------------------------------------------------------
+
+@router.get("/wiki/jobs/{job_id}")
+async def get_wiki_job(
+    job_id: int,
+    vault_id: int = Query(...),
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_active_user),
+):
+    await _require_vault_read(user, vault_id)
+    store = WikiStore(db)
+    job = store.get_job(job_id, vault_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    return _as_dict(job)
+
+
+@router.post("/wiki/jobs/{job_id}/retry", status_code=200)
+async def retry_wiki_job(
+    job_id: int,
+    vault_id: int = Query(...),
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_active_user),
+):
+    await _require_vault_write(user, vault_id)
+    store = WikiStore(db)
+    job = store.retry_job(job_id, vault_id)
+    if not job:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Job {job_id} not found or not in 'failed' state",
+        )
+    return _as_dict(job)
+
+
+@router.post("/wiki/jobs/{job_id}/cancel", status_code=200)
+async def cancel_wiki_job(
+    job_id: int,
+    vault_id: int = Query(...),
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_active_user),
+):
+    await _require_vault_write(user, vault_id)
+    store = WikiStore(db)
+    cancelled = store.cancel_job(job_id, vault_id)
+    if not cancelled:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Job {job_id} not found or not cancellable",
+        )
+    return {"job_id": job_id, "status": "cancelled"}
+
+
+# ---------------------------------------------------------------------------
+# Document wiki status routes
+# ---------------------------------------------------------------------------
+
+@router.post("/wiki/documents/{file_id}/compile", status_code=202)
+async def compile_document_wiki(
+    file_id: int,
+    vault_id: int = Query(...),
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_active_user),
+):
+    """Manually enqueue a wiki ingest job for an already-indexed document."""
+    await _require_vault_write(user, vault_id)
+    db.row_factory = sqlite3.Row
+    file_row = db.execute(
+        "SELECT id, file_name FROM files WHERE id = ? AND vault_id = ?",
+        (file_id, vault_id),
+    ).fetchone()
+    if not file_row:
+        raise HTTPException(status_code=404, detail=f"File {file_id} not found in vault {vault_id}")
+    store = WikiStore(db)
+    job = store.create_job(
+        vault_id=vault_id,
+        trigger_type="ingest",
+        trigger_id=f"file:{file_id}",
+        input_json={"file_id": file_id, "vault_id": vault_id},
+    )
+    return {"job_id": job.id, "status": job.status}
+
+
+@router.get("/wiki/documents/{file_id}/status")
+async def get_document_wiki_status(
+    file_id: int,
+    vault_id: int = Query(...),
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_active_user),
+):
+    """Return the most recent wiki ingest job for a document."""
+    await _require_vault_read(user, vault_id)
+    store = WikiStore(db)
+    jobs = store.list_jobs(vault_id)
+    file_jobs = [
+        j for j in jobs
+        if j.trigger_type == "ingest" and j.trigger_id == f"file:{file_id}"
+    ]
+    if not file_jobs:
+        return {"file_id": file_id, "job": None}
+    latest = sorted(file_jobs, key=lambda j: j.created_at, reverse=True)[0]
+    return {"file_id": file_id, "job": _as_dict(latest)}
+
+
+# ---------------------------------------------------------------------------
+# Memory wiki status route
+# ---------------------------------------------------------------------------
+
+@router.get("/wiki/memories/{memory_id}/status")
+async def get_memory_wiki_status(
+    memory_id: int,
+    vault_id: int = Query(...),
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_active_user),
+):
+    """Return the most recent wiki memory job for a memory record."""
+    await _require_vault_read(user, vault_id)
+    store = WikiStore(db)
+    jobs = store.list_jobs(vault_id)
+    mem_jobs = [
+        j for j in jobs
+        if j.trigger_type == "memory" and j.trigger_id == f"memory:{memory_id}"
+    ]
+    if not mem_jobs:
+        return {"memory_id": memory_id, "job": None}
+    latest = sorted(mem_jobs, key=lambda j: j.created_at, reverse=True)[0]
+    return {"memory_id": memory_id, "job": _as_dict(latest)}
+
+
+# ---------------------------------------------------------------------------
+# Relations route
+# ---------------------------------------------------------------------------
+
+@router.get("/wiki/relations")
+async def list_wiki_relations(
+    vault_id: int = Query(...),
+    entity_id: Optional[int] = Query(None),
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_active_user),
+):
+    await _require_vault_read(user, vault_id)
+    store = WikiStore(db)
+    relations = store.list_relations(vault_id=vault_id, entity_id=entity_id)
+    return {"relations": [_as_dict(r) for r in relations]}
+
+
+# ---------------------------------------------------------------------------
+# Lint finding management
+# ---------------------------------------------------------------------------
+
+class LintFindingUpdateRequest(BaseModel):
+    status: str = Field(..., description="New status: resolved, dismissed, or acknowledged")
+
+
+@router.post("/wiki/lint/{finding_id}/resolve", status_code=200)
+async def resolve_lint_finding(
+    finding_id: int,
+    body: LintFindingUpdateRequest,
+    vault_id: int = Query(...),
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_active_user),
+):
+    await _require_vault_write(user, vault_id)
+    store = WikiStore(db)
+    try:
+        finding = store.update_lint_finding(finding_id, vault_id, body.status)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not finding:
+        raise HTTPException(status_code=404, detail=f"Lint finding {finding_id} not found")
+    return _as_dict(finding)
+
+
+# ---------------------------------------------------------------------------
+# Full vault recompile
+# ---------------------------------------------------------------------------
+
+@router.post("/wiki/recompile", status_code=202)
+async def recompile_vault_wiki(
+    vault_id: int = Query(...),
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_active_user),
+):
+    """Enqueue a settings_reindex job to re-derive all stale claims in a vault."""
+    await _require_vault_write(user, vault_id)
+    store = WikiStore(db)
+    job = store.create_job(
+        vault_id=vault_id,
+        trigger_type="settings_reindex",
+        trigger_id=f"vault:{vault_id}",
+        input_json={"vault_id": vault_id},
+    )
+    return {"job_id": job.id, "status": job.status}

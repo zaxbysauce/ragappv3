@@ -870,6 +870,15 @@ async def delete_document(
             logger.warning("Error deleting chunks from vector store: %s", e)
             # Continue with database deletion even if vector store fails
 
+        # Mark wiki claims stale before removing the file record
+        try:
+            from app.services.wiki_store import WikiStore as _WikiStore
+            await asyncio.to_thread(
+                lambda: _WikiStore(conn).mark_claims_stale_by_file(file_id, file_vault_id)
+            )
+        except Exception as _wiki_exc:
+            logger.warning("mark_claims_stale_by_file(%d) failed: %s", file_id, _wiki_exc)
+
         # Delete from database
         await asyncio.to_thread(
             conn.execute, "DELETE FROM files WHERE id = ?", (file_id,)

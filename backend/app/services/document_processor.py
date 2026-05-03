@@ -1266,4 +1266,26 @@ class DocumentProcessor:
         finally:
             self.pool.release_connection(conn)
 
+        # Enqueue wiki compile job (fire-and-forget; non-blocking)
+        try:
+            from app.services.wiki_store import WikiStore as _WikiStore
+
+            _text_sample = document_text[:10_000] if document_text else ""
+            conn = self.pool.get_connection()
+            try:
+                _WikiStore(conn).create_job(
+                    vault_id=vault_id,
+                    trigger_type="ingest",
+                    trigger_id=f"file:{file_id}",
+                    input_json={
+                        "file_id": file_id,
+                        "vault_id": vault_id,
+                        "text": _text_sample,
+                    },
+                )
+            finally:
+                self.pool.release_connection(conn)
+        except Exception as _wiki_exc:
+            logger.warning("Failed to enqueue wiki ingest job for file_id=%d: %s", file_id, _wiki_exc)
+
         return ProcessedDocument(file_id=file_id, chunks=chunks)
