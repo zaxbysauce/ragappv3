@@ -129,14 +129,17 @@ class RAGEngineTests(unittest.IsolatedAsyncioTestCase):
         engine.embedding_service = cast(EmbeddingService, FakeEmbeddingService([0.1, 0.2]))
         engine.vector_store = cast(VectorStore, FakeVectorStore(vector_results))
         engine.memory_store = cast(MemoryStore, FakeMemoryStore(memories=[memory]))
-        engine.llm_client = cast(LLMClient, FakeLLMClient(response="answer"))
+        # Response cites [M1] so that memories_used contains the cited memory.
+        engine.llm_client = cast(LLMClient, FakeLLMClient(response="Important fact [M1]"))
         results = [msg async for msg in engine.query("query", [], stream=False)]
         self.assertEqual("content", results[0]["type"])
-        self.assertEqual("answer", results[0]["content"])
         done = results[-1]
         self.assertEqual("done", done["type"])
         self.assertEqual(1, len(done["sources"]))
-        self.assertEqual([memory.content], done["memories_used"])
+        # memories_used must contain only the cited memory as a structured dict.
+        self.assertEqual(1, len(done["memories_used"]))
+        self.assertEqual("M1", done["memories_used"][0]["memory_label"])
+        self.assertEqual(memory.content, done["memories_used"][0]["content"])
 
     async def test_streaming_response_yields_chunks(self):
         engine = RAGEngine()

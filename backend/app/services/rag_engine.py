@@ -443,7 +443,8 @@ class RAGEngine:
         trace.cited_sources = cited_sources
         trace.cited_memories = cited_memories
 
-        # Yield done message with sources
+        # Yield done message with sources. Pass cited_labels so that
+        # memories_used contains only memories the assistant actually cited.
         done_msg = self._build_done_message(
             relevant_chunks,
             memories,
@@ -454,6 +455,7 @@ class RAGEngine:
             variants_dropped,
             exact_match_promoted,
             token_pack_stats,
+            cited_labels=set(cited_memories),
         )
         # Populate final-source labels on the trace for evaluation tooling.
         trace.final_sources = [
@@ -930,6 +932,7 @@ class RAGEngine:
         variants_dropped: List[str] = None,
         exact_match_promoted: bool = False,
         token_pack_stats: Optional[Dict[str, int]] = None,
+        cited_labels: Optional[set] = None,
     ) -> Dict[str, Any]:
         """Build the final done message with sources.
 
@@ -981,9 +984,16 @@ class RAGEngine:
 
         # Build structured memories_used list with stable [M#] labels.
         # Memories are not document sources — they get their own label space.
+        # Only memories whose label was actually cited in the response are
+        # included; injected-but-uncited candidates are excluded so that
+        # memories_used means "evidence the assistant used," not "candidates
+        # that were available." Original label numbers are preserved to match
+        # the [M#] references in the response text.
         memories_used: List[Dict[str, Any]] = []
         for idx, mem in enumerate(memories):
             label = f"M{idx + 1}"
+            if cited_labels is not None and label not in cited_labels:
+                continue
             memories_used.append(
                 {
                     "id": str(getattr(mem, "id", "")) or label,
@@ -994,7 +1004,7 @@ class RAGEngine:
                     "source": getattr(mem, "source", None),
                     "vault_id": getattr(mem, "vault_id", None),
                     "score": getattr(mem, "score", None),
-                    "score_type": "fts",
+                    "score_type": getattr(mem, "score_type", None) or "fts",
                     "created_at": getattr(mem, "created_at", None),
                     "updated_at": getattr(mem, "updated_at", None),
                 }
