@@ -217,7 +217,7 @@ class TestCompileIngestJob(unittest.TestCase):
             claim_row = self.conn.execute(
                 "SELECT status FROM wiki_claims WHERE id = ?", (cid,)
             ).fetchone()
-            self.assertEqual(dict(claim_row)["status"], "unverified")
+            self.assertEqual(dict(claim_row)["status"], "active")
 
     def test_uses_provided_text_over_file_read(self):
         result = self.compiler.compile_ingest_job(
@@ -924,21 +924,38 @@ class TestUnverifiedClaimPromotion(unittest.TestCase):
         self.conn.close()
 
     def test_unverified_claim_promoted_to_active_by_cited_query(self):
-        """Ingest creates unverified claim; later cited query job promotes it to active."""
+        """An unverified claim is promoted to active when a cited query later references it.
+
+        Ingest now creates active claims directly, so this test creates an unverified
+        claim explicitly via the store to keep the promotion path covered.
+        """
         from app.services.wiki_compiler import extract_entities_from_text
 
-        # Step 1: ingest creates unverified claim
-        ingest_result = self.compiler.compile_ingest_job(
-            vault_id=1, input_json={"file_id": 1, "text": AFOMIS_ANSWER}
-        )
-        self.assertGreater(len(ingest_result["claims"]), 0)
-        for c in ingest_result["claims"]:
-            self.assertEqual(c["status"], "unverified", "Ingest claims must start as unverified")
-
-        # Step 2: query job cites the same sentence
+        # Step 1: extract the sentence text that compile_query_job will look up
         ext = extract_entities_from_text(AFOMIS_ANSWER)
         self.assertGreater(len(ext.role_claims), 0)
         cited_sentence = ext.role_claims[0]["sentence"]
+
+        # Create an unverified claim directly (simulates a pre-migration or
+        # externally inserted claim that has not yet been cited by any query).
+        self.store.create_claim(
+            vault_id=1,
+            claim_text=cited_sentence,
+            source_type="document",
+            claim_type="fact",
+            status="unverified",
+            confidence=0.5,
+        )
+        self.conn.commit()
+
+        # Confirm it starts as unverified
+        row = self.conn.execute(
+            "SELECT status FROM wiki_claims WHERE vault_id = 1 AND claim_text = ?",
+            (cited_sentence,),
+        ).fetchone()
+        self.assertEqual(dict(row)["status"], "unverified")
+
+        # Step 2: query job cites the same sentence → should promote to active
         per_claim_sources = {
             cited_sentence: [{"source_kind": "document", "source_label": "S1", "file_id": 1}]
         }
@@ -950,14 +967,15 @@ class TestUnverifiedClaimPromotion(unittest.TestCase):
             },
         )
 
-        # Step 3: at least one claim must now be active
-        all_statuses = {
-            dict(r)["status"]
-            for r in self.conn.execute(
-                "SELECT status FROM wiki_claims WHERE vault_id = 1"
-            ).fetchall()
-        }
-        self.assertIn("active", all_statuses, "Cited claim should have been promoted to active")
+        # Step 3: the cited claim must now be active AND have higher confidence.
+        # Asserting confidence change proves the promotion branch executed (not just
+        # that the claim happened to already be active by some other path).
+        row = self.conn.execute(
+            "SELECT status, confidence FROM wiki_claims WHERE vault_id = 1 AND claim_text = ?",
+            (cited_sentence,),
+        ).fetchone()
+        self.assertEqual(dict(row)["status"], "active", "Cited claim should be promoted to active")
+        self.assertGreater(dict(row)["confidence"], 0.5, "Confidence must increase on promotion")
 
     def test_already_active_claim_not_demoted(self):
         """A claim that is already active must not be changed by a second compile."""
@@ -1127,3 +1145,113 @@ class TestAttachAllMissingSources(unittest.TestCase):
         kinds = [dict(s)["source_kind"] for s in sources]
         self.assertEqual(kinds.count("document"), 1, "Exactly 1 document source expected (from ingest)")
         self.assertEqual(kinds.count("memory"), 1, "Exactly 1 memory source expected (from query citation)")
+
+
+# ---------------------------------------------------------------------------
+# Wiki-first retrieval gate integration
+# ---------------------------------------------------------------------------
+
+class TestWikiFirstRetrievalGate(unittest.TestCase):
+    """Verify that document-ingested claims satisfy the RAGEngine wiki-first gate.
+
+    The gate (_raw_rag_required) skips raw document RAG for entity_lookup queries
+    when wiki evidence contains at least one claim that is:
+      - status in ("active", "verified")
+      - page_status NOT in ("stale", "archived", "draft")
+      - confidence >= 0.75
+    compile_ingest_job must produce claims that meet all three criteria.
+    """
+
+    def setUp(self):
+        self.conn, self.store, self.compiler = _make_env()
+
+    def tearDown(self):
+        self.conn.close()
+
+    def _make_wiki_evidence(self, claim_status, confidence, page_status="needs_review"):
+        from app.services.wiki_retrieval import WikiEvidence
+        return WikiEvidence(
+            label_placeholder="W1",
+            page_id=1,
+            claim_id=1,
+            title="AFOMIS",
+            slug="acronym/afomis",
+            page_type="acronym",
+            claim_text="Justice Sakyi is the AFOMIS Chief.",
+            excerpt="",
+            confidence=confidence,
+            page_status=page_status,
+            claim_status=claim_status,
+            score=confidence,
+            score_type="relation",
+            freshness=None,
+            source_count=1,
+            provenance_summary="1 doc",
+        )
+
+    def test_ingest_creates_active_claim_with_sufficient_confidence(self):
+        """Document-ingested claims must be status='active' and confidence>=0.75."""
+        result = self.compiler.compile_ingest_job(
+            vault_id=1, input_json={"file_id": 1, "text": AFOMIS_ANSWER}
+        )
+        self.assertGreater(len(result["claims"]), 0)
+        for c in result["claims"]:
+            self.assertEqual(c["status"], "active", "Document-ingest claims must be active")
+            row = self.conn.execute(
+                "SELECT confidence FROM wiki_claims WHERE id = ?", (c["id"],)
+            ).fetchone()
+            self.assertGreaterEqual(
+                dict(row)["confidence"], 0.75,
+                "Document-ingest confidence must be ≥0.75 to satisfy the wiki-first gate",
+            )
+
+    def test_active_document_claim_satisfies_wiki_first_gate(self):
+        """Active document claim with confidence=0.8 and needs_review page: gate skips raw RAG."""
+        from app.services.rag_engine import _raw_rag_required
+        evidence = self._make_wiki_evidence(claim_status="active", confidence=0.8)
+        result = _raw_rag_required("entity_lookup", [evidence])
+        self.assertFalse(result, "Active provenance-backed document claim must not require raw RAG")
+
+    def test_needs_review_page_status_allowed_by_gate(self):
+        """Page status 'needs_review' is not in the blocked set — wiki-first must proceed."""
+        from app.services.rag_engine import _raw_rag_required
+        evidence = self._make_wiki_evidence(
+            claim_status="active", confidence=0.8, page_status="needs_review"
+        )
+        result = _raw_rag_required("entity_lookup", [evidence])
+        self.assertFalse(result, "needs_review page must not block wiki-first retrieval")
+
+    def test_unverified_claim_still_requires_raw_rag(self):
+        """Both gate conditions must hold independently.
+
+        An unverified claim is blocked regardless of confidence; an active claim
+        below the 0.75 confidence threshold is also blocked.
+        """
+        from app.services.rag_engine import _raw_rag_required
+        # Low-confidence unverified: blocked
+        ev = self._make_wiki_evidence(claim_status="unverified", confidence=0.7)
+        self.assertTrue(_raw_rag_required("entity_lookup", [ev]),
+                        "Unverified low-confidence claim must require raw RAG")
+        # High-confidence unverified: status alone blocks (regardless of confidence)
+        ev2 = self._make_wiki_evidence(claim_status="unverified", confidence=0.9)
+        self.assertTrue(_raw_rag_required("entity_lookup", [ev2]),
+                        "Unverified high-confidence claim must still require raw RAG")
+        # Active but below confidence threshold: confidence alone blocks
+        ev3 = self._make_wiki_evidence(claim_status="active", confidence=0.7)
+        self.assertTrue(_raw_rag_required("entity_lookup", [ev3]),
+                        "Active claim below 0.75 confidence must require raw RAG")
+
+    def test_no_wiki_evidence_requires_raw_rag(self):
+        """Empty evidence (e.g., AFMEDCOM query matches no AFOMIS entity) → raw RAG required."""
+        from app.services.rag_engine import _raw_rag_required
+        result = _raw_rag_required("entity_lookup", [])
+        self.assertTrue(result, "No wiki evidence must always require raw RAG")
+
+    def test_stale_page_blocked_even_with_active_claim(self):
+        """Stale page status must block wiki-first even when the claim itself is active."""
+        from app.services.rag_engine import _raw_rag_required
+        evidence = self._make_wiki_evidence(
+            claim_status="active", confidence=0.8, page_status="stale"
+        )
+        result = _raw_rag_required("entity_lookup", [evidence])
+        self.assertTrue(result, "Stale page must require raw RAG regardless of claim status")

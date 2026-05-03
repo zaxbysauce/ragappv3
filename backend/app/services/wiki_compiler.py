@@ -850,8 +850,8 @@ class WikiCompiler:
                 subject=subj_name,
                 predicate=pred,
                 object=obj_name,
-                status="unverified",
-                confidence=0.7,
+                status="active",
+                confidence=0.8,
                 quote=sentence,
                 chunk_id=_chunk_uid,
             )
@@ -863,7 +863,7 @@ class WikiCompiler:
                     chunk_id=_chunk_uid,
                     source_label=f"file:{file_id}",
                     quote=sentence,
-                    confidence=0.7,
+                    confidence=0.8,
                 )
                 self._db.commit()
             claims_created.append({"id": claim.id, "status": claim.status})
