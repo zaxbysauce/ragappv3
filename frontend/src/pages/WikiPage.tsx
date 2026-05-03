@@ -58,7 +58,8 @@ export default function WikiPage() {
       await editPage(editingPage.id, data as Parameters<typeof editPage>[1]);
       toast.success("Page updated");
     } else {
-      await createPage({ vault_id: activeVaultId, ...(data as Parameters<typeof createPage>[0]) });
+      const createData = data as Parameters<typeof createPage>[0];
+      await createPage({ ...createData, vault_id: activeVaultId });
       toast.success("Page created");
     }
     await fetchPages();
