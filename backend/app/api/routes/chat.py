@@ -26,6 +26,9 @@ from app.config import settings
 from app.models.database import get_pool
 from app.services.citation_validator import repair_against_sources_and_memories
 from app.services.rag_engine import RAGEngine, RAGEngineError
+from app.services.wiki_citation_helpers import (
+    build_per_claim_sources as _build_per_claim_sources_impl,
+)
 from app.services.wiki_store import WikiStore
 from app.utils.assistant_sanitizer import sanitize_chat_messages_content
 
@@ -133,60 +136,8 @@ def _build_per_claim_sources(
     memories_as_dicts: List[Dict[str, Any]],
     wiki_refs: List[Dict[str, Any]],
 ) -> Dict[str, List[Dict[str, Any]]]:
-    """Parse [S#]/[M#]/[W#] labels in each sentence and map them to source objects.
-
-    Returns per_claim_sources: {sentence_text: [source_dicts]} for sentences that
-    have at least one citation. The dict is passed directly to compile_query_job so
-    cited claims can be created as 'active' rather than 'unverified'.
-
-    Sentence splitting uses the same regex as extract_entities_from_text so the
-    keys match exactly what the compiler will look up.
-    """
-    import re as _re
-    _CITE_RE = _re.compile(r"\[(S|M|W)(\d+)\]")
-
-    # Index memories by their citation label number (M1 → memories_as_dicts[?])
-    mem_by_num: Dict[str, Dict[str, Any]] = {}
-    for m in memories_as_dicts:
-        label = m.get("memory_label", "")
-        if label.startswith("M") and label[1:].isdigit():
-            mem_by_num[label[1:]] = m
-
-    wiki_by_num: Dict[str, Dict[str, Any]] = {}
-    for w in wiki_refs:
-        label = w.get("wiki_label", "")
-        if label.startswith("W") and label[1:].isdigit():
-            wiki_by_num[label[1:]] = w
-
-    result: Dict[str, List[Dict[str, Any]]] = {}
-    sentences = _re.split(r"(?<=[.!?])\s+", answer.strip())
-    for sentence in sentences:
-        sentence = sentence.strip()
-        if not sentence:
-            continue
-        matches = _CITE_RE.findall(sentence)
-        if not matches:
-            continue
-        sources_for: List[Dict[str, Any]] = []
-        for prefix, num_str in matches:
-            idx = int(num_str) - 1
-            if prefix == "S" and 0 <= idx < len(doc_sources):
-                src = dict(doc_sources[idx])
-                src["source_kind"] = "document"
-                sources_for.append(src)
-            elif prefix == "M" and num_str in mem_by_num:
-                mem = dict(mem_by_num[num_str])
-                mem["source_kind"] = "memory"
-                raw_id = mem.get("memory_id") or mem.get("id")
-                mem["memory_id"] = int(raw_id) if str(raw_id).isdigit() else None
-                sources_for.append(mem)
-            elif prefix == "W" and num_str in wiki_by_num:
-                ref = dict(wiki_by_num[num_str])
-                ref["source_kind"] = "manual"
-                sources_for.append(ref)
-        if sources_for:
-            result[sentence] = sources_for
-    return result
+    """Delegate to wiki_citation_helpers.build_per_claim_sources."""
+    return _build_per_claim_sources_impl(answer, doc_sources, memories_as_dicts, wiki_refs)
 
 
 async def _enqueue_wiki_compile_job(

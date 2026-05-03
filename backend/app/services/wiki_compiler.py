@@ -10,9 +10,17 @@ import logging
 import re
 import sqlite3
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from app.services.wiki_store import WikiStore, normalize_slug
+
+# Approximate bytes per text chunk for deterministic chunk-uid generation.
+# Matches the 2 000-character window used by SemanticChunker.
+_COMPILE_CHUNK_SIZE = 2000
+
+# Matches [S#], [M#], [W#] citation markers produced by the chat engine.
+_CITE_STRIP_RE = re.compile(r"\[(?:S|M|W)\d+\]")
 
 logger = logging.getLogger(__name__)
 
@@ -200,7 +208,20 @@ class WikiCompiler:
         """
         existing = self._store.find_claim_by_text(vault_id, claim_text)
         if existing:
-            # Attach source if not already present
+            # Promote unverified → active when the caller has explicit per-claim citations.
+            new_status = create_kwargs.get("status")
+            if existing.status == "unverified" and new_status == "active":
+                self._db.execute(
+                    "UPDATE wiki_claims SET status = 'active', source_type = ?, confidence = ?, "
+                    "updated_at = datetime('now') WHERE id = ?",
+                    (
+                        create_kwargs.get("source_type", existing.source_type),
+                        create_kwargs.get("confidence", existing.confidence),
+                        existing.id,
+                    ),
+                )
+                self._db.commit()
+            # Attach dedup source if not already present
             already = any(
                 s.source_kind == source_kind and self._source_matches(s, source_kind, source_identity)
                 for s in existing.sources
@@ -447,7 +468,13 @@ class WikiCompiler:
         if not assistant_answer:
             return {"page": None, "claims": [], "entities": [], "relations": [], "skipped": True}
 
-        extraction = extract_entities_from_text(assistant_answer)
+        # Strip citation markers so claim text is citation-free and sentence keys
+        # match the citation-stripped keys produced by _build_per_claim_sources.
+        _clean_answer = _CITE_STRIP_RE.sub("", assistant_answer)
+        # Remove stray spaces before punctuation (e.g., "Claim ." → "Claim.").
+        _clean_answer = re.sub(r"\s+([.!?,;:])", r"\1", _clean_answer)
+        _clean_answer = re.sub(r"\s{2,}", " ", _clean_answer).strip()
+        extraction = extract_entities_from_text(_clean_answer)
         if not extraction.acronyms and not extraction.role_claims:
             return {"page": None, "claims": [], "entities": [], "relations": [], "skipped": True}
 
@@ -541,10 +568,33 @@ class WikiCompiler:
                 quote=sentence,
             )
 
-            if _created:
-                if has_specific_citations:
-                    for src in claim_citations:
-                        kind = src.get("source_kind", "manual")
+            if has_specific_citations:
+                # Attach ALL per-claim citations for both new and existing claims.
+                # For existing claims, reload sources from DB so the snapshot includes
+                # any source that _find_or_create_claim just attached (its return value
+                # is stale after an inline attach+commit).
+                if not _created:
+                    _refreshed = self._store.find_claim_by_text(vault_id, sentence)
+                    _current_sources = list(
+                        (_refreshed.sources if _refreshed else None) or []
+                    )
+                else:
+                    _current_sources = []
+                for src in claim_citations:
+                    kind = src.get("source_kind", "manual")
+                    if kind == "document":
+                        src_identity = {"file_id": src.get("file_id")}
+                    elif kind == "memory":
+                        src_identity = {"memory_id": src.get("memory_id")}
+                    else:
+                        src_identity = {
+                            "source_label": src.get("source_label", src.get("wiki_label", ""))
+                        }
+                    _already = any(
+                        s.source_kind == kind and self._source_matches(s, kind, src_identity)
+                        for s in _current_sources
+                    )
+                    if not _already:
                         if kind == "document":
                             self._store.attach_source(
                                 claim_id=claim.id,
@@ -572,38 +622,42 @@ class WikiCompiler:
                                 quote=sentence,
                                 confidence=confidence,
                             )
-                else:
-                    # No per-claim citations: attach answer-level refs for context only
-                    for ref in wiki_refs:
-                        if ref.get("wiki_label"):
-                            self._store.attach_source(
-                                claim_id=claim.id,
-                                source_kind="manual",
-                                source_label=ref["wiki_label"],
-                                quote=sentence,
-                                confidence=confidence,
-                            )
-                    for src in doc_sources:
-                        if src.get("source_label"):
-                            self._store.attach_source(
-                                claim_id=claim.id,
-                                source_kind="document",
-                                file_id=src.get("file_id"),
-                                chunk_id=src.get("chunk_id"),
-                                source_label=src["source_label"],
-                                quote=sentence,
-                                confidence=confidence,
-                            )
-                    for mem in memories:
-                        if isinstance(mem, dict) and mem.get("memory_label"):
-                            self._store.attach_source(
-                                claim_id=claim.id,
-                                source_kind="memory",
-                                memory_id=mem.get("memory_id"),
-                                source_label=mem["memory_label"],
-                                quote=sentence,
-                                confidence=confidence,
-                            )
+                        # Track inline to prevent double-attaching within this loop.
+                        _current_sources.append(
+                            type("_S", (), {"source_kind": kind, **src_identity})()
+                        )
+            elif _created:
+                # No per-claim citations: attach answer-level refs for context only.
+                for ref in wiki_refs:
+                    if ref.get("wiki_label"):
+                        self._store.attach_source(
+                            claim_id=claim.id,
+                            source_kind="manual",
+                            source_label=ref["wiki_label"],
+                            quote=sentence,
+                            confidence=confidence,
+                        )
+                for src in doc_sources:
+                    if src.get("source_label"):
+                        self._store.attach_source(
+                            claim_id=claim.id,
+                            source_kind="document",
+                            file_id=src.get("file_id"),
+                            chunk_id=src.get("chunk_id"),
+                            source_label=src["source_label"],
+                            quote=sentence,
+                            confidence=confidence,
+                        )
+                for mem in memories:
+                    if isinstance(mem, dict) and mem.get("memory_label"):
+                        self._store.attach_source(
+                            claim_id=claim.id,
+                            source_kind="memory",
+                            memory_id=mem.get("memory_id"),
+                            source_label=mem["memory_label"],
+                            quote=sentence,
+                            confidence=confidence,
+                        )
 
             self._db.commit()
             claims_created.append(self._store.get_claim(claim.id))
@@ -665,13 +719,51 @@ class WikiCompiler:
             raise ValueError(f"File {file_id} not found in vault {vault_id}")
 
         file_data = dict(file_row)
-        # Prefer text embedded in the job, fall back to durable parsed_text on the files row.
+        # Priority: explicit text in job → durable parsed_text → re-parse from file_path.
         text: str = input_json.get("text") or file_data.get("parsed_text") or ""
 
         if not text:
+            _file_path = file_data.get("file_path") or ""
+            if _file_path:
+                # Attempt 1: full parser stack (requires unstructured.io).
+                try:
+                    from app.services.document_processor import DocumentParser
+                    _elements = DocumentParser().parse(_file_path)
+                    text = "\n".join(str(e) for e in _elements if str(e).strip())
+                except Exception as _exc:
+                    logger.debug(
+                        "compile_ingest_job: DocumentParser failed for file_id=%d: %s",
+                        file_id, _exc,
+                    )
+                # Attempt 2: plain UTF-8 read for .txt files (test-safe fallback).
+                if not text and _file_path.lower().endswith(".txt"):
+                    try:
+                        text = Path(_file_path).read_text(encoding="utf-8", errors="replace")
+                        # Replacement chars (U+FFFD) indicate binary content masquerading
+                        # as text. Discard the garbage to avoid caching unusable content.
+                        if text and "�" in text:
+                            logger.debug(
+                                "compile_ingest_job: binary content via replacement chars, "
+                                "discarding .txt fallback for file_id=%d",
+                                file_id,
+                            )
+                            text = ""
+                    except Exception as _exc:
+                        logger.debug(
+                            "compile_ingest_job: plain-text fallback failed for file_id=%d: %s",
+                            file_id, _exc,
+                        )
+                if text:
+                    # Cache for future compiles so re-parse is a one-time cost.
+                    self._db.execute(
+                        "UPDATE files SET parsed_text = ? WHERE id = ?", (text, file_id)
+                    )
+                    self._db.commit()
+
+        if not text:
             logger.warning(
-                "compile_ingest_job: no parsed text for file_id=%d "
-                "(neither input_json['text'] nor files.parsed_text is populated)",
+                "compile_ingest_job: no text available for file_id=%d "
+                "(input_json['text'], files.parsed_text, and file re-parse all empty)",
                 file_id,
             )
             return {"page": None, "claims": [], "entities": [], "relations_count": 0, "skipped": True}
@@ -729,11 +821,23 @@ class WikiCompiler:
 
         entity_id_map: dict[str, int] = {e.canonical_name: e.id for e in entities_created}
 
+        _last_pos = 0  # running offset so duplicate sentences get distinct chunk uids
         for role_claim in extraction.role_claims:
             subj_name = role_claim["subject"]
             pred = role_claim["predicate"]
             obj_name = role_claim["object_person"]
             sentence = role_claim["sentence"]
+
+            # Deterministic chunk reference: position-based index into 2 000-char windows.
+            # Use a running offset so repeated sentences advance past previous matches.
+            # If not found from _last_pos (extraction order diverged from text order),
+            # fall back to first occurrence rather than returning a wrong chunk index.
+            _pos = text.find(sentence, _last_pos)
+            if _pos < 0:
+                _pos = text.find(sentence)  # first-occurrence fallback
+            _chunk_uid = f"{file_id}_{_pos // _COMPILE_CHUNK_SIZE}" if _pos >= 0 else f"{file_id}_0"
+            if _pos >= 0:
+                _last_pos = _pos + len(sentence)
 
             claim, _created = self._find_or_create_claim(
                 vault_id=vault_id,
@@ -749,12 +853,14 @@ class WikiCompiler:
                 status="unverified",
                 confidence=0.7,
                 quote=sentence,
+                chunk_id=_chunk_uid,
             )
             if _created:
                 self._store.attach_source(
                     claim_id=claim.id,
                     source_kind="document",
                     file_id=file_id,
+                    chunk_id=_chunk_uid,
                     source_label=f"file:{file_id}",
                     quote=sentence,
                     confidence=0.7,

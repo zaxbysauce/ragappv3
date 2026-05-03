@@ -229,16 +229,18 @@ class TestCompileIngestJob(unittest.TestCase):
         )
         self.assertFalse(result.get("skipped"))
 
-    def test_returns_skipped_when_no_text_in_input_json(self):
-        # Raw file fallback was removed; callers must supply parsed text in input_json["text"]
+    def test_re_parses_from_file_path_when_no_text_in_input_json(self):
+        # setUp points file_path to a .txt file with AFOMIS_ANSWER; the compiler
+        # must re-parse it rather than silently returning skipped.
         result = self.compiler.compile_ingest_job(
             vault_id=1, input_json={"file_id": 1}  # no "text" key
         )
-        self.assertTrue(result.get("skipped"))
+        self.assertFalse(result.get("skipped"), "Should re-parse .txt file_path, not skip")
+        self.assertGreater(len(result["claims"]), 0)
 
     def test_does_not_open_raw_file_bytes(self):
-        # Provide a binary-looking file path; without text key, job must skip cleanly
-        # (not raise a UnicodeDecodeError from trying to open bytes as UTF-8)
+        # /dev/zero is not a regular file and has no .txt extension; the compiler
+        # must skip cleanly without raising or hanging.
         self.conn.execute(
             "UPDATE files SET file_path = '/dev/zero' WHERE id = 1"
         )
@@ -652,7 +654,7 @@ class TestIdempotentCompilation(unittest.TestCase):
             "SELECT COUNT(*) FROM wiki_relations WHERE vault_id = 1"
         ).fetchone()[0]
         # Same relations as after first compile
-        r1 = self.compiler.compile_ingest_job(vault_id=1, input_json=inp)
+        self.compiler.compile_ingest_job(vault_id=1, input_json=inp)
         count_after_third = self.conn.execute(
             "SELECT COUNT(*) FROM wiki_relations WHERE vault_id = 1"
         ).fetchone()[0]
@@ -744,3 +746,384 @@ class TestIngestJobParsedTextFallback(unittest.TestCase):
         self.assertFalse(result.get("skipped"))
         entity_names = {e["name"] for e in result["entities"]}
         self.assertIn("AFOMIS", entity_names)
+
+
+# ---------------------------------------------------------------------------
+# Issue 1 regression: existing indexed doc with parsed_text=NULL re-parses
+# ---------------------------------------------------------------------------
+
+class TestIngestJobReParseFromFilePath(unittest.TestCase):
+    """Pre-migration docs with parsed_text=NULL must re-parse from file_path."""
+
+    def setUp(self):
+        self.conn, self.store, self.compiler = _make_env()
+        # Create a real .txt file with extractable content (no unstructured needed)
+        self._tmpfile = tempfile.NamedTemporaryFile(
+            suffix=".txt", mode="w", delete=False, encoding="utf-8"
+        )
+        self._tmpfile.write(AFOMIS_ANSWER)
+        self._tmpfile.close()
+        self.conn.execute(
+            "UPDATE files SET file_path = ?, file_name = ? WHERE id = 1",
+            (self._tmpfile.name, "afomis.txt"),
+        )
+        self.conn.commit()
+
+    def tearDown(self):
+        self.conn.close()
+        import os
+        try:
+            os.unlink(self._tmpfile.name)
+        except OSError:
+            pass
+
+    def test_existing_indexed_file_null_parsed_text_compiles_from_file_path(self):
+        """Regression: pre-migration file with parsed_text=NULL + valid file_path → wiki output."""
+        # Confirm parsed_text is NULL (default from _make_env)
+        row = self.conn.execute("SELECT parsed_text FROM files WHERE id = 1").fetchone()
+        self.assertIsNone(row[0], "parsed_text should start as NULL for this test")
+
+        result = self.compiler.compile_ingest_job(
+            vault_id=1, input_json={"file_id": 1}  # manual compile — no text supplied
+        )
+        self.assertFalse(result.get("skipped"), "Should not skip: valid .txt file_path available")
+        self.assertGreater(len(result["claims"]), 0, "Should produce wiki claims")
+
+    def test_re_parse_caches_parsed_text_for_future_compiles(self):
+        """After re-parse, files.parsed_text should be populated."""
+        self.compiler.compile_ingest_job(vault_id=1, input_json={"file_id": 1})
+        row = self.conn.execute("SELECT parsed_text FROM files WHERE id = 1").fetchone()
+        self.assertIsNotNone(row[0], "parsed_text should be cached after re-parse")
+        self.assertIn("AFOMIS", row[0])
+
+
+# ---------------------------------------------------------------------------
+# Issue 2: chunk_id populated for document-derived claims
+# ---------------------------------------------------------------------------
+
+class TestIngestJobChunkProvenance(unittest.TestCase):
+
+    def setUp(self):
+        self.conn, self.store, self.compiler = _make_env()
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_chunk_id_populated_for_document_claims(self):
+        """wiki_claim_sources.chunk_id must be set for every document-derived claim."""
+        result = self.compiler.compile_ingest_job(
+            vault_id=1, input_json={"file_id": 1, "text": AFOMIS_ANSWER}
+        )
+        self.assertGreater(len(result["claims"]), 0)
+        for c in result["claims"]:
+            sources = self.conn.execute(
+                "SELECT chunk_id FROM wiki_claim_sources "
+                "WHERE claim_id = ? AND source_kind = 'document'",
+                (c["id"],),
+            ).fetchall()
+            self.assertGreater(len(sources), 0, f"Claim {c['id']} has no document sources")
+            for src in sources:
+                cid = dict(src)["chunk_id"]
+                self.assertIsNotNone(cid, f"chunk_id is NULL for claim {c['id']}")
+                self.assertIn("_", cid, "chunk_id must follow '{file_id}_{chunk_index}' format")
+
+    def test_chunk_id_deterministic_on_recompile(self):
+        """Recompile must not change chunk_ids (same text → same position → same uid)."""
+        inp = {"file_id": 1, "text": AFOMIS_ANSWER}
+        self.compiler.compile_ingest_job(vault_id=1, input_json=inp)
+        ids_1 = {
+            dict(r)["chunk_id"]
+            for r in self.conn.execute(
+                "SELECT chunk_id FROM wiki_claim_sources WHERE source_kind = 'document'"
+            ).fetchall()
+        }
+        self.compiler.compile_ingest_job(vault_id=1, input_json=inp)
+        ids_2 = {
+            dict(r)["chunk_id"]
+            for r in self.conn.execute(
+                "SELECT chunk_id FROM wiki_claim_sources WHERE source_kind = 'document'"
+            ).fetchall()
+        }
+        self.assertEqual(ids_1, ids_2, "chunk_ids must be deterministic across recompiles")
+
+
+# ---------------------------------------------------------------------------
+# Issue 3: _build_per_claim_sources handles trailing / inline citations
+# ---------------------------------------------------------------------------
+
+class TestBuildPerClaimSourcesTrailingCitations(unittest.TestCase):
+    """Unit tests for the citation-to-sentence attribution logic in chat.py."""
+
+    def _call(self, answer, doc_sources=None, mems=None, wiki=None):
+        from app.services.wiki_citation_helpers import build_per_claim_sources
+        return build_per_claim_sources(
+            answer, doc_sources or [], mems or [], wiki or []
+        )
+
+    def _doc(self):
+        return [{"source_label": "S1", "file_id": 1}]
+
+    def test_trailing_citation_attaches_to_preceding_sentence(self):
+        """'Claim. [S1]' — standalone [S1] must be attributed to 'Claim.'"""
+        result = self._call(
+            "Justice Sakyi is the AFOMIS Chief. [S1]", doc_sources=self._doc()
+        )
+        matching = [k for k in result if "Justice Sakyi" in k]
+        self.assertEqual(len(matching), 1, f"Expected 1 key matching claim, got: {list(result)}")
+        self.assertEqual(result[matching[0]][0]["source_kind"], "document")
+
+    def test_inline_citation_before_period(self):
+        """'Claim [S1].' — inline citation before period must be attributed."""
+        result = self._call(
+            "Justice Sakyi is the AFOMIS Chief [S1].", doc_sources=self._doc()
+        )
+        matching = [k for k in result if "Justice Sakyi" in k]
+        self.assertEqual(len(matching), 1, f"Expected 1 key matching claim, got: {list(result)}")
+        self.assertEqual(result[matching[0]][0]["source_kind"], "document")
+
+    def test_two_claims_with_trailing_mixed_citations(self):
+        """'Claim A. [S1] Claim B. [M1]' produces two separate source entries."""
+        doc = [{"source_label": "S1", "file_id": 1}]
+        mem = [{"memory_label": "M1", "id": "1"}]
+        result = self._call(
+            "Justice Sakyi is the AFOMIS Chief. [S1] "
+            "Major Justin Woods is the AFOMIS Deputy. [M1]",
+            doc_sources=doc,
+            mems=mem,
+        )
+        self.assertEqual(len(result), 2, f"Expected 2 source entries, got: {list(result)}")
+        doc_keys = [k for k in result if "Justice Sakyi" in k]
+        mem_keys = [k for k in result if "Justin Woods" in k]
+        self.assertEqual(len(doc_keys), 1)
+        self.assertEqual(len(mem_keys), 1)
+        self.assertEqual(result[doc_keys[0]][0]["source_kind"], "document")
+        self.assertEqual(result[mem_keys[0]][0]["source_kind"], "memory")
+
+    def test_citation_only_segment_does_not_create_orphan_key(self):
+        """No key should consist solely of citation markers."""
+        result = self._call(
+            "Justice Sakyi is the AFOMIS Chief. [S1]", doc_sources=self._doc()
+        )
+        for key in result:
+            self.assertFalse(
+                key.strip().startswith("["),
+                f"Orphan citation-only key found: {key!r}",
+            )
+
+
+# ---------------------------------------------------------------------------
+# Issue 4: unverified claim promoted to active by later cited query job
+# ---------------------------------------------------------------------------
+
+class TestUnverifiedClaimPromotion(unittest.TestCase):
+
+    def setUp(self):
+        self.conn, self.store, self.compiler = _make_env()
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_unverified_claim_promoted_to_active_by_cited_query(self):
+        """Ingest creates unverified claim; later cited query job promotes it to active."""
+        from app.services.wiki_compiler import extract_entities_from_text
+
+        # Step 1: ingest creates unverified claim
+        ingest_result = self.compiler.compile_ingest_job(
+            vault_id=1, input_json={"file_id": 1, "text": AFOMIS_ANSWER}
+        )
+        self.assertGreater(len(ingest_result["claims"]), 0)
+        for c in ingest_result["claims"]:
+            self.assertEqual(c["status"], "unverified", "Ingest claims must start as unverified")
+
+        # Step 2: query job cites the same sentence
+        ext = extract_entities_from_text(AFOMIS_ANSWER)
+        self.assertGreater(len(ext.role_claims), 0)
+        cited_sentence = ext.role_claims[0]["sentence"]
+        per_claim_sources = {
+            cited_sentence: [{"source_kind": "document", "source_label": "S1", "file_id": 1}]
+        }
+        self.compiler.compile_query_job(
+            vault_id=1,
+            input_json={
+                "assistant_answer": AFOMIS_ANSWER,
+                "per_claim_sources": per_claim_sources,
+            },
+        )
+
+        # Step 3: at least one claim must now be active
+        all_statuses = {
+            dict(r)["status"]
+            for r in self.conn.execute(
+                "SELECT status FROM wiki_claims WHERE vault_id = 1"
+            ).fetchall()
+        }
+        self.assertIn("active", all_statuses, "Cited claim should have been promoted to active")
+
+    def test_already_active_claim_not_demoted(self):
+        """A claim that is already active must not be changed by a second compile."""
+        from app.services.wiki_compiler import extract_entities_from_text
+
+        ext = extract_entities_from_text(AFOMIS_ANSWER)
+        cited_sentence = ext.role_claims[0]["sentence"]
+        per_claim_sources = {
+            cited_sentence: [{"source_kind": "document", "source_label": "S1", "file_id": 1}]
+        }
+        inp = {"assistant_answer": AFOMIS_ANSWER, "per_claim_sources": per_claim_sources}
+        # First compile: creates active claim
+        self.compiler.compile_query_job(vault_id=1, input_json=inp)
+        # Second compile: must not demote to unverified
+        self.compiler.compile_query_job(vault_id=1, input_json=inp)
+        all_statuses = {
+            dict(r)["status"]
+            for r in self.conn.execute(
+                "SELECT status FROM wiki_claims WHERE vault_id = 1"
+            ).fetchall()
+        }
+        self.assertNotIn("unverified", all_statuses, "Active claim must not be demoted")
+
+
+# ---------------------------------------------------------------------------
+# Issue 5: attach all missing sources for duplicate claims
+# ---------------------------------------------------------------------------
+
+class TestAttachAllMissingSources(unittest.TestCase):
+
+    def setUp(self):
+        self.conn, self.store, self.compiler = _make_env()
+        self.conn.execute(
+            "INSERT OR IGNORE INTO memories (id, vault_id, content) VALUES (1, 1, 'test')"
+        )
+        self.conn.commit()
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_both_sources_attached_for_double_cited_claim(self):
+        """[S1][M1] double citation: both document and memory sources attached exactly once."""
+        from app.services.wiki_compiler import extract_entities_from_text
+
+        ext = extract_entities_from_text(AFOMIS_ANSWER)
+        cited_sentence = ext.role_claims[0]["sentence"]
+        per_claim_sources = {
+            cited_sentence: [
+                {"source_kind": "document", "source_label": "S1", "file_id": 1},
+                {"source_kind": "memory", "source_label": "M1", "memory_id": 1},
+            ]
+        }
+        inp = {"assistant_answer": AFOMIS_ANSWER, "per_claim_sources": per_claim_sources}
+
+        # Run compile twice — second run must not add duplicate sources
+        r1 = self.compiler.compile_query_job(vault_id=1, input_json=inp)
+        self.compiler.compile_query_job(vault_id=1, input_json=inp)
+
+        # Get one of the claim IDs with the cited sentence
+        active_claim_ids = [
+            c["id"] for c in r1["claims"] if c["status"] == "active"
+        ]
+        self.assertGreater(len(active_claim_ids), 0, "Expected at least one active claim")
+        claim_id = active_claim_ids[0]
+
+        sources = self.conn.execute(
+            "SELECT source_kind FROM wiki_claim_sources WHERE claim_id = ?", (claim_id,)
+        ).fetchall()
+        kinds = [dict(s)["source_kind"] for s in sources]
+        self.assertEqual(kinds.count("document"), 1, "Exactly 1 document source expected")
+        self.assertEqual(kinds.count("memory"), 1, "Exactly 1 memory source expected")
+
+    def test_no_double_attach_when_ingest_first_then_query_cites(self):
+        """
+        Existing claim (from ingest, document source) + query citing same claim with
+        BOTH [S1][M1] must produce exactly 1 document + 1 memory source, not 2 document.
+        This guards against the stale-snapshot race where _find_or_create_claim attaches
+        [S1] and returns a stale sources list; the outer loop must not re-attach [S1].
+        """
+        from app.services.wiki_compiler import extract_entities_from_text
+
+        # Step 1: ingest creates the claim with a document source
+        self.compiler.compile_ingest_job(
+            vault_id=1, input_json={"file_id": 1, "text": AFOMIS_ANSWER}
+        )
+
+        # Step 2: query job cites the same sentence with [S1][M1]
+        ext = extract_entities_from_text(AFOMIS_ANSWER)
+        cited_sentence = ext.role_claims[0]["sentence"]
+        per_claim_sources = {
+            cited_sentence: [
+                {"source_kind": "document", "source_label": "S1", "file_id": 1},
+                {"source_kind": "memory", "source_label": "M1", "memory_id": 1},
+            ]
+        }
+        r = self.compiler.compile_query_job(
+            vault_id=1,
+            input_json={"assistant_answer": AFOMIS_ANSWER, "per_claim_sources": per_claim_sources},
+        )
+
+        claim_ids = [c["id"] for c in r["claims"]]
+        for cid in claim_ids:
+            sources = self.conn.execute(
+                "SELECT source_kind FROM wiki_claim_sources WHERE claim_id = ?", (cid,)
+            ).fetchall()
+            kinds = [dict(s)["source_kind"] for s in sources]
+            self.assertLessEqual(kinds.count("document"), 1, f"Duplicate document source on claim {cid}")
+
+    def test_no_duplicate_sources_on_recompile(self):
+        """Recompiling with same per_claim_sources must not create extra source rows."""
+        from app.services.wiki_compiler import extract_entities_from_text
+
+        ext = extract_entities_from_text(AFOMIS_ANSWER)
+        cited_sentence = ext.role_claims[0]["sentence"]
+        per_claim_sources = {
+            cited_sentence: [{"source_kind": "document", "source_label": "S1", "file_id": 1}]
+        }
+        inp = {"assistant_answer": AFOMIS_ANSWER, "per_claim_sources": per_claim_sources}
+
+        self.compiler.compile_query_job(vault_id=1, input_json=inp)
+        count_after_1 = self.conn.execute(
+            "SELECT COUNT(*) FROM wiki_claim_sources"
+        ).fetchone()[0]
+        self.compiler.compile_query_job(vault_id=1, input_json=inp)
+        count_after_2 = self.conn.execute(
+            "SELECT COUNT(*) FROM wiki_claim_sources"
+        ).fetchone()[0]
+        self.assertEqual(count_after_1, count_after_2, "No new source rows should appear on recompile")
+
+    def test_ingest_doc_source_then_query_memory_only_citation(self):
+        """
+        Stale-snapshot regression (Finding E): pre-created claim (document source
+        via ingest) + query citing same sentence with memory-only citation must
+        produce exactly 1 document + 1 memory source with no duplicates.
+
+        Without the reload fix, _find_or_create_claim attaches the memory source
+        and returns a stale existing.sources (pre-commit snapshot). The outer loop
+        then re-attaches the same memory source, producing a duplicate.
+        """
+        from app.services.wiki_compiler import extract_entities_from_text
+
+        # Step 1: ingest creates claim with document source
+        self.compiler.compile_ingest_job(
+            vault_id=1, input_json={"file_id": 1, "text": AFOMIS_ANSWER}
+        )
+
+        # Step 2: query cites same sentence with memory-only citation
+        ext = extract_entities_from_text(AFOMIS_ANSWER)
+        cited_sentence = ext.role_claims[0]["sentence"]
+        per_claim_sources = {
+            cited_sentence: [{"source_kind": "memory", "source_label": "M1", "memory_id": 1}]
+        }
+        r = self.compiler.compile_query_job(
+            vault_id=1,
+            input_json={"assistant_answer": AFOMIS_ANSWER, "per_claim_sources": per_claim_sources},
+        )
+
+        # Cited claim should be promoted to active
+        active_claims = [c for c in r["claims"] if c["status"] == "active"]
+        self.assertGreater(len(active_claims), 0, "Claim should be promoted to active by memory citation")
+
+        # Must have exactly 1 document + 1 memory source (no duplicates)
+        claim_id = active_claims[0]["id"]
+        sources = self.conn.execute(
+            "SELECT source_kind FROM wiki_claim_sources WHERE claim_id = ?", (claim_id,)
+        ).fetchall()
+        kinds = [dict(s)["source_kind"] for s in sources]
+        self.assertEqual(kinds.count("document"), 1, "Exactly 1 document source expected (from ingest)")
+        self.assertEqual(kinds.count("memory"), 1, "Exactly 1 memory source expected (from query citation)")
