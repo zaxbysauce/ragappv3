@@ -130,6 +130,7 @@ class TestRunMigrations:
             "migrate_add_vault_permission_columns(sqlite_path)",
             "migrate_vault_paths(sqlite_path)",
             "migrate_add_org_slug_column(sqlite_path)",
+            "migrate_add_wiki_tables(sqlite_path)",
         ]
 
         for call in migration_calls:
@@ -168,6 +169,7 @@ class TestRunMigrations:
             "migrate_add_vault_permission_columns",
             "migrate_vault_paths",
             "migrate_add_org_slug_column",
+            "migrate_add_wiki_tables",
         ]
 
         for exp in expected:

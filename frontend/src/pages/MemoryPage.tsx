@@ -14,13 +14,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Brain, Plus, Search, Trash2, Pencil, Loader2 } from "lucide-react";
+import { Brain, Plus, Search, Trash2, Pencil, Loader2, BookOpen } from "lucide-react";
 import { toast } from "sonner";
 import { useVaultStore } from "@/stores/useVaultStore";
 import { VaultSelector } from "@/components/vault/VaultSelector";
 import { useMemorySearch } from "@/hooks/useMemorySearch";
 import { useMemoryCrud, getCategoryFromMetadata, getTagsFromMetadata, getSourceFromMetadata, MAX_MEMORY_CONTENT_LENGTH } from "@/hooks/useMemoryCrud";
-import { updateMemory, type MemoryResult } from "@/lib/api";
+import { updateMemory, promoteMemoryToWiki, type MemoryResult } from "@/lib/api";
 
 export default function MemoryPage() {
   const { activeVaultId } = useVaultStore();
@@ -51,6 +51,9 @@ export default function MemoryPage() {
 
   // Delete-confirm dialog state
   const [deleteTarget, setDeleteTarget] = useState<MemoryResult | null>(null);
+
+  // Promote-to-wiki state
+  const [promotingId, setPromotingId] = useState<string | null>(null);
 
   function openEdit(memory: MemoryResult) {
     setEditTarget(memory);
@@ -96,6 +99,28 @@ export default function MemoryPage() {
     if (!deleteTarget) return;
     await handleDeleteMemory(deleteTarget.id);
     setDeleteTarget(null);
+  }
+
+  async function handlePromoteToWiki(memory: MemoryResult) {
+    if (!activeVaultId) {
+      toast.error("Select a vault before promoting to wiki");
+      return;
+    }
+    setPromotingId(memory.id);
+    try {
+      const result = await promoteMemoryToWiki({
+        memory_id: parseInt(memory.id, 10),
+        vault_id: activeVaultId,
+      });
+      toast.success(
+        `Promoted to wiki: "${result.page.title}" — open Wiki to view`,
+        { duration: 6000 }
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Promote failed");
+    } finally {
+      setPromotingId(null);
+    }
   }
 
   return (
@@ -249,6 +274,21 @@ export default function MemoryPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      onClick={() => handlePromoteToWiki(memory)}
+                      disabled={promotingId === memory.id}
+                      aria-label="Promote to Wiki"
+                      title="Promote to Wiki"
+                    >
+                      {promotingId === memory.id ? (
+                        <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                      ) : (
+                        <BookOpen className="w-4 h-4 text-muted-foreground" />
+                      )}
+                    </Button>
                     <Button
                       variant="ghost"
                       size="icon"

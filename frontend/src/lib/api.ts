@@ -1299,4 +1299,235 @@ export async function updateVaultGroups(
 // Chat Message Functions (Not yet implemented in backend)
 // ============================================================================
 
+// ============================================================================
+// Wiki / Knowledge Compiler Types and Functions
+// ============================================================================
+
+export interface WikiClaimSource {
+  id: number;
+  claim_id: number;
+  source_kind: "document" | "memory" | "chat_message" | "manual";
+  file_id: number | null;
+  chunk_id: string | null;
+  memory_id: number | null;
+  chat_message_id: number | null;
+  source_label: string | null;
+  quote: string | null;
+  char_start: number | null;
+  char_end: number | null;
+  page_number: number | null;
+  confidence: number;
+  created_at: string;
+}
+
+export interface WikiClaim {
+  id: number;
+  vault_id: number;
+  page_id: number | null;
+  claim_text: string;
+  claim_type: string;
+  subject: string | null;
+  predicate: string | null;
+  object: string | null;
+  source_type: "document" | "memory" | "chat_synthesis" | "manual" | "mixed";
+  status: "active" | "contradicted" | "superseded" | "unverified" | "archived";
+  confidence: number;
+  created_by: number | null;
+  created_at: string;
+  updated_at: string;
+  sources: WikiClaimSource[];
+}
+
+export interface WikiEntity {
+  id: number;
+  vault_id: number;
+  canonical_name: string;
+  entity_type: string;
+  aliases_json: string;
+  description: string;
+  page_id: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WikiPage {
+  id: number;
+  vault_id: number;
+  slug: string;
+  title: string;
+  page_type: "entity" | "procedure" | "system" | "acronym" | "qa" | "contradiction" | "open_question" | "overview" | "manual";
+  markdown: string;
+  summary: string;
+  status: "draft" | "verified" | "stale" | "needs_review" | "archived";
+  confidence: number;
+  created_by: number | null;
+  created_at: string;
+  updated_at: string;
+  last_compiled_at: string | null;
+  claims: WikiClaim[];
+  entities: WikiEntity[];
+  lint_findings: WikiLintFinding[];
+}
+
+export interface WikiRelation {
+  id: number;
+  vault_id: number;
+  subject_entity_id: number | null;
+  predicate: string;
+  object_entity_id: number | null;
+  object_text: string | null;
+  claim_id: number | null;
+  confidence: number;
+  created_at: string;
+}
+
+export interface WikiCompileJob {
+  id: number;
+  vault_id: number;
+  trigger_type: "ingest" | "query" | "memory" | "manual" | "settings_reindex";
+  trigger_id: string | null;
+  status: "pending" | "running" | "completed" | "failed" | "cancelled";
+  error: string | null;
+  result_json: string;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface WikiLintFinding {
+  id: number;
+  vault_id: number;
+  finding_type: "contradiction" | "stale" | "orphan" | "missing_page" | "unsupported_claim" | "duplicate_entity" | "weak_provenance";
+  severity: "low" | "medium" | "high" | "critical";
+  title: string;
+  details: string;
+  related_page_ids_json: string;
+  related_claim_ids_json: string;
+  status: "open" | "acknowledged" | "resolved" | "dismissed";
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WikiSearchResponse {
+  query: string;
+  pages: WikiPage[];
+  claims: WikiClaim[];
+  entities: WikiEntity[];
+}
+
+export interface PromoteMemoryRequest {
+  memory_id: number;
+  vault_id: number;
+  page_type?: string;
+  target_page_id?: number;
+  status?: string;
+}
+
+export interface PromoteMemoryResponse {
+  page: WikiPage;
+  claims: WikiClaim[];
+  entities: WikiEntity[];
+  relations: WikiRelation[];
+}
+
+export async function listWikiPages(params: {
+  vault_id: number;
+  page_type?: string;
+  status?: string;
+  search?: string;
+  page?: number;
+  per_page?: number;
+}): Promise<{ pages: WikiPage[]; page: number; per_page: number }> {
+  const response = await apiClient.get<{ pages: WikiPage[]; page: number; per_page: number }>(
+    "/wiki/pages",
+    { params }
+  );
+  return response.data;
+}
+
+export async function getWikiPage(pageId: number): Promise<WikiPage> {
+  const response = await apiClient.get<WikiPage>(`/wiki/pages/${pageId}`);
+  return response.data;
+}
+
+export async function createWikiPage(data: {
+  vault_id: number;
+  title: string;
+  page_type: string;
+  slug?: string;
+  markdown?: string;
+  summary?: string;
+  status?: string;
+  confidence?: number;
+}): Promise<WikiPage> {
+  const response = await apiClient.post<WikiPage>("/wiki/pages", data);
+  return response.data;
+}
+
+export async function updateWikiPage(pageId: number, data: {
+  title?: string;
+  page_type?: string;
+  slug?: string;
+  markdown?: string;
+  summary?: string;
+  status?: string;
+  confidence?: number;
+}): Promise<WikiPage> {
+  const response = await apiClient.put<WikiPage>(`/wiki/pages/${pageId}`, data);
+  return response.data;
+}
+
+export async function deleteWikiPage(pageId: number): Promise<void> {
+  await apiClient.delete(`/wiki/pages/${pageId}`);
+}
+
+export async function listWikiEntities(params: {
+  vault_id: number;
+  search?: string;
+}): Promise<{ entities: WikiEntity[] }> {
+  const response = await apiClient.get<{ entities: WikiEntity[] }>("/wiki/entities", { params });
+  return response.data;
+}
+
+export async function listWikiClaims(params: {
+  vault_id: number;
+  page_id?: number;
+  entity?: string;
+  search?: string;
+  status?: string;
+}): Promise<{ claims: WikiClaim[] }> {
+  const response = await apiClient.get<{ claims: WikiClaim[] }>("/wiki/claims", { params });
+  return response.data;
+}
+
+export async function listWikiLintFindings(params: {
+  vault_id: number;
+  status?: string;
+  severity?: string;
+}): Promise<{ findings: WikiLintFinding[] }> {
+  const response = await apiClient.get<{ findings: WikiLintFinding[] }>("/wiki/lint", { params });
+  return response.data;
+}
+
+export async function runWikiLint(vaultId: number): Promise<{ findings: WikiLintFinding[]; count: number }> {
+  const response = await apiClient.post<{ findings: WikiLintFinding[]; count: number }>(
+    "/wiki/lint/run",
+    { vault_id: vaultId }
+  );
+  return response.data;
+}
+
+export async function searchWiki(params: {
+  vault_id: number;
+  q: string;
+}): Promise<WikiSearchResponse> {
+  const response = await apiClient.get<WikiSearchResponse>("/wiki/search", { params });
+  return response.data;
+}
+
+export async function promoteMemoryToWiki(request: PromoteMemoryRequest): Promise<PromoteMemoryResponse> {
+  const response = await apiClient.post<PromoteMemoryResponse>("/wiki/promote-memory", request);
+  return response.data;
+}
+
 export default apiClient;

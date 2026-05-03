@@ -14,8 +14,12 @@ from starlette.responses import FileResponse
 from app.api.routes.admin import router as admin_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.chat import router as chat_router
-from app.api.routes.documents import router as documents_router
-from app.api.routes.documents import validation_exception_handler
+from app.api.routes.documents import (
+    router as documents_router,
+)
+from app.api.routes.documents import (
+    validation_exception_handler,
+)
 from app.api.routes.email import router as email_router
 from app.api.routes.eval import router as eval_router
 from app.api.routes.groups import router as groups_router
@@ -28,8 +32,11 @@ from app.api.routes.users import router as users_router
 from app.api.routes.vault_members import (
     group_access_router as vault_group_access_router,
 )
-from app.api.routes.vault_members import router as vault_members_router
+from app.api.routes.vault_members import (
+    router as vault_members_router,
+)
 from app.api.routes.vaults import router as vaults_router
+from app.api.routes.wiki import router as wiki_router
 from app.config import settings
 from app.lifespan import lifespan
 from app.limiter import limiter
@@ -111,6 +118,7 @@ app.include_router(vault_members_router, prefix="/api")
 app.include_router(vault_group_access_router, prefix="/api")
 app.include_router(organizations_router, prefix="/api")
 app.include_router(groups_router, prefix="/api")
+app.include_router(wiki_router, prefix="/api")
 
 # Register exception handler for validation errors (empty filename)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
