@@ -106,12 +106,11 @@ class TestFTSQueryNormalization(unittest.TestCase):
         """AND query must NOT return AFOMIS memory for AFMEDCOM query."""
         self.store.add_memory(content=AFOMIS_MEMORY, category="facts", source="user input")
         results = self.store.search_memories("who is the afmedcom chief?")
-        for r in results:
-            self.assertNotIn(
-                "AFOMIS stands for",
-                r.content,
-                "AFOMIS memory must not be retrieved for AFMEDCOM query"
-            )
+        # "afmedcom" is not in the AFOMIS memory content; AND query must return nothing.
+        self.assertEqual(
+            0, len(results),
+            "AFOMIS memory must not be retrieved for an AFMEDCOM query"
+        )
 
     def test_punctuation_in_query_does_not_cause_fts_syntax_error(self):
         """Punctuation like '?' must not cause a SQLite FTS5 syntax error."""
