@@ -20,7 +20,7 @@ import json
 import logging
 import re
 import sqlite3
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, List, Optional
 
 logger = logging.getLogger(__name__)

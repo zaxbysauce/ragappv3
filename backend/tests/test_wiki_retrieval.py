@@ -10,8 +10,8 @@ import pytest
 from app.services.wiki_retrieval import (
     WikiEvidence,
     WikiRetrievalService,
-    normalize_fts_query,
     extract_query_intent,
+    normalize_fts_query,
 )
 
 

@@ -22,11 +22,11 @@ from app.services.maintenance import MaintenanceService
 from app.services.memory_store import MemoryStore
 from app.services.model_checker import ModelChecker
 from app.services.rag_engine import RAGEngine
-from app.services.wiki_retrieval import WikiRetrievalService
 from app.services.reranking import RerankingService
 from app.services.secret_manager import SecretManager
 from app.services.toggle_manager import ToggleManager
 from app.services.vector_store import VectorStore, VectorStoreError
+from app.services.wiki_retrieval import WikiRetrievalService
 
 logger = logging.getLogger(__name__)
 
