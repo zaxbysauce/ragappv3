@@ -20,3 +20,8 @@ Object.defineProperty(window, 'confirm', {
   value: vi.fn(() => true),
   writable: true,
 });
+
+// Mock Element.prototype.scrollTo — JSDOM does not implement it
+if (!Element.prototype.scrollTo) {
+  Element.prototype.scrollTo = vi.fn();
+}

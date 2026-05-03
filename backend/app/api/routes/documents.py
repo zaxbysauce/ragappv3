@@ -316,6 +316,8 @@ async def list_documents(
     vault_id: Optional[int] = Query(None, description="Filter by vault ID"),
     page: int = Query(1, ge=1, description="Page number (1-indexed)"),
     per_page: int = Query(50, ge=1, le=200, description="Items per page"),
+    search: Optional[str] = Query(None, description="Filter by filename (case-insensitive substring)"),
+    status: Optional[str] = Query(None, description="Filter by processing status"),
     conn: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_active_user),
     evaluate: Callable = Depends(get_evaluate_policy),
@@ -325,9 +327,25 @@ async def list_documents(
 
     Returns a list of files with their id, file_name, file_path, status,
     chunk_count, created_at, and processed_at fields.
-    Optionally filter by vault_id. Supports pagination via page/per_page.
+    Optionally filter by vault_id, search (filename substring), or status.
+    Supports pagination via page/per_page.
     """
     offset = (page - 1) * per_page
+
+    # Build search/status filter clause additions
+    extra_where: list[str] = []
+    extra_params: list = []
+    if search and search.strip():
+        extra_where.append("LOWER(file_name) LIKE ?")
+        extra_params.append(f"%{search.strip().lower()}%")
+    if status and status.strip():
+        extra_where.append("status = ?")
+        extra_params.append(status.strip())
+
+    def _extra_clause(prefix: str = "AND") -> str:
+        if not extra_where:
+            return ""
+        return f" {prefix} " + " AND ".join(extra_where)
 
     # Check vault permissions
     if vault_id is not None:
@@ -336,21 +354,21 @@ async def list_documents(
         # Count total
         count_cursor = await asyncio.to_thread(
             conn.execute,
-            "SELECT COUNT(*) FROM files WHERE vault_id = ?",
-            (vault_id,),
+            f"SELECT COUNT(*) FROM files WHERE vault_id = ?{_extra_clause()}",
+            (vault_id, *extra_params),
         )
         total = (await asyncio.to_thread(count_cursor.fetchone))[0]
         # Query with specific vault_id + pagination
         cursor = await asyncio.to_thread(
             conn.execute,
-            """
+            f"""
             SELECT id, file_name, file_path, status, chunk_count, file_size, created_at, processed_at
             FROM files
-            WHERE vault_id = ?
+            WHERE vault_id = ?{_extra_clause()}
             ORDER BY created_at DESC
             LIMIT ? OFFSET ?
             """,
-            (vault_id, per_page, offset),
+            (vault_id, *extra_params, per_page, offset),
         )
     else:
         # For non-admins without vault_id, get accessible vaults
@@ -362,8 +380,8 @@ async def list_documents(
             # Count total
             count_cursor = await asyncio.to_thread(
                 conn.execute,
-                f"SELECT COUNT(*) FROM files WHERE vault_id IN ({placeholders})",
-                tuple(accessible_vaults),
+                f"SELECT COUNT(*) FROM files WHERE vault_id IN ({placeholders}){_extra_clause()}",
+                (*accessible_vaults, *extra_params),
             )
             total = (await asyncio.to_thread(count_cursor.fetchone))[0]
             # Query with vault_id IN clause + pagination
@@ -372,28 +390,30 @@ async def list_documents(
                 f"""
                 SELECT id, file_name, file_path, status, chunk_count, file_size, created_at, processed_at
                 FROM files
-                WHERE vault_id IN ({placeholders})
+                WHERE vault_id IN ({placeholders}){_extra_clause()}
                 ORDER BY created_at DESC
                 LIMIT ? OFFSET ?
                 """,
-                tuple(accessible_vaults) + (per_page, offset),
+                (*accessible_vaults, *extra_params, per_page, offset),
             )
         else:
             # Admins can see all documents
+            base_where = _extra_clause("WHERE")
             count_cursor = await asyncio.to_thread(
                 conn.execute,
-                "SELECT COUNT(*) FROM files",
+                f"SELECT COUNT(*) FROM files{base_where}",
+                extra_params,
             )
             total = (await asyncio.to_thread(count_cursor.fetchone))[0]
             cursor = await asyncio.to_thread(
                 conn.execute,
-                """
+                f"""
                 SELECT id, file_name, file_path, status, chunk_count, file_size, created_at, processed_at
-                FROM files
+                FROM files{base_where}
                 ORDER BY created_at DESC
                 LIMIT ? OFFSET ?
                 """,
-                (per_page, offset),
+                (*extra_params, per_page, offset),
             )
     rows = await asyncio.to_thread(cursor.fetchall)
 

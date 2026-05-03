@@ -78,10 +78,9 @@ export function AssistantMessage({
 
   // Source cards: prefer cited sources, fall back to all sources
   const sourcesForCards = citedSources.length > 0 ? citedSources : (message.sources ?? []);
-  // Memory cards: prefer cited memories, fall back to all memories.
-  // Memories are always shown distinct from document sources.
-  const memoriesForCards =
-    citedMemories.length > 0 ? citedMemories : (message.memoriesUsed ?? []);
+  // Memory cards: show ONLY memories explicitly cited as [M#] in the answer.
+  // Never fall back to all memoriesUsed — uncited memories are not evidence.
+  const memoriesForCards = citedMemories;
 
   return (
     <motion.div

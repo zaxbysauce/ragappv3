@@ -482,7 +482,8 @@ class MemoryStore:
             if not isinstance(vec, list):
                 continue
             sim = _cosine_similarity(query_embedding, vec)
-            if sim <= 0.0:
+            min_sim = settings.memory_dense_min_similarity if settings.memory_relevance_filter_enabled else 0.0
+            if sim <= min_sim:
                 continue
             scored.append(
                 MemoryRecord(
@@ -554,12 +555,16 @@ class MemoryStore:
             k=settings.memory_rrf_k,
             limit=limit,
         )
+        min_rrf = settings.memory_rrf_min_score if settings.memory_relevance_filter_enabled else 0.0
         out: List[MemoryRecord] = []
         for f in fused:
+            rrf_score = float(f.get("_rrf_score", 0.0))
+            if rrf_score <= min_rrf:
+                continue
             rec: MemoryRecord = f["_rec"]
             # Replace the path-specific score with the fused RRF score so
             # callers see a single, ordering-meaningful value.
-            rec.score = float(f.get("_rrf_score", 0.0))
+            rec.score = rrf_score
             rec.score_type = "rrf"
             out.append(rec)
         return out

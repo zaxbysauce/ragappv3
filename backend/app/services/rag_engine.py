@@ -395,11 +395,19 @@ class RAGEngine:
         memories = []
         if settings.memory_retrieval_enabled:
             try:
-                memories = await asyncio.to_thread(
+                candidates = await asyncio.to_thread(
                     self.memory_store.search_memories,
                     user_input,
                     settings.memory_retrieval_top_k,
                     vault_id=vault_id,
+                )
+                # Apply context_top_k cap after relevance filtering so prompt context
+                # stays bounded even when top_k is large.
+                memories = candidates[: settings.memory_context_top_k]
+                logger.info(
+                    "[query] Memory: %d candidates → %d after context_top_k cap",
+                    len(candidates),
+                    len(memories),
                 )
             except Exception as exc:
                 logger.error("Memory search failed: %s", exc)

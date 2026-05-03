@@ -32,6 +32,8 @@ vi.mock('@/stores/useAuthStore', () => ({
 
 vi.mock('@/lib/api', () => ({
   changePassword: mockChangePassword,
+  listOrganizations: vi.fn().mockResolvedValue([]),
+  listVaults: vi.fn().mockResolvedValue({ vaults: [] }),
 }));
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));

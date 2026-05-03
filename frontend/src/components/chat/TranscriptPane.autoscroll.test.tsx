@@ -1,5 +1,5 @@
 /**
- * Tests for the streaming auto-scroll behavior added in P1.1.
+ * Tests for the streaming auto-scroll behavior in TranscriptPane.
  *
  * Specifically:
  * - Token growth (streamingContentLength increasing without messageIds.length
@@ -36,21 +36,6 @@ const mockState = vi.hoisted(() => ({
   stopStreaming: vi.fn(),
   loadChat: vi.fn(),
   newChat: vi.fn(),
-}));
-
-// Capture every scrollToIndex call so the test can assert how many auto-scroll
-// triggers fired across token growth.
-const scrollToIndexMock = vi.fn();
-const measureMock = vi.fn();
-
-vi.mock("@tanstack/react-virtual", () => ({
-  useVirtualizer: () => ({
-    scrollToIndex: scrollToIndexMock,
-    measure: measureMock,
-    getVirtualItems: () => [],
-    getTotalSize: () => 1000,
-    measureElement: () => 0,
-  }),
 }));
 
 vi.mock("@/stores/useChatStore", () => ({
@@ -146,9 +131,14 @@ vi.mock("./Composer", () => ({
   Composer: () => <div data-testid="composer" />,
 }));
 
+// Track scrollTo calls on scroll container elements
+let scrollToMock: ReturnType<typeof vi.fn>;
+
 beforeEach(() => {
-  scrollToIndexMock.mockReset();
-  measureMock.mockReset();
+  scrollToMock = vi.fn();
+  // Patch scrollTo on Element prototype — JSDOM does not implement it
+  Element.prototype.scrollTo = scrollToMock;
+
   mockState.messageIds = ["m1", "m2"];
   mockState.messagesById = {
     m1: { id: "m1", role: "user", content: "hi" },
@@ -186,8 +176,8 @@ function renderAndGetScrollEl() {
 describe("TranscriptPane streaming auto-scroll", () => {
   it("scrolls when streaming content length grows while pinned at bottom", () => {
     const { rerender } = render(<TranscriptPane />);
-    // Initial render → at-bottom by default.
-    const initialCalls = scrollToIndexMock.mock.calls.length;
+    // Capture how many scrollTo calls happened on initial render.
+    const initialCalls = scrollToMock.mock.calls.length;
 
     // Simulate token growth: content of m2 grows.
     act(() => {
@@ -198,18 +188,17 @@ describe("TranscriptPane streaming auto-scroll", () => {
       rerender(<TranscriptPane />);
     });
 
-    expect(scrollToIndexMock.mock.calls.length).toBeGreaterThan(initialCalls);
-    // The most recent call must target the last index with align: "end".
-    const last =
-      scrollToIndexMock.mock.calls[scrollToIndexMock.mock.calls.length - 1];
-    expect(last[0]).toBe(1); // last index of [m1, m2]
-    expect(last[1]).toMatchObject({ align: "end" });
+    // scrollTo must have been called at least once more since initial render.
+    expect(scrollToMock.mock.calls.length).toBeGreaterThan(initialCalls);
+    // The call should target scrollHeight (scroll to bottom).
+    const lastCall = scrollToMock.mock.calls[scrollToMock.mock.calls.length - 1];
+    expect(lastCall[0]).toMatchObject({ top: expect.any(Number) });
   });
 
   it("stops auto-scrolling once the user scrolls up", () => {
     const { result, scrollEl } = renderAndGetScrollEl();
 
-    // First: simulate the user scrolling up.
+    // Simulate the user scrolling up.
     Object.defineProperty(scrollEl, "scrollTop", {
       configurable: true,
       writable: true,
@@ -218,7 +207,7 @@ describe("TranscriptPane streaming auto-scroll", () => {
     act(() => {
       fireEvent.scroll(scrollEl);
     });
-    const callsAfterScrollUp = scrollToIndexMock.mock.calls.length;
+    const callsAfterScrollUp = scrollToMock.mock.calls.length;
 
     // Now grow streaming content. Auto-scroll must NOT fire.
     act(() => {
@@ -229,7 +218,7 @@ describe("TranscriptPane streaming auto-scroll", () => {
       result.rerender(<TranscriptPane />);
     });
 
-    expect(scrollToIndexMock.mock.calls.length).toBe(callsAfterScrollUp);
+    expect(scrollToMock.mock.calls.length).toBe(callsAfterScrollUp);
   });
 
   it("does not auto-scroll on token growth when no message is streaming", () => {
@@ -240,7 +229,7 @@ describe("TranscriptPane streaming auto-scroll", () => {
       m2: { id: "m2", role: "assistant", content: "" },
     };
     const { rerender } = render(<TranscriptPane />);
-    const initialCalls = scrollToIndexMock.mock.calls.length;
+    const initialCalls = scrollToMock.mock.calls.length;
 
     // Growing content of m2 outside a streaming session — selector returns 0,
     // so the token-growth effect shouldn't fire.
@@ -252,9 +241,8 @@ describe("TranscriptPane streaming auto-scroll", () => {
       rerender(<TranscriptPane />);
     });
 
-    // scrollToIndex may have fired once for the initial-render new-message
-    // effect, but not again from the streaming-length effect (streamingId=null
-    // → selector returns 0 → effect early-returns).
-    expect(scrollToIndexMock.mock.calls.length).toBe(initialCalls);
+    // scrollTo must not have fired again from the streaming-length effect
+    // (streamingId=null → selector returns 0 → effect early-returns).
+    expect(scrollToMock.mock.calls.length).toBe(initialCalls);
   });
 });

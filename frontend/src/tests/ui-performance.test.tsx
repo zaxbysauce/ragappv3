@@ -23,6 +23,11 @@ class MockResizeObserver {
 }
 global.ResizeObserver = MockResizeObserver as unknown as typeof ResizeObserver;
 
+// Mock scrollTo — JSDOM does not implement it
+if (typeof Element !== 'undefined' && !Element.prototype.scrollTo) {
+  Element.prototype.scrollTo = vi.fn();
+}
+
 // =============================================================================
 // MOCK @tanstack/react-virtual - Track calls for verification
 // =============================================================================
@@ -59,7 +64,7 @@ vi.mock("@tanstack/react-virtual", () => ({
 // MOCK STORES
 // =============================================================================
 
-const mockChatState = vi.hoisted(() => ({
+const mockChatState = {
   messageIds: [] as string[],
   messagesById: {} as Record<string, { id: string; role: string; content: string }>,
   input: "",
@@ -80,7 +85,7 @@ const mockChatState = vi.hoisted(() => ({
   stopStreaming: vi.fn(),
   loadChat: vi.fn(),
   newChat: vi.fn(),
-}));
+};
 
 vi.mock("@/stores/useChatStore", () => ({
   useChatStore: vi.fn((selector?: (s: typeof mockChatState) => unknown) =>
@@ -191,13 +196,16 @@ function setMockMessages(messages: Array<{ id: string; role: string; content: st
 // SC-001: TranscriptPane Virtualization
 // =============================================================================
 
-describe("SC-001: TranscriptPane Virtualization", () => {
+describe("SC-001: TranscriptPane Document-Flow Rendering", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     virtualizerCalls = [];
+    if (typeof Element !== 'undefined' && (Element.prototype.scrollTo as ReturnType<typeof vi.fn>)?.mockReset) {
+      (Element.prototype.scrollTo as ReturnType<typeof vi.fn>).mockReset?.();
+    }
   });
 
-  it("calls useVirtualizer with count=200 when rendering 200 messages", async () => {
+  it("renders all 200 messages in normal document flow", async () => {
     const messages = Array.from({ length: 200 }, (_, i) => ({
       id: String(i + 1),
       role: i % 2 === 0 ? "user" : "assistant",
@@ -205,59 +213,38 @@ describe("SC-001: TranscriptPane Virtualization", () => {
     }));
     setMockMessages(messages);
 
-    await act(async () => {
-      render(<TranscriptPane />);
-    });
+    const { container } = await act(async () => render(<TranscriptPane />));
 
-    // SC-001 Verification: The virtualizer should be called with count=200
-    const transcriptPaneCalls = virtualizerCalls.filter(
-      (call) => call.count === 200
-    );
-    expect(transcriptPaneCalls.length).toBe(1);
-    expect(transcriptPaneCalls[0].count).toBe(200);
+    // All messages should be in the DOM via document flow (data-message-id attributes)
+    const messageEls = container.querySelectorAll("[data-message-id]");
+    expect(messageEls.length).toBe(200);
   });
 
-  it("virtualizer returns limited virtual items (simulating viewport)", async () => {
-    const messages = Array.from({ length: 200 }, (_, i) => ({
+  it("renders messages with correct data-message-id attributes", async () => {
+    const messages = Array.from({ length: 10 }, (_, i) => ({
       id: String(i + 1),
       role: "user" as const,
       content: `Message ${i + 1}`,
     }));
     setMockMessages(messages);
 
-    // Clear previous calls
-    virtualizerCalls = [];
+    const { container } = await act(async () => render(<TranscriptPane />));
 
-    await act(async () => {
-      render(<TranscriptPane />);
-    });
-
-    // The mock's useVirtualizer returns only Math.min(15, count) items
-    // This simulates real virtualization where only visible items are in DOM
-    // The count was 200, but only 15 virtual items were returned
-    const callWith200 = virtualizerCalls.find((c) => c.count === 200);
-    expect(callWith200).toBeDefined();
-    // The actual mock returns 15 items for 200 messages
+    const messageEls = container.querySelectorAll("[data-message-id]");
+    expect(messageEls.length).toBe(10);
+    // First and last IDs match
+    expect(messageEls[0].getAttribute("data-message-id")).toBe("1");
+    expect(messageEls[9].getAttribute("data-message-id")).toBe("10");
   });
 
-  it("overscan of 5 is configured in virtualizer options", async () => {
-    const messages = Array.from({ length: 50 }, (_, i) => ({
-      id: String(i + 1),
-      role: "user" as const,
-      content: `Message ${i + 1}`,
-    }));
+  it("renders transcript inside scrollable container with aria-label", async () => {
+    const messages = [{ id: "1", role: "user" as const, content: "hello" }];
     setMockMessages(messages);
 
-    await act(async () => {
-      render(<TranscriptPane />);
-    });
+    const { container } = await act(async () => render(<TranscriptPane />));
 
-    // Verify overscan is set to 5 (from TranscriptPane line 507)
-    const transcriptPaneCalls = virtualizerCalls.filter(
-      (call) => call.count === 50
-    );
-    expect(transcriptPaneCalls.length).toBe(1);
-    expect(transcriptPaneCalls[0].overscan).toBe(5);
+    const scrollEl = container.querySelector('[aria-label="Chat messages"]');
+    expect(scrollEl).toBeTruthy();
   });
 });
 

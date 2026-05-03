@@ -584,9 +584,11 @@ export interface Vault {
   updated_at: string;
   file_count: number;
   memory_count: number;
-    session_count: number;
-    org_id: number | null;
-  }
+  session_count: number;
+  org_id: number | null;
+  /** Backend-provided flag: true when vault cannot be renamed or deleted. */
+  is_default?: boolean;
+}
 
 export interface VaultListResponse {
   vaults: Vault[];
@@ -681,6 +683,18 @@ export async function deleteMemory(id: string): Promise<void> {
   await apiClient.delete(`/memories/${id}`);
 }
 
+export interface UpdateMemoryRequest {
+  content?: string;
+  category?: string;
+  tags?: string;
+  source?: string;
+}
+
+export async function updateMemory(id: string, request: UpdateMemoryRequest): Promise<MemoryResult> {
+  const response = await apiClient.put<MemoryResult>(`/memories/${id}`, request);
+  return response.data;
+}
+
 export async function listMemories(vaultId?: number): Promise<{ memories: MemoryResult[] }> {
   const response = await apiClient.get<{ memories: MemoryResult[] }>(
     "/memories",
@@ -689,8 +703,14 @@ export async function listMemories(vaultId?: number): Promise<{ memories: Memory
   return response.data;
 }
 
-export async function listDocuments(vaultId?: number): Promise<ListDocumentsResponse> {
-  const response = await apiClient.get<ListDocumentsResponse>("/documents", vaultId != null ? { params: { vault_id: vaultId } } : undefined);
+export async function listDocuments(vaultId?: number, search?: string, status?: string, page?: number, perPage?: number): Promise<ListDocumentsResponse> {
+  const params: Record<string, unknown> = {};
+  if (vaultId != null) params.vault_id = vaultId;
+  if (search && search.trim()) params.search = search.trim();
+  if (status && status.trim()) params.status = status.trim();
+  if (page != null) params.page = page;
+  if (perPage != null) params.per_page = perPage;
+  const response = await apiClient.get<ListDocumentsResponse>("/documents", { params });
   return response.data;
 }
 

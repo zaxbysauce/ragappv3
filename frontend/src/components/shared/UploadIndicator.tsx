@@ -10,11 +10,11 @@ export function UploadIndicator() {
   const [isExpanded, setIsExpanded] = useState(false);
 
   const activeUploads = uploads.filter(
-    (u) => u.status === "pending" || u.status === "uploading"
+    (u) => u.status === "pending" || u.status === "uploading" || u.status === "indexing"
   );
-  const completedCount = uploads.filter((u) => u.status === "completed").length;
+  const completedCount = uploads.filter((u) => u.status === "indexed").length;
   const hasCompleted = uploads.some(
-    (u) => u.status === "completed" || u.status === "error" || u.status === "cancelled"
+    (u) => u.status === "indexed" || u.status === "error" || u.status === "cancelled"
   );
 
   // Only show if there are active uploads or completed uploads that haven't been cleared
@@ -100,17 +100,19 @@ export function UploadIndicator() {
                 <span
                   className={cn(
                     "shrink-0",
-                    upload.status === "completed" && "text-emerald-600",
+                    upload.status === "indexed" && "text-emerald-600",
                     upload.status === "error" && "text-destructive",
-                    upload.status === "cancelled" && "text-muted-foreground"
+                    upload.status === "cancelled" && "text-muted-foreground",
+                    upload.status === "indexing" && "text-blue-600"
                   )}
                 >
-                  {upload.status === "completed" && "Done"}
+                  {upload.status === "indexed" && "Done"}
                   {upload.status === "error" && "Error"}
                   {upload.status === "cancelled" && "Cancelled"}
                   {upload.status === "pending" && "Pending"}
                   {upload.status === "uploading" &&
                     `${upload.progress > 0 ? upload.progress : 0}%`}
+                  {upload.status === "indexing" && "Indexing…"}
                 </span>
               </div>
             ))}

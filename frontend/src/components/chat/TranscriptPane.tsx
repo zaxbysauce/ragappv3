@@ -1,7 +1,6 @@
 // frontend/src/components/chat/TranscriptPane.tsx
 
 import { useRef, useEffect, useState, useCallback, memo } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -253,53 +252,18 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
 
   const hasIndexedDocs = activeVault ? activeVault.file_count > 0 : false;
 
-  // Virtualizer
-  const virtualizer = useVirtualizer({
-    count: messageIds.length,
-    getScrollElement: () => scrollRef.current,
-    estimateSize: () => 120,
-    overscan: 5,
-    measureElement: (el) => el?.getBoundingClientRect().height ?? 0,
-  });
-
   /**
-   * Centralized auto-scroll. Honors three signals:
-   *  - new messages added (messageIds.length grows)
-   *  - streaming token growth on the active assistant message
-   *    (streamingContentLength grows without messageIds.length changing)
-   *  - explicit user request via the "New messages" button
-   *
-   * Only scrolls when the user is currently pinned at the bottom AND has
-   * not manually scrolled up since the last pin. Reads the ref-backed flag
-   * so callbacks fired between renders see fresh state.
+   * Centralized auto-scroll using normal document flow.
+   * No virtualizer — just scroll the container to its bottom.
    */
   const scrollToBottomNow = useCallback(
     (behavior: ScrollBehavior = "auto") => {
       if (messageIds.length === 0) return;
-      requestAnimationFrame(() => {
-        // Force virtualizer to remeasure dynamic items (markdown, code blocks,
-        // source cards) before scrolling so the target offset is correct.
-        try {
-          virtualizer.measure();
-        } catch {
-          // measure() may be a no-op on very early renders — safe to ignore.
-        }
-        virtualizer.scrollToIndex(messageIds.length - 1, {
-          align: "end",
-          behavior,
-        });
-        // Final correction: streamed token growth and code-block reflow can
-        // leave a small gap. Force scrollTop to the absolute bottom.
-        const el = scrollRef.current;
-        if (el) {
-          // requestAnimationFrame again so the DOM has settled after measure.
-          requestAnimationFrame(() => {
-            el.scrollTop = el.scrollHeight;
-          });
-        }
-      });
+      const el = scrollRef.current;
+      if (!el) return;
+      el.scrollTo({ top: el.scrollHeight, behavior });
     },
-    [messageIds.length, virtualizer]
+    [messageIds.length]
   );
 
   // New-message auto-scroll: triggered when messageIds.length changes.
@@ -335,21 +299,23 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
     }
   }, [isStreaming, scrollToBottomNow]);
 
-  // Single evidence:jump-to-answer listener (Phase 1 fix — duplicate listener removed)
+  // Single evidence:jump-to-answer listener
   useEffect(() => {
     const handler = (e: Event) => {
       const { sourceId } = (e as CustomEvent<{ sourceId: string }>).detail;
       const { messageIds: ids, messagesById } = useChatStore.getState();
       const idx = ids.findIndex((id) => messagesById[id]?.sources?.some((s) => s.id === sourceId));
       if (idx >= 0) {
-        virtualizer.scrollToIndex(idx, { align: "center", behavior: "smooth" });
-        setHighlightedMessageId(ids[idx]);
+        const msgId = ids[idx];
+        const el = scrollRef.current?.querySelector(`[data-message-id="${msgId}"]`);
+        el?.scrollIntoView({ behavior: "smooth", block: "center" });
+        setHighlightedMessageId(msgId);
         setTimeout(() => setHighlightedMessageId(null), 1500);
       }
     };
     window.addEventListener("evidence:jump-to-answer", handler);
     return () => window.removeEventListener("evidence:jump-to-answer", handler);
-  }, [virtualizer]);
+  }, []);
 
   // Page title — updates whenever active session title changes
   const activeSessionTitle = useChatShellStore((s) => s.activeSessionTitle);
@@ -479,35 +445,25 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
                 documentCount={activeVault?.file_count}
               />
             ) : (
-              <div
-                style={{ height: virtualizer.getTotalSize(), width: "100%", position: "relative" }}
-              >
-                {virtualizer.getVirtualItems().map((vItem) => {
-                  const msgId = messageIds[vItem.index];
-                  return (
-                    <div
-                      key={msgId}
-                      data-index={vItem.index}
-                      ref={virtualizer.measureElement}
-                      style={{ position: "absolute", top: vItem.start, left: 0, width: "100%" }}
-                    >
-                      <MessageRow
-                        messageId={msgId}
-                        isLast={vItem.index === messageIds.length - 1}
-                        isStreaming={isStreaming}
-                        streamingMessageId={streamingMessageId}
-                        userInitial={userInitial}
-                        activeSessionId={activeSessionId}
-                        showDebug={showDebug}
-                        highlightedId={highlightedMessageId}
-                        onRetry={handleRetry}
-                        onEdit={handleEdit}
-                        onFork={handleFork}
-                        onFeedback={handleFeedback}
-                      />
-                    </div>
-                  );
-                })}
+              <div className="py-2">
+                {messageIds.map((msgId, idx) => (
+                  <div key={msgId} data-message-id={msgId}>
+                    <MessageRow
+                      messageId={msgId}
+                      isLast={idx === messageIds.length - 1}
+                      isStreaming={isStreaming}
+                      streamingMessageId={streamingMessageId}
+                      userInitial={userInitial}
+                      activeSessionId={activeSessionId}
+                      showDebug={showDebug}
+                      highlightedId={highlightedMessageId}
+                      onRetry={handleRetry}
+                      onEdit={handleEdit}
+                      onFork={handleFork}
+                      onFeedback={handleFeedback}
+                    />
+                  </div>
+                ))}
               </div>
             )}
           </div>

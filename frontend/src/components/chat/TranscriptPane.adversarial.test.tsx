@@ -23,6 +23,9 @@ global.ResizeObserver = MockResizeObserver as unknown as typeof ResizeObserver;
 // Mock scrollIntoView
 Element.prototype.scrollIntoView = vi.fn();
 
+// Mock scrollTo — JSDOM does not implement it
+Element.prototype.scrollTo = vi.fn();
+
 // =============================================================================
 // MOCKS
 // =============================================================================

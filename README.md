@@ -219,6 +219,9 @@ On first launch, you'll be redirected to the **Setup Wizard** (`/setup`) to crea
 | `UNIQUE_DOCS_IN_TOP_K` | `5` | Max distinct documents in retrieval result set |
 | `INDEX_REBUILD_DELTA` | `0.2` | Delete churn fraction (0–1) that triggers ANN index rebuild |
 | `REUPLOAD_SAFE_ORDER` | `true` | Insert new chunks before deleting old on re-upload (eliminates zero-chunk window) |
+| `MEMORY_DENSE_MIN_SIMILARITY` | `0.30` | Minimum cosine similarity for dense memory retrieval. Candidates below this score are discarded before prompt injection. Raise to reduce noise; lower to surface more memories. |
+| `MEMORY_RRF_MIN_SCORE` | `0.005` | Minimum fused RRF score for hybrid memory retrieval. Candidates below this are discarded. |
+| `MEMORY_CONTEXT_TOP_K` | `3` | Maximum number of memories injected into each prompt after relevance filtering. |
 
 ### Data Directory Structure
 
@@ -478,7 +481,7 @@ curl http://localhost:9090/api/health?deep=true | jq .vector_store
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/documents` | List all documents |
+| GET | `/api/documents` | List documents. Query params: `search` (filename substring), `status` (e.g. `indexed`), `page`, `per_page` |
 | GET | `/api/documents/stats` | Document statistics |
 | POST | `/api/documents/upload` | Upload file(s) |
 | POST | `/api/documents/scan` | Trigger directory scan |

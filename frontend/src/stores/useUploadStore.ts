@@ -1,13 +1,16 @@
 import { create } from "zustand";
-import { uploadDocument } from "@/lib/api";
+import { uploadDocument, getDocumentStatus } from "@/lib/api";
 import { toast } from "sonner";
 
 export interface UploadFile {
   id: string;
   file: File;
   progress: number;
-  status: "pending" | "uploading" | "completed" | "error" | "cancelled";
+  /** State machine: pending → uploading → indexing → indexed | error | cancelled */
+  status: "pending" | "uploading" | "indexing" | "indexed" | "error" | "cancelled";
   error?: string;
+  /** Backend document id, set after successful upload for indexing status polling. */
+  documentId?: string;
 }
 
 interface UploadState {
@@ -101,7 +104,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
   clearCompleted: () => {
     set((state) => ({
       uploads: state.uploads.filter(
-        (u) => u.status === "pending" || u.status === "uploading"
+        (u) => u.status === "pending" || u.status === "uploading" || u.status === "indexing"
       ),
     }));
   },
@@ -158,7 +161,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
         try {
           get().setStatus(pendingUpload.id, "uploading");
 
-          await uploadDocument(
+          const uploadResult = await uploadDocument(
             pendingUpload.file,
             (progress) => {
               get().updateProgress(pendingUpload.id, progress);
@@ -166,8 +169,42 @@ export const useUploadStore = create<UploadState>((set, get) => ({
             activeVaultId || undefined
           );
 
-          get().setStatus(pendingUpload.id, "completed");
-          toast.success(`${pendingUpload.file.name} uploaded successfully`);
+          // Start polling for indexing completion.
+          const docId = String(uploadResult.id);
+          set((state) => ({
+            uploads: state.uploads.map((u) =>
+              u.id === pendingUpload.id
+                ? { ...u, status: "indexing", documentId: docId, progress: 100 }
+                : u
+            ),
+          }));
+
+          // Poll until indexed, error, or 3 min timeout (60 × 3 s).
+          let attempts = 0;
+          const maxAttempts = 60;
+          while (attempts < maxAttempts) {
+            await new Promise((r) => setTimeout(r, 3000));
+            attempts++;
+            try {
+              const statusResult = await getDocumentStatus(docId);
+              if (statusResult.status === "indexed") {
+                get().setStatus(pendingUpload.id, "indexed");
+                toast.success(`${pendingUpload.file.name} indexed successfully`);
+                break;
+              } else if (statusResult.status === "error") {
+                get().setStatus(pendingUpload.id, "error", statusResult.error_message ?? "Indexing failed");
+                toast.error(`Failed to index ${pendingUpload.file.name}`);
+                break;
+              }
+              // Still pending/processing — keep polling
+            } catch {
+              // Status poll failed — treat as transient, keep trying
+            }
+            if (attempts >= maxAttempts) {
+              get().setStatus(pendingUpload.id, "error", "Indexing timed out");
+              toast.error(`Indexing timed out for ${pendingUpload.file.name}`);
+            }
+          }
         } catch (err) {
           const errorMsg = err instanceof Error ? err.message : "Upload failed";
           get().setStatus(pendingUpload.id, "error", errorMsg);

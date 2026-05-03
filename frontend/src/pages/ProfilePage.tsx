@@ -1,12 +1,12 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import { useAuthStore } from "@/stores/useAuthStore";
-import { changePassword } from "@/lib/api";
+import { changePassword, listOrganizations, listVaults, type Organization, type Vault } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { User, Lock, Loader2, Save } from "lucide-react";
+import { User, Lock, Loader2, Save, Building2, Database } from "lucide-react";
 
 type UserRole = "superadmin" | "admin" | "member" | "viewer";
 
@@ -20,15 +20,28 @@ const ROLE_LABELS: Record<UserRole, string> = {
 function ProfilePageContent() {
   const user = useAuthStore((state) => state.user);
   const updateProfile = useAuthStore((state) => state.updateProfile);
-  
+
   const [fullName, setFullName] = useState(user?.full_name || "");
   const [updatingProfile, setUpdatingProfile] = useState(false);
-  
+
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [changingPassword, setChangingPassword] = useState(false);
   const [passwordError, setPasswordError] = useState("");
+
+  const [orgs, setOrgs] = useState<Organization[]>([]);
+  const [vaults, setVaults] = useState<Vault[]>([]);
+  const [loadingAccess, setLoadingAccess] = useState(true);
+
+  useEffect(() => {
+    setLoadingAccess(true);
+    Promise.allSettled([listOrganizations(), listVaults()]).then(([orgResult, vaultResult]) => {
+      if (orgResult.status === "fulfilled") setOrgs(orgResult.value);
+      if (vaultResult.status === "fulfilled") setVaults(vaultResult.value.vaults ?? []);
+      setLoadingAccess(false);
+    });
+  }, []);
 
   const handleUpdateProfile = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -157,8 +170,8 @@ function ProfilePageContent() {
               <Input id="confirm-password" type="password" placeholder="Confirm new password..." value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} disabled={changingPassword} aria-label="Confirm new password" />
             </div>
             <div className="flex justify-end">
-              <Button 
-                type="submit" 
+              <Button
+                type="submit"
                 disabled={changingPassword || !currentPassword || !newPassword || !confirmPassword}
               >
                 {changingPassword ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Lock className="w-4 h-4 mr-2" />}
@@ -166,6 +179,62 @@ function ProfilePageContent() {
               </Button>
             </div>
           </form>
+        </CardContent>
+      </Card>
+
+      {/* Organization memberships */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Building2 className="w-5 h-5" />Organization Access
+          </CardTitle>
+          <CardDescription>Organizations you belong to</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {loadingAccess ? (
+            <div className="flex items-center gap-2 text-muted-foreground text-sm"><Loader2 className="w-4 h-4 animate-spin" /> Loading...</div>
+          ) : orgs.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No organization memberships found.</p>
+          ) : (
+            <ul className="space-y-2">
+              {orgs.map((org) => (
+                <li key={org.id} className="flex items-center gap-2 text-sm">
+                  <Building2 className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                  <span className="font-medium">{org.name}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Accessible vaults */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Database className="w-5 h-5" />Vault Access
+          </CardTitle>
+          <CardDescription>Knowledge vaults you can access</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {loadingAccess ? (
+            <div className="flex items-center gap-2 text-muted-foreground text-sm"><Loader2 className="w-4 h-4 animate-spin" /> Loading...</div>
+          ) : vaults.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No vaults accessible.</p>
+          ) : (
+            <ul className="space-y-2">
+              {vaults.map((vault) => (
+                <li key={vault.id} className="flex items-center gap-2 text-sm">
+                  <Database className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                  <span className="font-medium">{vault.name}</span>
+                  {vault.is_default && <Badge variant="outline" className="text-xs">Default</Badge>}
+                  {vault.file_count > 0 && (
+                    <span className="text-xs text-muted-foreground">{vault.file_count} docs</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
         </CardContent>
       </Card>
     </div>
