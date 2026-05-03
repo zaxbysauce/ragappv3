@@ -22,6 +22,7 @@ from app.services.maintenance import MaintenanceService
 from app.services.memory_store import MemoryStore
 from app.services.model_checker import ModelChecker
 from app.services.rag_engine import RAGEngine
+from app.services.wiki_retrieval import WikiRetrievalService
 from app.services.reranking import RerankingService
 from app.services.secret_manager import SecretManager
 from app.services.toggle_manager import ToggleManager
@@ -412,6 +413,10 @@ async def lifespan(app: FastAPI):
         logger.warning(f"FileWatcher start failed (continuing): {e}")
         app.state.file_watcher = None
 
+    # Initialize WikiRetrievalService using the app's DB pool
+    app.state.wiki_retrieval = WikiRetrievalService(pool=app.state.db_pool)
+    logger.info("WikiRetrievalService initialized")
+
     # Initialize RAGEngine singleton with cached services
     app.state.rag_engine = RAGEngine(
         embedding_service=app.state.embedding_service,
@@ -419,8 +424,9 @@ async def lifespan(app: FastAPI):
         memory_store=app.state.memory_store,
         llm_client=app.state.llm_client,
         reranking_service=app.state.reranking_service,
+        wiki_retrieval=app.state.wiki_retrieval,
     )
-    logger.info("RAGEngine singleton initialized")
+    logger.info("RAGEngine singleton initialized with wiki retrieval")
 
     # Start memory embedding backfill as a non-blocking background task.
     # Memories created before the embedding column existed (or with a stale model)

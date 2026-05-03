@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Source, UsedMemory } from "@/lib/api";
+import type { Source, UsedMemory, WikiReference } from "@/lib/api";
 
 export interface Message {
   id: string;
@@ -8,6 +8,8 @@ export interface Message {
   sources?: Source[];
   /** Memories the assistant used while generating this message (structured, with [M#] labels). */
   memoriesUsed?: UsedMemory[];
+  /** Wiki evidence cited as [W#] in this assistant message. */
+  wikiRefs?: WikiReference[];
   stopped?: boolean;
   error?: string;
   created_at?: string;
@@ -260,6 +262,22 @@ export const useLastCompletedAssistantSources = (): Source[] | undefined =>
       if (id === streamingId) continue;
       const msg = s.messagesById[id];
       if (msg?.role === "assistant" && msg.sources) return msg.sources;
+    }
+    return undefined;
+  });
+
+/**
+ * Selector returning the wiki refs of the most recent *completed* assistant
+ * message. Mirrors useLastCompletedAssistantSources pattern.
+ */
+export const useLastCompletedAssistantWikiRefs = (): WikiReference[] | undefined =>
+  useChatStore((s) => {
+    const streamingId = s.streamingMessageId;
+    for (let i = s.messageIds.length - 1; i >= 0; i--) {
+      const id = s.messageIds[i];
+      if (id === streamingId) continue;
+      const msg = s.messagesById[id];
+      if (msg?.role === "assistant" && msg.wikiRefs && msg.wikiRefs.length > 0) return msg.wikiRefs;
     }
     return undefined;
   });

@@ -8,6 +8,7 @@ import { useChatShellStore } from "@/stores/useChatShellStore";
 import { MarkdownMessage, parseCitationSegments } from "./MarkdownMessage";
 import { SourceCards } from "./SourceCards";
 import { MemoryCards } from "./MemoryCards";
+import { WikiCards } from "./WikiCards";
 import { AssistantMessageActions } from "./MessageActions";
 
 // Re-export for backwards compat with tests
@@ -48,10 +49,10 @@ export function AssistantMessage({
   const { openRightPane, setSelectedEvidenceSource, setActiveRightTab } = useChatShellStore();
   const prefersReducedMotion = useReducedMotion();
 
-  // Derive cited sources and memories for source/memory cards
-  const { citedSources, citedMemories } = useMemo(
-    () => parseCitationSegments(message.content, message.sources, message.memoriesUsed),
-    [message.content, message.sources, message.memoriesUsed]
+  // Derive cited sources, memories, and wiki refs for evidence cards
+  const { citedSources, citedMemories, citedWikis } = useMemo(
+    () => parseCitationSegments(message.content, message.sources, message.memoriesUsed, message.wikiRefs),
+    [message.content, message.sources, message.memoriesUsed, message.wikiRefs]
   );
 
   const handleSourceClick = useCallback(
@@ -76,11 +77,13 @@ export function AssistantMessage({
     onDebugToggle?.(next);
   }, [isDebugActive, onDebugToggle]);
 
-  // Source cards: prefer cited sources, fall back to all sources
-  const sourcesForCards = citedSources.length > 0 ? citedSources : (message.sources ?? []);
+  // Source cards: show ONLY sources explicitly cited as [S#] in the answer.
+  // Do NOT fall back to all sources — uncited sources must not appear as evidence.
+  const sourcesForCards = citedSources;
   // Memory cards: show ONLY memories explicitly cited as [M#] in the answer.
-  // Never fall back to all memoriesUsed — uncited memories are not evidence.
   const memoriesForCards = citedMemories;
+  // Wiki cards: show ONLY wiki refs explicitly cited as [W#] in the answer.
+  const wikiRefsForCards = citedWikis;
 
   return (
     <motion.div
@@ -110,10 +113,16 @@ export function AssistantMessage({
           content={message.content}
           sources={message.sources}
           memories={message.memoriesUsed}
+          wikiRefs={message.wikiRefs}
           isStreaming={isStreaming}
           onCitationClick={handleSourceClick}
           citedSources={citedSources}
         />
+
+        {/* Wiki cards — compiled knowledge cited as [W#] */}
+        {!isStreaming && wikiRefsForCards.length > 0 && (
+          <WikiCards wikiRefs={wikiRefsForCards} />
+        )}
 
         {/* Source cards — shown below the message body */}
         {!isStreaming && sourcesForCards.length > 0 && (

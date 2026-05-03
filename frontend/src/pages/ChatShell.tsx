@@ -66,10 +66,43 @@ export default function ChatShell() {
 
   const handleExportChat = useCallback(() => {
     if (messages.length === 0) return;
+
     const chatText = messages
       .map((m) => `### ${m.role === "user" ? "User" : "Assistant"}\n\n${m.content}`)
       .join("\n\n---\n\n");
-    const blob = new Blob([chatText], { type: "text/markdown" });
+
+    // Build evidence appendices for assistant messages that have citations.
+    const appendices: string[] = [];
+    messages.forEach((m, idx) => {
+      if (m.role !== "assistant") return;
+      const msgLabel = `Message ${idx + 1}`;
+      const wikiLines: string[] = [];
+      const srcLines: string[] = [];
+      const memLines: string[] = [];
+
+      (m.wikiRefs ?? []).forEach((w) => {
+        wikiLines.push(`[${w.wiki_label}] ${w.title} (${w.page_type ?? "wiki"}) — ${w.claim_text ?? w.excerpt ?? ""}`);
+      });
+      (m.sources ?? []).forEach((s) => {
+        srcLines.push(`[${s.source_label ?? "S?"}] ${s.filename}${s.section ? ` § ${s.section}` : ""}`);
+      });
+      (m.memoriesUsed ?? []).forEach((mem) => {
+        memLines.push(`[${mem.memory_label}] ${mem.content.slice(0, 200)}`);
+      });
+
+      if (wikiLines.length + srcLines.length + memLines.length === 0) return;
+      const parts: string[] = [`#### ${msgLabel} — Evidence`];
+      if (wikiLines.length) parts.push("**Wiki [W#]:**\n" + wikiLines.join("\n"));
+      if (srcLines.length) parts.push("**Documents [S#]:**\n" + srcLines.join("\n"));
+      if (memLines.length) parts.push("**Memories [M#]:**\n" + memLines.join("\n"));
+      appendices.push(parts.join("\n\n"));
+    });
+
+    const fullText = appendices.length
+      ? `${chatText}\n\n---\n\n## Evidence Appendix\n\n${appendices.join("\n\n---\n\n")}`
+      : chatText;
+
+    const blob = new Blob([fullText], { type: "text/markdown" });
     const url = URL.createObjectURL(blob);
     try {
       const link = document.createElement("a");
@@ -124,6 +157,7 @@ export default function ChatShell() {
           content: m.content,
           sources: m.sources ?? undefined,
           memoriesUsed: m.memories ?? undefined,
+          wikiRefs: m.wiki_refs ?? undefined,
           created_at: m.created_at,
           feedback: m.feedback ?? undefined,
         }));

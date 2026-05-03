@@ -59,7 +59,7 @@ class TestMemoryLabelsInPrompt(unittest.TestCase):
         self.assertIn("[S1]", sp)
         self.assertIn("[M1]", sp)
         # Must explicitly tell the model NOT to cite memories as [S#].
-        self.assertIn("never as [S#]", sp.replace("\n", " "))
+        self.assertIn("never cite a memory as [S#]", sp.replace("\n", " "))
 
     def test_memory_labels_independent_of_source_count(self):
         """Memory [M1] starts at 1 even when there are document sources S1, S2."""

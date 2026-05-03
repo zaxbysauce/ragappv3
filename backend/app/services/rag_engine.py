@@ -2,12 +2,14 @@
 
 import asyncio
 import logging
+import re
 from datetime import datetime
 from typing import Any, AsyncIterator, Dict, List, Optional, Set, Tuple
 
 from app.config import settings
 from app.services.citation_validator import (
     parse_citations,
+    parse_wiki_citations,
     repair_against_sources_and_memories,
 )
 from app.services.context_distiller import ContextDistiller
@@ -37,6 +39,64 @@ class RAGEngineError(Exception):
     """Raised when the RAG engine cannot complete a query."""
 
 
+_ENTITY_LOOKUP_PATTERNS = re.compile(
+    r"^(?:who|what)\b|(?:^|\s)(?:who|what)\s+is\b",
+    re.IGNORECASE,
+)
+_PROCEDURAL_PATTERNS = re.compile(
+    r"\b(?:how\s+to|trouble|can't|cannot|error|issue|problem|unable\s+to|"
+    r"failing|doesn't\s+work|fix|resolve|logging\s+in|login\s+problem)\b",
+    re.IGNORECASE,
+)
+_SUMMARY_PATTERNS = re.compile(
+    r"\b(?:summarize|overview|list\s+all|what\s+are\s+all|describe\s+all)\b",
+    re.IGNORECASE,
+)
+_DOC_SPECIFIC_PATTERNS = re.compile(
+    r"\b(?:in\s+the\s+document|according\s+to|per\s+the|based\s+on\s+the\s+doc)\b",
+    re.IGNORECASE,
+)
+_MEMORY_PATTERNS = re.compile(
+    r"\b(?:my\s+preference|i\s+said|remember\s+when|you\s+told\s+me|i\s+mentioned)\b",
+    re.IGNORECASE,
+)
+
+
+def _classify_query(query: str) -> str:
+    """Classify query intent with deterministic keyword heuristics."""
+    if _MEMORY_PATTERNS.search(query):
+        return "memory_specific"
+    if _DOC_SPECIFIC_PATTERNS.search(query):
+        return "document_specific"
+    if _PROCEDURAL_PATTERNS.search(query):
+        return "procedural"
+    if _SUMMARY_PATTERNS.search(query):
+        return "summary"
+    if _ENTITY_LOOKUP_PATTERNS.search(query):
+        return "entity_lookup"
+    return "general"
+
+
+def _raw_rag_required(query_type: str, wiki_evidence: List[Any]) -> bool:
+    """Return True if raw document RAG is needed given query type and wiki results."""
+    if not wiki_evidence:
+        return True
+    if query_type == "document_specific":
+        return True
+    if query_type == "entity_lookup":
+        # Skip raw RAG only when a high-confidence, non-stale claim directly answers
+        high_conf = [
+            ev for ev in wiki_evidence
+            if ev.claim_id is not None
+            and (ev.claim_status or "") in ("active", "verified")
+            and (ev.page_status or "") not in ("stale", "archived", "draft")
+            and ev.confidence >= 0.75
+        ]
+        return len(high_conf) == 0
+    # For all other query types, keep raw RAG as supplement
+    return True
+
+
 class RAGEngine:
     """Coordinates embeddings, vector search, memory search, and LLM responses."""
 
@@ -49,6 +109,7 @@ class RAGEngine:
         reranking_service: Optional[Any] = None,
         document_retrieval_service: Optional[DocumentRetrievalService] = None,
         prompt_builder_service: Optional[PromptBuilderService] = None,
+        wiki_retrieval: Optional[Any] = None,
     ) -> None:
         self.embedding_service = embedding_service or EmbeddingService()
         self.vector_store = vector_store or None
@@ -130,6 +191,9 @@ class RAGEngine:
 
         # Retrieval evaluator instance (lazy-loaded)
         self._retrieval_evaluator: Optional[RetrievalEvaluator] = None
+
+        # Wiki retrieval service (optional — injected at startup)
+        self._wiki_retrieval = wiki_retrieval
 
     async def query(
         self,
@@ -240,6 +304,32 @@ class RAGEngine:
 
         effective_alpha = self.hybrid_alpha
 
+        # Wiki retrieval: query the Knowledge Compiler before raw document RAG.
+        wiki_evidence: List[Any] = []
+        if self._wiki_retrieval is not None and vault_id is not None:
+            try:
+                wiki_evidence = await asyncio.to_thread(
+                    self._wiki_retrieval.retrieve, user_input, vault_id
+                )
+                logger.info("[query] Wiki retrieval: %d candidates", len(wiki_evidence))
+            except Exception as exc:
+                logger.warning("Wiki retrieval failed: %s", exc)
+                wiki_evidence = []
+
+        # Update trace with wiki results
+        query_type = _classify_query(user_input)
+        trace.wiki_query = user_input
+        trace.wiki_candidates_total = len(wiki_evidence)
+        trace.wiki_injected = len(wiki_evidence)
+        trace.wiki_filtered = [
+            f"{ev.label_placeholder}:{ev.filtered_reason}"
+            for ev in wiki_evidence
+            if ev.filtered_reason
+        ]
+
+        # Decide whether raw document RAG is needed
+        raw_rag_needed = _raw_rag_required(query_type, wiki_evidence)
+
         # Execute retrieval and evaluation
         fallback_reason: Optional[str] = None
         vector_results: List[Dict[str, Any]] = []
@@ -267,6 +357,9 @@ class RAGEngine:
         }
         if self.maintenance_mode:
             fallback_reason = "RAG index is under maintenance"
+            vector_results = []
+        elif not raw_rag_needed:
+            logger.info("[query] Skipping raw RAG: wiki evidence directly answers (query_type=%s)", query_type)
             vector_results = []
         else:
             try:
@@ -415,7 +508,8 @@ class RAGEngine:
 
         # Build messages using prompt builder service
         messages = self.prompt_builder.build_messages(
-            user_input, chat_history, relevant_chunks, memories, relevance_hint
+            user_input, chat_history, relevant_chunks, memories, relevance_hint,
+            wiki_evidence=wiki_evidence if wiki_evidence else None,
         )
 
         # Stream or non-stream LLM response. Capture the assembled
@@ -440,8 +534,22 @@ class RAGEngine:
         # chat route does the user-visible repair).
         full_response = "".join(assembled_response)
         cited_sources, cited_memories = parse_citations(full_response)
+        cited_wikis = parse_wiki_citations(full_response)
         trace.cited_sources = cited_sources
         trace.cited_memories = cited_memories
+        trace.wiki_cited = cited_wikis
+
+        # Determine answer source mode for trace
+        if cited_wikis and not cited_sources:
+            trace.answer_source_mode = "wiki" if not cited_memories else "mixed"
+        elif cited_memories and not cited_sources and not cited_wikis:
+            trace.answer_source_mode = "memory"
+        elif cited_sources and not cited_wikis:
+            trace.answer_source_mode = "documents"
+        elif cited_wikis or cited_sources or cited_memories:
+            trace.answer_source_mode = "mixed"
+        else:
+            trace.answer_source_mode = "abstain"
 
         # Yield done message with sources. Pass cited_labels so that
         # memories_used contains only memories the assistant actually cited.
@@ -456,6 +564,8 @@ class RAGEngine:
             exact_match_promoted,
             token_pack_stats,
             cited_labels=set(cited_memories),
+            wiki_candidates=wiki_evidence,
+            cited_wiki_labels=set(cited_wikis),
         )
         # Populate final-source labels on the trace for evaluation tooling.
         trace.final_sources = [
@@ -470,6 +580,7 @@ class RAGEngine:
                 full_response,
                 done_msg.get("sources", []),
                 done_msg.get("memories_used", []),
+                wiki_evidence=done_msg.get("wiki_used", []),
             )
             trace.invalid_citations = list(validation.invalid_citations)
             trace.answer_supported = (
@@ -933,6 +1044,8 @@ class RAGEngine:
         exact_match_promoted: bool = False,
         token_pack_stats: Optional[Dict[str, int]] = None,
         cited_labels: Optional[set] = None,
+        wiki_candidates: Optional[List[Any]] = None,
+        cited_wiki_labels: Optional[set] = None,
     ) -> Dict[str, Any]:
         """Build the final done message with sources.
 
@@ -1010,10 +1123,18 @@ class RAGEngine:
                 }
             )
 
+        # Build wiki_used: only wiki evidence whose label was cited in the response
+        wiki_used: List[Dict[str, Any]] = []
+        if wiki_candidates and cited_wiki_labels:
+            for ev in wiki_candidates:
+                if ev.label_placeholder in cited_wiki_labels:
+                    wiki_used.append(ev.to_dict())
+
         return {
             "type": "done",
             "sources": sources,
             "memories_used": memories_used,
+            "wiki_used": wiki_used,
             "retrieval_debug": retrieval_debug,
             "score_type": score_type,
         }

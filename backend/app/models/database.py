@@ -573,6 +573,7 @@ def run_migrations(sqlite_path: str) -> None:
     migrate_sanitize_existing_chat_messages(sqlite_path)
     migrate_backfill_default_vault_org(sqlite_path)
     migrate_add_wiki_tables(sqlite_path)
+    migrate_add_wiki_refs_and_job_input(sqlite_path)
 
     # Add partial unique index for duplicate hash detection (HIGH-10)
     # Wrapped in IntegrityError handler: existing databases may have duplicate
@@ -1230,6 +1231,32 @@ def migrate_add_wiki_tables(sqlite_path: str) -> None:
             CREATE INDEX IF NOT EXISTS idx_wiki_compile_jobs_vault_status ON wiki_compile_jobs(vault_id, status);
             CREATE INDEX IF NOT EXISTS idx_wiki_lint_findings_vault_status_severity ON wiki_lint_findings(vault_id, status, severity);
         """)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def migrate_add_wiki_refs_and_job_input(sqlite_path: str) -> None:
+    """Migration: add wiki_refs to chat_messages and input_json to wiki_compile_jobs.
+
+    Idempotent — safe to run multiple times.
+    """
+    conn = sqlite3.connect(sqlite_path)
+    try:
+        existing_msg_cols = [
+            row[1] for row in conn.execute("PRAGMA table_info(chat_messages)").fetchall()
+        ]
+        if "wiki_refs" not in existing_msg_cols:
+            conn.execute("ALTER TABLE chat_messages ADD COLUMN wiki_refs TEXT")
+
+        existing_job_cols = [
+            row[1]
+            for row in conn.execute("PRAGMA table_info(wiki_compile_jobs)").fetchall()
+        ]
+        if "input_json" not in existing_job_cols:
+            conn.execute(
+                "ALTER TABLE wiki_compile_jobs ADD COLUMN input_json TEXT DEFAULT '{}'"
+            )
         conn.commit()
     finally:
         conn.close()

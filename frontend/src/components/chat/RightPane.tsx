@@ -9,6 +9,7 @@ import {
   type Message,
   useChatStore,
   useLastCompletedAssistantSources,
+  useLastCompletedAssistantWikiRefs,
   useLastUserContent,
   useSourcesForSourceId,
   useCompletedAssistantMessageIdsKey,
@@ -16,6 +17,7 @@ import {
 } from "@/stores/useChatStore";
 import { useChatShellStore } from "@/stores/useChatShellStore";
 import type { Source } from "@/lib/api";
+import { WikiCards } from "./WikiCards";
 import { getRelevanceLabel, type ScoreType } from "@/lib/relevance";
 import { EmptyState } from "@/components/shared/EmptyState";
 
@@ -335,6 +337,7 @@ export function RightPane() {
   // ignores the streaming message and recomputes only when its own slice
   // changes.
   const lastCompletedSources = useLastCompletedAssistantSources();
+  const lastCompletedWikiRefs = useLastCompletedAssistantWikiRefs();
   const query = useLastUserContent();
   const completedAssistantIdsKey = useCompletedAssistantMessageIdsKey();
   const { selectedEvidenceSource, setSelectedEvidenceSource, activeRightTab, setActiveRightTab } = useChatShellStore();
@@ -355,6 +358,8 @@ export function RightPane() {
       setActiveTab("sources");
     } else if (activeRightTab === "preview") {
       setActiveTab("preview");
+    } else if (activeRightTab === "wiki") {
+      setActiveTab("wiki");
     }
   }, [activeRightTab]);
 
@@ -436,6 +441,7 @@ export function RightPane() {
 
   const hasSources = sources.length > 0;
   const hasStructuredOutputs = structuredOutputs.length > 0;
+  const hasWikiRefs = (lastCompletedWikiRefs?.length ?? 0) > 0;
 
   return (
     <div className="flex h-full flex-col">
@@ -450,7 +456,7 @@ export function RightPane() {
         onValueChange={setActiveTab}
         className="flex-1 flex flex-col min-h-0"
       >
-        <TabsList className="grid w-full grid-cols-3 flex-shrink-0">
+        <TabsList className={`grid w-full flex-shrink-0 ${hasWikiRefs ? "grid-cols-4" : "grid-cols-3"}`}>
           <TabsTrigger value="sources">
             Sources
             {hasSources && (
@@ -470,6 +476,14 @@ export function RightPane() {
               </span>
             )}
           </TabsTrigger>
+          {hasWikiRefs && (
+            <TabsTrigger value="wiki">
+              Wiki
+              <span className="ml-1.5 text-xs text-muted-foreground">
+                ({lastCompletedWikiRefs!.length})
+              </span>
+            </TabsTrigger>
+          )}
         </TabsList>
 
         <TabsContent value="sources" className="flex-1 min-h-0 mt-4">
@@ -565,6 +579,16 @@ export function RightPane() {
             )}
           </ScrollArea>
         </TabsContent>
+
+        {hasWikiRefs && (
+          <TabsContent value="wiki" className="flex-1 min-h-0 mt-4">
+            <ScrollArea className="h-full">
+              <div className="pr-4">
+                <WikiCards wikiRefs={lastCompletedWikiRefs!} />
+              </div>
+            </ScrollArea>
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   );

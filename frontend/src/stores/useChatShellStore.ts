@@ -3,7 +3,7 @@ import type { Source } from "@/lib/api";
 
 const PINNED_SESSIONS_KEY = "ragapp_pinned_sessions";
 
-type RightPaneTab = "evidence" | "preview";
+export type RightPaneTab = "evidence" | "preview" | "wiki";
 
 interface ChatShellState {
   sessionRailOpen: boolean;

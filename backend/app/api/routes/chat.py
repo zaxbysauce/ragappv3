@@ -26,6 +26,7 @@ from app.config import settings
 from app.models.database import get_pool
 from app.services.citation_validator import repair_against_sources_and_memories
 from app.services.rag_engine import RAGEngine, RAGEngineError
+from app.services.wiki_store import WikiStore
 from app.utils.assistant_sanitizer import sanitize_chat_messages_content
 
 # Track background tasks to prevent garbage collection
@@ -73,6 +74,7 @@ class ChatResponse(BaseModel):
     content: str
     sources: List[Dict[str, Any]] = Field(default_factory=list)
     memories_used: List[UsedMemory] = Field(default_factory=list)
+    wiki_used: List[Dict[str, Any]] = Field(default_factory=list)
     # "distance" | "rerank" | "rrf" — tells the client how to interpret `score`
     # values in each source (polarity + thresholds). Default "distance" keeps
     # older clients on the safe path if the engine omits it.
@@ -104,6 +106,7 @@ class AddMessageRequest(BaseModel):
     content: str
     sources: Optional[List[dict]] = None
     memories: Optional[List[dict]] = None
+    wiki_refs: Optional[List[dict]] = None
 
 
 class UpdateSessionRequest(BaseModel):
@@ -122,6 +125,39 @@ class FeedbackRequest(BaseModel):
     """Request model for setting feedback on a chat message."""
 
     rating: Optional[str] = None
+
+
+async def _enqueue_wiki_compile_job(
+    vault_id: int,
+    user_query: str,
+    assistant_answer: str,
+    wiki_refs: List[Dict[str, Any]],
+    doc_sources: List[Dict[str, Any]],
+    memories: List[Any],
+) -> None:
+    """Enqueue a post-answer wiki compile job. Runs as a background task."""
+    pool = get_pool(str(settings.sqlite_path))
+    try:
+        input_data = {
+            "user_query": user_query[:500],
+            "assistant_answer": assistant_answer[:1000],
+            "wiki_refs": [r.get("wiki_label") for r in wiki_refs if r.get("wiki_label")],
+            "doc_source_count": len(doc_sources),
+            "memory_count": len(memories),
+        }
+
+        def _create_job(conn):
+            store = WikiStore(conn)
+            return store.create_job(
+                vault_id=vault_id,
+                trigger_type="chat_answer",
+                input_json=input_data,
+            )
+
+        with pool.connection() as conn:
+            await asyncio.to_thread(_create_job, conn)
+    except Exception as exc:
+        logger.warning("Failed to enqueue wiki compile job for vault %d: %s", vault_id, exc)
 
 
 def stream_chat_response(
@@ -151,6 +187,7 @@ def stream_chat_response(
         collected_content = []
         sources = []
         memories_used = []
+        wiki_used: List[Dict[str, Any]] = []
         # Default to "distance" so the frontend always has a well-defined
         # score polarity to interpret `score` values against, even if the
         # engine never emits a done event (e.g. early error).
@@ -168,7 +205,7 @@ def stream_chat_response(
                     yield f"data: {json.dumps({'type': 'content', 'content': content})}\n\n"
                 elif chunk_type == "error":
                     yield f"data: {json.dumps({'type': 'error', 'message': chunk.get('message', 'Chat stream failed'), 'code': chunk.get('code', 'UNKNOWN_ERROR')})}\n\n"
-                    yield f"data: {json.dumps({'type': 'done', 'sources': [], 'memories_used': [], 'score_type': score_type})}\n\n"
+                    yield f"data: {json.dumps({'type': 'done', 'sources': [], 'memories_used': [], 'wiki_used': [], 'score_type': score_type})}\n\n"
                     return
                 elif chunk_type == "fallback":
                     content = chunk.get("content", "")
@@ -178,6 +215,7 @@ def stream_chat_response(
                 elif chunk_type == "done":
                     sources = chunk.get("sources", [])
                     memories_used = chunk.get("memories_used", [])
+                    wiki_used = chunk.get("wiki_used", [])
                     score_type = chunk.get("score_type", score_type)
         except Exception as e:
             logger.error(
@@ -194,15 +232,11 @@ def stream_chat_response(
             return
 
         # Citation validation pass: parse the assembled assistant content and
-        # check every [S#]/[M#] citation against the available labels. The
-        # validation only emits an extra ``citation_validation`` field on the
-        # done event so older clients ignore it; we never rewrite already-
-        # streamed tokens. Invalid citations in streaming responses are not
-        # repaired at persistence — they are surfaced in citation_validation.
+        # check every [S#]/[M#]/[W#] citation against the available labels.
         full_content = "".join(collected_content)
         try:
             cv = repair_against_sources_and_memories(
-                full_content, sources, memories_used
+                full_content, sources, memories_used, wiki_evidence=wiki_used
             )
             citation_validation = {
                 "valid": list(cv.valid_citations),
@@ -214,19 +248,32 @@ def stream_chat_response(
             logger.warning("Citation validation failed: %s", cv_exc)
             citation_validation = None
 
-        # Yield final done event with sources, memories, and score_type so the
-        # frontend can correctly map `score` to relevance labels. Omitting
-        # `score_type` forces the client to guess and historically caused every
-        # source to render as "Tangential" via the distance-mode fallback.
+        # Yield final done event with sources, memories, wiki, and score_type.
         done_payload: Dict[str, Any] = {
             "type": "done",
             "sources": sources,
             "memories_used": memories_used,
+            "wiki_used": wiki_used,
             "score_type": score_type,
         }
         if citation_validation is not None:
             done_payload["citation_validation"] = citation_validation
         yield f"data: {json.dumps(done_payload)}\n\n"
+
+        # Enqueue post-answer wiki compile job (non-blocking).
+        if vault_id is not None and (wiki_used or sources or memories_used):
+            task = asyncio.create_task(
+                _enqueue_wiki_compile_job(
+                    vault_id=vault_id,
+                    user_query=message,
+                    assistant_answer=full_content,
+                    wiki_refs=wiki_used,
+                    doc_sources=sources,
+                    memories=memories_used,
+                )
+            )
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
 
     return StreamingResponse(
         event_generator(),
@@ -257,6 +304,7 @@ async def non_stream_chat_response(
     collected_content = []
     sources = []
     memories_used = []
+    wiki_used: List[Dict[str, Any]] = []
     score_type = "distance"
 
     try:
@@ -273,14 +321,16 @@ async def non_stream_chat_response(
             elif chunk_type == "done":
                 sources = chunk.get("sources", [])
                 memories_used = chunk.get("memories_used", [])
+                wiki_used = chunk.get("wiki_used", [])
                 score_type = chunk.get("score_type", score_type)
     except RAGEngineError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
 
     logger.info(
-        "[non_stream_chat_response] Final: sources_count=%d, memories_used_count=%d",
+        "[non_stream_chat_response] Final: sources_count=%d, memories_used_count=%d, wiki_used_count=%d",
         len(sources),
         len(memories_used),
+        len(wiki_used),
     )
 
     full_content = "".join(collected_content)
@@ -289,9 +339,9 @@ async def non_stream_chat_response(
     # before returning the response so persisted history is well-formed.
     try:
         cv = repair_against_sources_and_memories(
-            full_content, sources, memories_used
+            full_content, sources, memories_used, wiki_evidence=wiki_used
         )
-        full_content = cv.repaired_content  # always a valid str; never fall back to unrepaired content
+        full_content = cv.repaired_content
         if cv.invalid_stripped:
             logger.info(
                 "Stripped %d invalid citation(s) from non-stream response: %s",
@@ -309,6 +359,7 @@ async def non_stream_chat_response(
         content=full_content,
         sources=sources,
         memories_used=[UsedMemory(**m) for m in memories_used] if memories_used else [],
+        wiki_used=wiki_used,
         score_type=score_type,
     )
 
@@ -488,14 +539,21 @@ async def get_session(
     if not await evaluate_policy(user, "vault", session_row[1], "read"):
         raise HTTPException(status_code=403, detail="No read access to this vault")
 
-    # Detect optional ``memories`` column (older databases may lack it).
+    # Detect optional columns (older databases may lack them).
     table_info_cursor = await asyncio.to_thread(
         conn.execute, "PRAGMA table_info(chat_messages)"
     )
     table_info_rows = await asyncio.to_thread(table_info_cursor.fetchall)
-    has_memories_col = any(row[1] == "memories" for row in table_info_rows)
+    col_names = {row[1] for row in table_info_rows}
+    has_memories_col = "memories" in col_names
+    has_wiki_refs_col = "wiki_refs" in col_names
 
-    if has_memories_col:
+    if has_memories_col and has_wiki_refs_col:
+        messages_query = (
+            "SELECT id, role, content, sources, memories, wiki_refs, created_at, feedback "
+            "FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC, id ASC"
+        )
+    elif has_memories_col:
         messages_query = (
             "SELECT id, role, content, sources, memories, created_at, feedback "
             "FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC, id ASC"
@@ -510,7 +568,7 @@ async def get_session(
     )
     message_rows = await asyncio.to_thread(messages_result.fetchall)
 
-    # Parse messages with JSON sources and (optional) memories.
+    # Parse messages with JSON sources, memories, and wiki_refs.
     messages = []
     for msg_row in message_rows:
         sources = None
@@ -520,7 +578,32 @@ async def get_session(
             except json.JSONDecodeError:
                 sources = []
 
-        if has_memories_col:
+        if has_memories_col and has_wiki_refs_col:
+            memories_val = None
+            if msg_row[4]:
+                try:
+                    memories_val = json.loads(msg_row[4])
+                except json.JSONDecodeError:
+                    memories_val = []
+            wiki_refs_val = None
+            if msg_row[5]:
+                try:
+                    wiki_refs_val = json.loads(msg_row[5])
+                except json.JSONDecodeError:
+                    wiki_refs_val = []
+            messages.append(
+                {
+                    "id": msg_row[0],
+                    "role": msg_row[1],
+                    "content": msg_row[2],
+                    "sources": sources,
+                    "memories": memories_val,
+                    "wiki_refs": wiki_refs_val,
+                    "created_at": msg_row[6],
+                    "feedback": msg_row[7],
+                }
+            )
+        elif has_memories_col:
             memories_val = None
             if msg_row[4]:
                 try:
@@ -534,6 +617,7 @@ async def get_session(
                     "content": msg_row[2],
                     "sources": sources,
                     "memories": memories_val,
+                    "wiki_refs": None,
                     "created_at": msg_row[5],
                     "feedback": msg_row[6],
                 }
@@ -546,6 +630,7 @@ async def get_session(
                     "content": msg_row[2],
                     "sources": sources,
                     "memories": None,
+                    "wiki_refs": None,
                     "created_at": msg_row[4],
                     "feedback": msg_row[5],
                 }
@@ -626,15 +711,24 @@ async def fork_session(
     if not await evaluate_policy(user, "vault", vault_id, "write"):
         raise HTTPException(status_code=403, detail="No write access to this vault")
 
-    # Detect optional ``memories`` column on chat_messages.
+    # Detect optional columns on chat_messages.
     table_info_cursor = await asyncio.to_thread(
         conn.execute, "PRAGMA table_info(chat_messages)"
     )
     table_info_rows = await asyncio.to_thread(table_info_cursor.fetchall)
-    has_memories_col = any(row[1] == "memories" for row in table_info_rows)
+    fork_col_names = {row[1] for row in table_info_rows}
+    has_memories_col = "memories" in fork_col_names
+    has_wiki_refs_col = "wiki_refs" in fork_col_names
 
-    # Fetch messages up to message_index, including memories when supported.
-    if has_memories_col:
+    # Fetch messages up to message_index, including all available columns.
+    if has_memories_col and has_wiki_refs_col:
+        messages_result = await asyncio.to_thread(
+            conn.execute,
+            "SELECT role, content, sources, memories, wiki_refs, created_at FROM chat_messages "
+            "WHERE session_id = ? ORDER BY created_at ASC, id ASC",
+            (session_id,),
+        )
+    elif has_memories_col:
         messages_result = await asyncio.to_thread(
             conn.execute,
             "SELECT role, content, sources, memories, created_at FROM chat_messages "
@@ -666,9 +760,16 @@ async def fork_session(
     await asyncio.to_thread(conn.commit)
     new_session_id = cursor.lastrowid
 
-    # Copy messages into the new session — preserve sources + memories so the
-    # branched conversation keeps source cards, citations, and memory cards.
-    if has_memories_col:
+    # Copy messages into the new session — preserve sources, memories, and wiki_refs.
+    if has_memories_col and has_wiki_refs_col:
+        for row in forked_rows:
+            await asyncio.to_thread(
+                conn.execute,
+                "INSERT INTO chat_messages (session_id, role, content, sources, memories, wiki_refs, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+                (new_session_id, row[0], row[1], row[2], row[3], row[4]),
+            )
+    elif has_memories_col:
         for row in forked_rows:
             await asyncio.to_thread(
                 conn.execute,
@@ -695,7 +796,23 @@ async def fork_session(
                 sources = json.loads(row[2])
             except json.JSONDecodeError:
                 sources = []
-        if has_memories_col:
+        if has_memories_col and has_wiki_refs_col:
+            mem_val = None
+            if row[3]:
+                try:
+                    mem_val = json.loads(row[3])
+                except json.JSONDecodeError:
+                    mem_val = []
+            wiki_val = None
+            if row[4]:
+                try:
+                    wiki_val = json.loads(row[4])
+                except json.JSONDecodeError:
+                    wiki_val = []
+            messages.append(
+                {"role": row[0], "content": row[1], "sources": sources, "memories": mem_val, "wiki_refs": wiki_val}
+            )
+        elif has_memories_col:
             mem_val = None
             if row[3]:
                 try:
@@ -703,11 +820,11 @@ async def fork_session(
                 except json.JSONDecodeError:
                     mem_val = []
             messages.append(
-                {"role": row[0], "content": row[1], "sources": sources, "memories": mem_val}
+                {"role": row[0], "content": row[1], "sources": sources, "memories": mem_val, "wiki_refs": None}
             )
         else:
             messages.append(
-                {"role": row[0], "content": row[1], "sources": sources, "memories": None}
+                {"role": row[0], "content": row[1], "sources": sources, "memories": None, "wiki_refs": None}
             )
 
     return {
@@ -889,9 +1006,10 @@ async def add_message(
                 conn.execute, update_title_query, (auto_title, session_id)
             )
 
-    # Serialize sources and memories to JSON
+    # Serialize sources, memories, and wiki_refs to JSON
     sources_json = json.dumps(request.sources) if request.sources else None
     memories_json = json.dumps(request.memories) if request.memories else None
+    wiki_refs_json = json.dumps(request.wiki_refs) if request.wiki_refs else None
 
     # Sanitize assistant content before persistence — defense in depth against
     # any thinking/reasoning trace that slipped past the LLM-time stripper or
@@ -902,17 +1020,26 @@ async def add_message(
         else request.content
     )
 
-    # Detect whether the chat_messages table has the optional ``memories``
-    # column. Older deployments may not have run the migration yet, in which
-    # case we fall back to inserting only sources. The detection is cheap and
-    # cached implicitly by SQLite's pragma cache.
+    # Detect optional columns (older deployments may lack them).
     table_info_cursor = await asyncio.to_thread(
         conn.execute, "PRAGMA table_info(chat_messages)"
     )
     table_info_rows = await asyncio.to_thread(table_info_cursor.fetchall)
-    has_memories_col = any(row[1] == "memories" for row in table_info_rows)
+    col_names_add = {row[1] for row in table_info_rows}
+    has_memories_col = "memories" in col_names_add
+    has_wiki_refs_col = "wiki_refs" in col_names_add
 
-    if has_memories_col:
+    if has_memories_col and has_wiki_refs_col:
+        insert_query = """
+            INSERT INTO chat_messages (session_id, role, content, sources, memories, wiki_refs, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        """
+        cursor = await asyncio.to_thread(
+            conn.execute,
+            insert_query,
+            (session_id, request.role, persisted_content, sources_json, memories_json, wiki_refs_json),
+        )
+    elif has_memories_col:
         insert_query = """
             INSERT INTO chat_messages (session_id, role, content, sources, memories, created_at)
             VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
@@ -942,7 +1069,12 @@ async def add_message(
 
     # Get the created message
     message_id = cursor.lastrowid
-    if has_memories_col:
+    if has_memories_col and has_wiki_refs_col:
+        select_query = (
+            "SELECT id, role, content, sources, memories, wiki_refs, created_at "
+            "FROM chat_messages WHERE id = ?"
+        )
+    elif has_memories_col:
         select_query = (
             "SELECT id, role, content, sources, memories, created_at FROM chat_messages WHERE id = ?"
         )
@@ -965,8 +1097,21 @@ async def add_message(
             sources = []
 
     memories = None
+    wiki_refs_out = None
     created_at = None
-    if has_memories_col:
+    if has_memories_col and has_wiki_refs_col:
+        if row[4]:
+            try:
+                memories = json.loads(row[4])
+            except json.JSONDecodeError:
+                memories = []
+        if row[5]:
+            try:
+                wiki_refs_out = json.loads(row[5])
+            except json.JSONDecodeError:
+                wiki_refs_out = []
+        created_at = row[6]
+    elif has_memories_col:
         if row[4]:
             try:
                 memories = json.loads(row[4])
@@ -982,6 +1127,7 @@ async def add_message(
         "content": row[2],
         "sources": sources,
         "memories": memories,
+        "wiki_refs": wiki_refs_out,
         "created_at": created_at,
     }
 
