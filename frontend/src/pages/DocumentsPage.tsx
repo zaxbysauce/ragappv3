@@ -910,12 +910,10 @@ export default function DocumentsPage() {
                               }
                               const color = ws.wiki_status === "compiled" ? "text-green-600"
                                 : ws.wiki_status === "failed" ? "text-destructive"
-                                : ws.wiki_status === "skipped" ? "text-muted-foreground"
                                 : "text-blue-500";
                               const label = ws.wiki_status === "compiled"
                                 ? `${ws.pages_count}p / ${ws.claims_count}c`
                                 : ws.wiki_status === "compiling" ? "Compiling…"
-                                : ws.wiki_status === "skipped" ? "No content"
                                 : "Failed";
                               return (
                                 <span
