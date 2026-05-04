@@ -1,29 +1,86 @@
-import { useState, useEffect } from "react";
+/**
+ * Settings page — task-based 6-tab redesign (PR B).
+ *
+ * Tabs: Overview · Models · Documents · Retrieval · Wiki & Curator · Maintenance.
+ * The legacy "AI" + "Advanced" tabs were contradictory (AI claimed
+ * read-only via env vars; Advanced edited the same fields) and have been
+ * removed. Models is now the single source of truth, with a per-field
+ * source badge sourced from the backend's ``effective_sources`` map.
+ *
+ * Numeric inputs use the NumberInput primitive (draft-string semantics)
+ * so blanks no longer collapse to 0 mid-edit. The sticky SaveDiscardFooter
+ * persists across tab switches and shows the count of unsaved changes
+ * plus per-tab dot indicators.
+ *
+ * Discard restores the snapshot taken at load. Save persists via PUT
+ * /settings; the backend rejects (422) curator-enabled bodies missing
+ * url/model.
+ */
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Loader2, AlertTriangle } from "lucide-react";
-import { getSettings, updateSettings, testConnections } from "@/lib/api";
-import type { ConnectionTestResult } from "@/lib/api";
-import { useSettingsStore } from "@/stores/useSettingsStore";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
+import { AlertTriangle } from "lucide-react";
+import {
+  getSettings,
+  updateSettings,
+  testConnections,
+} from "@/lib/api";
+import type { ConnectionTestResult, UpdateSettingsRequest } from "@/lib/api";
+import {
+  useSettingsStore,
+  type SettingsFormData,
+  type SettingsTab,
+} from "@/stores/useSettingsStore";
+import { handleSettingsInputChange } from "@/components/settings/handleInputChange";
 import { ConnectionStatusBadges } from "@/components/shared/ConnectionStatusBadges";
 import type { HealthStatus } from "@/types/health";
 import { useHealthCheck } from "@/hooks/useHealthCheck";
 import { ConnectionSettings } from "@/components/settings/ConnectionSettings";
 import { DocumentProcessingSettings } from "@/components/settings/DocumentProcessingSettings";
-import { ModelConnectionSettings } from "@/components/settings/ModelConnectionSettings";
 import { RAGSettings } from "@/components/settings/RAGSettings";
 import { RetrievalSettings } from "@/components/settings/RetrievalSettings";
-import type { SettingsFormData } from "@/stores/useSettingsStore";
+import { ModelsTab } from "@/components/settings/ModelsTab";
+import { OverviewTab } from "@/components/settings/OverviewTab";
+import { WikiCuratorSettings } from "@/components/settings/WikiCuratorSettings";
+import { MaintenanceSettings } from "@/components/settings/MaintenanceSettings";
+import { SaveDiscardFooter } from "@/components/settings/SaveDiscardFooter";
+import { useVaultStore } from "@/stores/useVaultStore";
 
-// Internal component that renders the settings form
-function SettingsPageContent() {
+function pickDirtyPayload(
+  formData: SettingsFormData,
+  loaded: SettingsFormData,
+): UpdateSettingsRequest {
+  const out: Record<string, unknown> = {};
+  (Object.keys(formData) as Array<keyof SettingsFormData>).forEach((k) => {
+    if (formData[k] !== loaded[k]) {
+      out[k as string] = formData[k];
+    }
+  });
+  return out as UpdateSettingsRequest;
+}
+
+function SettingsPageContent({
+  health,
+  connectionResult,
+  isTestingConnections,
+  onTestConnections,
+}: {
+  health: HealthStatus;
+  connectionResult: ConnectionTestResult | null;
+  isTestingConnections: boolean;
+  onTestConnections: () => Promise<void>;
+}) {
   const {
     settings,
     formData,
+    loadedFormData,
     loading,
     saving,
     error,
@@ -31,15 +88,19 @@ function SettingsPageContent() {
     reindexRequired,
     setSettings,
     initializeForm,
-    setLoading,
     setSaving,
     setError,
     setReindexRequired,
     updateFormField,
     validateForm,
-    hasChanges,
+    discard,
+    dirtyFields,
+    dirtyByTab,
     checkReindexRequired,
   } = useSettingsStore();
+
+  const activeVaultId = useVaultStore((s) => s.activeVaultId);
+  const [activeTab, setActiveTab] = useState<SettingsTab>("overview");
 
   useEffect(() => {
     let mounted = true;
@@ -53,174 +114,134 @@ function SettingsPageContent() {
       .catch((err) => {
         if (mounted) {
           setError(err instanceof Error ? err.message : "Failed to load settings");
-          setLoading(false);
         }
       });
     return () => {
       mounted = false;
     };
-  }, [setSettings, initializeForm, setError, setLoading]);
+  }, [setSettings, initializeForm, setError]);
 
-  // Fields that should be parsed as numbers
-  const numericFields: Set<keyof SettingsFormData> = new Set([
-    'chunk_size_chars',
-    'chunk_overlap_chars',
-    'retrieval_top_k',
-    'auto_scan_interval_minutes',
-    'max_distance_threshold',
-    'retrieval_window',
-    'embedding_batch_size',
-    'hybrid_alpha',
-    'initial_retrieval_top_k',
-    'reranker_top_n',
-  ]);
+  const dirtySet = dirtyFields();
+  const dirtyCount = dirtySet.size;
+  const tabDots = dirtyByTab();
+  const effectiveSources = settings?.effective_sources ?? {};
 
-const handleInputChange = (field: keyof SettingsFormData, value: string | boolean | number) => {
-  if (typeof value === "boolean") {
-    updateFormField(field, value);
-  } else if (typeof value === "string") {
-    if (value === "") {
-      // Empty string: for numeric fields, set to 0; for string fields, keep as empty string
-      if (numericFields.has(field)) {
-        updateFormField(field, 0);
-      } else {
-        updateFormField(field as any, value);
-      }
-    } else if (numericFields.has(field)) {
-      const numValue = parseFloat(value);
-      if (!isNaN(numValue)) {
-        updateFormField(field, numValue);
-      }
-    } else {
-      // String field - keep as string
-      updateFormField(field, value);
-    }
-  } else {
-    // number
-    updateFormField(field, value);
-  }
-};
+  // Wrapper that the legacy components call with a loose signature.
+  // Implementation lives in components/settings/handleInputChange.ts so
+  // it can be imported and exercised by tests directly. The legacy
+  // components surface `e.target.value` strings; the helper coerces
+  // numeric fields and intentionally drops blank input (preserves last
+  // good value rather than overwriting with NaN/0). Known legacy
+  // limitation: trailing-garbage input ("12abc") commits the partial
+  // parse silently — the legacy components don't surface invalid state.
+  // The Wiki & Curator tab uses NumberInput which owns its own draft
+  // state and surfaces invalid via data-invalid.
+  const handleInputChange = (
+    field: keyof SettingsFormData,
+    value: string | boolean | number,
+  ) => {
+    handleSettingsInputChange(field, value, updateFormField);
+  };
 
   const handleSave = async () => {
     if (!validateForm()) {
       toast.error("Please fix the highlighted errors before saving.");
       return;
     }
-
-    // Check before save so we know whether embeddings will be invalidated.
     const willRequireReindex = checkReindexRequired();
-
     setSaving(true);
     setError(null);
-
     try {
-      const updated = await updateSettings({
-        chunk_size_chars: formData.chunk_size_chars,
-        chunk_overlap_chars: formData.chunk_overlap_chars,
-        retrieval_top_k: formData.retrieval_top_k,
-        max_distance_threshold: formData.max_distance_threshold,
-        auto_scan_enabled: formData.auto_scan_enabled,
-        auto_scan_interval_minutes: formData.auto_scan_interval_minutes,
-        retrieval_window: formData.retrieval_window,
-        vector_metric: formData.vector_metric,
-        embedding_doc_prefix: formData.embedding_doc_prefix,
-        embedding_query_prefix: formData.embedding_query_prefix,
-        embedding_batch_size: formData.embedding_batch_size,
-        // New retrieval settings
-        reranking_enabled: formData.reranking_enabled,
-        reranker_url: formData.reranker_url,
-        reranker_model: formData.reranker_model,
-        initial_retrieval_top_k: formData.initial_retrieval_top_k,
-        reranker_top_n: formData.reranker_top_n,
-        hybrid_search_enabled: formData.hybrid_search_enabled,
-        hybrid_alpha: formData.hybrid_alpha,
-        // Model connection settings
-        ollama_embedding_url: formData.ollama_embedding_url,
-        ollama_chat_url: formData.ollama_chat_url,
-        embedding_model: formData.embedding_model,
-        chat_model: formData.chat_model,
-      });
+      const payload = pickDirtyPayload(formData, loadedFormData);
+      const updated = await updateSettings(payload);
       setSettings(updated);
+      // Re-initialize so the snapshot reflects the new persisted state
+      // and dirtyFields drops to zero.
+      initializeForm(updated);
       if (willRequireReindex) {
         setReindexRequired(true);
-        toast.warning("Settings saved. Existing document embeddings are stale — reindex required.");
+        toast.warning(
+          "Settings saved. Existing document embeddings are stale — reindex required.",
+        );
       } else {
-        toast.success("Settings saved successfully");
+        toast.success("Settings saved");
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save settings");
-      toast.error(err instanceof Error ? err.message : "Failed to save settings");
+      const msg = err instanceof Error ? err.message : "Failed to save settings";
+      setError(msg);
+      toast.error(msg);
     } finally {
       setSaving(false);
     }
   };
 
-  return (
-    <>
-      {loading && (
-        <div className="space-y-4">
-          <Card>
-            <CardHeader>
-              <Skeleton className="h-6 w-[180px]" />
-              <Skeleton className="h-4 w-[250px]" />
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="space-y-2">
-                <Skeleton className="h-4 w-[100px]" />
-                <Skeleton className="h-10 w-full" />
-              </div>
-              <div className="space-y-2">
-                <Skeleton className="h-4 w-[120px]" />
-                <Skeleton className="h-10 w-full" />
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader>
-              <Skeleton className="h-6 w-[150px]" />
-              <Skeleton className="h-4 w-[200px]" />
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="space-y-2">
-                <Skeleton className="h-4 w-[80px]" />
-                <Skeleton className="h-10 w-full" />
-              </div>
-              <div className="space-y-2">
-                <Skeleton className="h-4 w-[100px]" />
-                <Skeleton className="h-10 w-full" />
-              </div>
-              <div className="space-y-2">
-                <Skeleton className="h-4 w-[140px]" />
-                <div className="flex items-center gap-4">
-                  <Skeleton className="h-10 w-24" />
-                  <Skeleton className="h-2 flex-1" />
-                </div>
-              </div>
-              <div className="flex items-center gap-2 pt-4">
-                <Skeleton className="h-4 w-4" />
-                <Skeleton className="h-4 w-[120px]" />
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      )}
+  const handleDiscard = () => {
+    discard();
+    toast.info("Discarded unsaved changes");
+  };
 
-      {error && (
+  const validationFailed = useMemo(() => {
+    return Object.keys(errors).length > 0;
+  }, [errors]);
+
+  if (loading) {
+    return (
+      <div className="space-y-4">
         <Card>
-          <CardContent className="py-8">
-            <p className="text-destructive text-center">Error: {error}</p>
+          <CardHeader>
+            <Skeleton className="h-6 w-[180px]" />
+            <Skeleton className="h-4 w-[250px]" />
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <Skeleton className="h-10 w-full" />
+            <Skeleton className="h-10 w-full" />
           </CardContent>
         </Card>
-      )}
+      </div>
+    );
+  }
 
+  if (error && !settings) {
+    return (
+      <Card>
+        <CardContent className="py-8">
+          <p className="text-destructive text-center">Error: {error}</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const tabTrigger = (value: SettingsTab, label: string) => (
+    <TabsTrigger value={value}>
+      <span className="flex items-center gap-1">
+        {label}
+        {tabDots[value] > 0 && (
+          <span
+            className="h-1.5 w-1.5 rounded-full bg-primary"
+            aria-label={`${tabDots[value]} unsaved changes in ${label}`}
+          />
+        )}
+      </span>
+    </TabsTrigger>
+  );
+
+  return (
+    <>
       {reindexRequired && (
         <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 p-4">
-          <AlertTriangle className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" aria-hidden />
+          <AlertTriangle
+            className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5"
+            aria-hidden
+          />
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-amber-800 dark:text-amber-200">Reindex required</p>
+            <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+              Reindex required
+            </p>
             <p className="text-xs text-amber-700 dark:text-amber-300 mt-0.5">
-              Changes to embedding model, chunk size, or vector settings invalidate existing document
-              embeddings. Re-process your documents via the Documents page to restore accurate retrieval.
+              Changes to embedding model, chunk size, or vector settings
+              invalidate existing document embeddings. Re-process documents
+              from the Documents page or run a wiki recompile from the
+              Maintenance tab.
             </p>
           </div>
           <button
@@ -232,107 +253,101 @@ const handleInputChange = (field: keyof SettingsFormData, value: string | boolea
         </div>
       )}
 
-      {!loading && !error && (
-        <Tabs defaultValue="ai" className="w-full">
-          <TabsList className="grid w-full max-w-md grid-cols-2">
-            <TabsTrigger value="ai">AI</TabsTrigger>
-            <TabsTrigger value="advanced">Advanced</TabsTrigger>
-          </TabsList>
+      <Tabs
+        value={activeTab}
+        onValueChange={(v) => setActiveTab(v as SettingsTab)}
+        className="w-full"
+      >
+        <TabsList className="grid w-full max-w-3xl grid-cols-6">
+          {tabTrigger("overview", "Overview")}
+          {tabTrigger("models", "Models")}
+          {tabTrigger("documents", "Documents")}
+          {tabTrigger("retrieval", "Retrieval")}
+          {tabTrigger("wiki", "Wiki & Curator")}
+          {tabTrigger("maintenance", "Maintenance")}
+        </TabsList>
 
-          <TabsContent value="ai">
-            <Card>
-              <CardHeader>
-                <CardTitle>AI Configuration</CardTitle>
-                <CardDescription>Configure AI model and behavior (read-only, set via environment variables)</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <label htmlFor="chat-model" className="text-sm font-medium">Chat Model</label>
-                  <Input
-                    id="chat-model"
-                    value={settings?.chat_model || "Not configured"}
-                    readOnly
-                    className="bg-muted"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    LLM model used for chat responses (set via CHAT_MODEL env var)
-                  </p>
-                </div>
-                <div className="space-y-2">
-                  <label htmlFor="embedding-model" className="text-sm font-medium">Embedding Model</label>
-                  <Input
-                    id="embedding-model"
-                    value={settings?.embedding_model || "Not configured"}
-                    readOnly
-                    className="bg-muted"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Model used for document embeddings (set via EMBEDDING_MODEL env var)
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
+        <TabsContent value="overview">
+          <OverviewTab
+            health={health}
+            connectionResult={connectionResult}
+            isTestingConnections={isTestingConnections}
+            onTestConnections={() => {
+              void onTestConnections();
+            }}
+            curatorEnabled={formData.wiki_llm_curator_enabled}
+            wikiEnabled={formData.wiki_enabled}
+          />
+        </TabsContent>
 
-<TabsContent value="advanced" className="space-y-4">
-				{/* Model Connection Settings */}
-      <ModelConnectionSettings
-        formData={formData}
-        errors={errors}
-        onChange={handleInputChange}
+        <TabsContent value="models">
+          <ModelsTab
+            formData={formData}
+            errors={errors}
+            onChange={(f, v) =>
+              updateFormField(f, v as SettingsFormData[typeof f])
+            }
+            effectiveSources={
+              effectiveSources as Record<string, "kv" | "env" | "default">
+            }
+          />
+        </TabsContent>
+
+        <TabsContent value="documents" className="space-y-4">
+          <DocumentProcessingSettings
+            formData={formData}
+            errors={errors}
+            onChange={handleInputChange}
+          />
+        </TabsContent>
+
+        <TabsContent value="retrieval" className="space-y-4">
+          <RAGSettings
+            formData={formData}
+            errors={errors}
+            onChange={handleInputChange}
+          />
+          <RetrievalSettings
+            formData={formData}
+            errors={errors}
+            onChange={handleInputChange}
+          />
+        </TabsContent>
+
+        <TabsContent value="wiki" className="space-y-4">
+          <WikiCuratorSettings
+            formData={formData}
+            errors={errors}
+            onChange={(f, v) =>
+              updateFormField(f, v as SettingsFormData[typeof f])
+            }
+          />
+        </TabsContent>
+
+        <TabsContent value="maintenance" className="space-y-4">
+          <MaintenanceSettings vaultId={activeVaultId} />
+        </TabsContent>
+      </Tabs>
+
+      <SaveDiscardFooter
+        dirtyCount={dirtyCount}
+        invalid={validationFailed}
+        saving={saving}
+        onSave={handleSave}
+        onDiscard={handleDiscard}
       />
-
-      {/* Document Processing Settings */}
-      <DocumentProcessingSettings
-              formData={formData}
-              errors={errors}
-              onChange={handleInputChange}
-            />
-
-            {/* RAG Settings */}
-            <RAGSettings
-              formData={formData}
-              errors={errors}
-              onChange={handleInputChange}
-            />
-
-            {/* Retrieval Settings */}
-            <RetrievalSettings
-              formData={formData}
-              errors={errors}
-              onChange={handleInputChange}
-            />
-
-            {/* Save Button and Status */}
-            <div className="flex items-center gap-4 pt-4 border-t">
-              <Button
-                onClick={handleSave}
-                disabled={saving || !hasChanges()}
-              >
-                {saving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                Save Changes
-              </Button>
-
-              {hasChanges() && (
-                <span className="text-sm text-muted-foreground">You have unsaved changes</span>
-              )}
-            </div>
-          </TabsContent>
-
-        </Tabs>
-      )}
     </>
   );
 }
 
-// Wrapper that provides health status and connection test
 function SettingsPageWithStatus({ health }: { health: HealthStatus }) {
   const formatLastChecked = (date: Date | null) => {
     if (!date) return "Not checked";
     return `Last checked: ${date.toLocaleTimeString()}`;
   };
 
-  const [connectionResult, setConnectionResult] = useState<ConnectionTestResult | null>(null);
+  const [connectionResult, setConnectionResult] =
+    useState<ConnectionTestResult | null>(null);
   const [isTestingConnections, setIsTestingConnections] = useState(false);
 
   const handleConnectionTest = async () => {
@@ -350,29 +365,35 @@ function SettingsPageWithStatus({ health }: { health: HealthStatus }) {
     }
   };
 
+  // Hide the unused-warning for dropped ConnectionSettings consumer.
+  void ConnectionSettings;
+
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Settings</h1>
-          <p className="text-muted-foreground mt-1">Configure your application preferences</p>
+          <p className="text-muted-foreground mt-1">
+            Configure your application preferences
+          </p>
         </div>
         <div className="flex flex-col items-end gap-1">
           <ConnectionStatusBadges health={health} />
-          <span className="text-xs text-muted-foreground">{formatLastChecked(health.lastChecked)}</span>
-          <ConnectionSettings
-            onTestConnections={handleConnectionTest}
-            isTesting={isTestingConnections}
-            connectionStatus={connectionResult}
-          />
+          <span className="text-xs text-muted-foreground">
+            {formatLastChecked(health.lastChecked)}
+          </span>
         </div>
       </div>
-      <SettingsPageContent />
+      <SettingsPageContent
+        health={health}
+        connectionResult={connectionResult}
+        isTestingConnections={isTestingConnections}
+        onTestConnections={handleConnectionTest}
+      />
     </div>
   );
 }
 
-// Main SettingsPage that checks health
 export default function SettingsPage() {
   const health = useHealthCheck();
   return <SettingsPageWithStatus health={health} />;

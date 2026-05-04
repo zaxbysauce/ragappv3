@@ -273,6 +273,50 @@ class Settings(BaseSettings):
     chunk_enrichment_fields: str = "summary,questions,entities"
     """Comma-separated list of enrichment fields to generate: summary, questions, entities, aliases."""
 
+    # ── Wiki / Knowledge Compiler configuration ──────────────────────────
+    wiki_enabled: bool = True
+    """Master switch for the Knowledge Compiler / wiki subsystem."""
+    wiki_compile_on_ingest: bool = True
+    """Run wiki compile when a document finishes indexing."""
+    wiki_compile_on_query: bool = True
+    """Run wiki compile when a chat query touches the vault."""
+    wiki_compile_after_indexing: bool = True
+    """Backwards-compatible alias for wiki_compile_on_ingest."""
+    wiki_lint_enabled: bool = True
+    """Run wiki lint sweeps when triggered from the UI."""
+
+    # ── Optional LLM Wiki Curator (PR C wires this through) ───────────────
+    wiki_llm_curator_enabled: bool = False
+    """Master switch for the LLM-assisted wiki curator. Default OFF."""
+    wiki_llm_curator_url: str = ""
+    """OpenAI-compatible /v1/chat/completions base URL for the curator model.
+    Empty when the curator is disabled. SSRF-guarded at the route boundary."""
+    wiki_llm_curator_model: str = ""
+    """Model name passed to the curator endpoint. Empty when disabled."""
+    wiki_llm_curator_temperature: float = 0.0
+    """Temperature for curator calls. Default 0.0 for determinism."""
+    wiki_llm_curator_max_input_chars: int = 6000
+    """Maximum source text passed to the curator per call (1000-24000)."""
+    wiki_llm_curator_max_output_tokens: int = 2048
+    """max_tokens passed to the curator per call."""
+    wiki_llm_curator_timeout_sec: float = 120.0
+    """Per-call timeout in seconds (10-600)."""
+    wiki_llm_curator_concurrency: int = 1
+    """Maximum concurrent curator calls inside one compile job (1-4)."""
+    wiki_llm_curator_mode: str = "draft"
+    """draft (always status='needs_review') or active_if_verified
+    (status='active' iff source_quote + chunk_id verify)."""
+    wiki_llm_curator_require_quote_match: bool = True
+    """Reject candidates whose source_quote does not match the source text."""
+    wiki_llm_curator_require_chunk_id: bool = True
+    """Reject candidates whose chunk_id is not in the provided chunk set."""
+    wiki_llm_curator_run_on_ingest: bool = True
+    """Run the curator in ingest compile jobs when curator is enabled."""
+    wiki_llm_curator_run_on_query: bool = False
+    """Run the curator in query compile jobs. Default OFF to protect chat latency."""
+    wiki_llm_curator_run_on_manual: bool = True
+    """Run the curator in manual / recompile jobs when curator is enabled."""
+
     # ── Retrieval profile configuration ──────────────────────────────────
     retrieval_profile: str = "advanced"
     """Retrieval profile: 'baseline' (dense + hybrid + rerank), 'advanced' (adds enrichment)."""

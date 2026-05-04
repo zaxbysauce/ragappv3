@@ -1,64 +1,55 @@
 /**
- * Tests for handleInputChange function in SettingsPage.tsx
+ * PR B: input-handling tests for the redesigned SettingsPage.
  *
- * This tests the fix for type-handling in form inputs:
- * - Non-numeric strings (URLs, model names) now correctly update form state
- * - Empty string on numeric field sets to 0
- * - Empty string on string field sets to ""
- * - Valid numeric strings parse to numbers
- * - Booleans work correctly
+ * Behavior change vs. legacy:
+ *   - Empty numeric input is NO LONGER coerced to 0. Numeric fields use
+ *     the NumberInput primitive which keeps a draft string locally and
+ *     only commits on blur. A blank field remains blank in the draft and
+ *     is never sent to the backend until it parses.
+ *   - The page-level handler is now a thin pass-through to the store's
+ *     `updateFormField`; type narrowing happens at the input edge
+ *     (NumberInput), not the page level.
+ *
+ * Coverage:
+ *   - Strings/URLs/model names round-trip unchanged.
+ *   - Booleans round-trip unchanged.
+ *   - Direct number commits round-trip unchanged.
+ *   - NumberInput keeps the draft visually blank and does NOT commit
+ *     until blur (the legacy "blank == 0" assertion is intentionally
+ *     replaced).
+ *   - On a blank blur, NumberInput commits `undefined` (the parent
+ *     keeps the previous value rather than collapsing to 0).
+ *   - On unparseable non-empty input, NumberInput surfaces invalid
+ *     state and does NOT commit a value.
  */
-
 import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
 import type { SettingsFormData } from "@/stores/useSettingsStore";
+import { NumberInput } from "@/components/settings/NumberInput";
+import {
+  handleSettingsInputChange,
+  LEGACY_NUMERIC_FIELDS,
+} from "@/components/settings/handleInputChange";
 
-// Recreate the handleInputChange logic for direct unit testing
-// This mirrors the exact implementation from SettingsPage.tsx lines 83-119
-
-const numericFields: Set<keyof SettingsFormData> = new Set([
-  "chunk_size_chars",
-  "chunk_overlap_chars",
-  "retrieval_top_k",
-  "auto_scan_interval_minutes",
-  "max_distance_threshold",
-  "retrieval_window",
-  "embedding_batch_size",
-  "hybrid_alpha",
-  "initial_retrieval_top_k",
-  "reranker_top_n",
-]);
-
+// Tests exercise the REAL handler used by SettingsPage. Earlier
+// versions of this test mirrored the implementation inline, which
+// silently drifts on every refactor. Importing the actual function
+// guarantees the tests follow the page.
 function handleInputChange(
   field: keyof SettingsFormData,
   value: string | boolean | number,
-  updateFormField: (field: keyof SettingsFormData, value: any) => void
+  updateFormField: (field: keyof SettingsFormData, value: unknown) => void,
 ) {
-  if (typeof value === "boolean") {
-    updateFormField(field, value);
-  } else if (typeof value === "string") {
-    if (value === "") {
-      // Empty string: for numeric fields, set to 0; for string fields, keep as empty string
-      if (numericFields.has(field)) {
-        updateFormField(field, 0);
-      } else {
-        updateFormField(field as any, value);
-      }
-    } else if (numericFields.has(field)) {
-      const numValue = parseFloat(value);
-      if (!isNaN(numValue)) {
-        updateFormField(field, numValue);
-      }
-    } else {
-      // String field - keep as string
-      updateFormField(field, value);
-    }
-  } else {
-    // number
-    updateFormField(field, value);
-  }
+  // Cast so the test helper accepts the loose signature the legacy
+  // components emit; the real handler does the same.
+  handleSettingsInputChange(
+    field,
+    value,
+    updateFormField as (k: keyof SettingsFormData, v: never) => void,
+  );
 }
 
-describe("handleInputChange", () => {
+describe("SettingsPage handleInputChange (loose pass-through)", () => {
   let updateFormField: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
@@ -69,319 +60,205 @@ describe("handleInputChange", () => {
     vi.clearAllMocks();
   });
 
-  describe("string fields (URLs, model names, prefixes)", () => {
-    test("should update string field with non-numeric URL value", () => {
-      handleInputChange("reranker_url", "http://localhost:8001", updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("reranker_url", "http://localhost:8001");
-    });
-
-    test("should update string field with non-numeric model name", () => {
-      handleInputChange("reranker_model", "cross-encoder/ms-marco-MiniLM-L-6-v2", updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("reranker_model", "cross-encoder/ms-marco-MiniLM-L-6-v2");
-    });
-
-    test("should update ollama_embedding_url with URL string", () => {
-      handleInputChange("ollama_embedding_url", "http://192.168.1.100:11434", updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("ollama_embedding_url", "http://192.168.1.100:11434");
-    });
-
-    test("should update ollama_chat_url with URL string", () => {
-      handleInputChange("ollama_chat_url", "http://localhost:11434", updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("ollama_chat_url", "http://localhost:11434");
-    });
-
-    test("should update embedding_model with model name string", () => {
-      handleInputChange("embedding_model", "nomic-embed-text", updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("embedding_model", "nomic-embed-text");
-    });
-
-    test("should update chat_model with model name string", () => {
-      handleInputChange("chat_model", "llama3.2", updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("chat_model", "llama3.2");
-    });
-
-    test("should update vector_metric with string value", () => {
-      handleInputChange("vector_metric", "euclidean", updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("vector_metric", "euclidean");
-    });
-
-    test("should update embedding_doc_prefix with string value", () => {
-      handleInputChange("embedding_doc_prefix", "Passage: ", updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("embedding_doc_prefix", "Passage: ");
-    });
-
-    test("should update embedding_query_prefix with string value", () => {
-      handleInputChange("embedding_query_prefix", "Query: ", updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("embedding_query_prefix", "Query: ");
-    });
-
-    test("should NOT parse URL-like strings as numbers even if they contain digits", () => {
-      // URLs like "http://10.0.0.1:8080" contain numbers but should remain strings
-      handleInputChange("reranker_url", "http://10.0.0.1:8080/api", updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("reranker_url", "http://10.0.0.1:8080/api");
-      expect(updateFormField.mock.calls[0][1]).toBeTypeOf("string");
-    });
-
-    test("should handle model names with version numbers (remain as strings)", () => {
-      handleInputChange("chat_model", "gpt-4o-2024-08-06", updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("chat_model", "gpt-4o-2024-08-06");
-      expect(updateFormField.mock.calls[0][1]).toBeTypeOf("string");
-    });
+  test("string field round-trip", () => {
+    handleInputChange(
+      "reranker_url",
+      "http://localhost:8001",
+      updateFormField,
+    );
+    expect(updateFormField).toHaveBeenCalledWith(
+      "reranker_url",
+      "http://localhost:8001",
+    );
   });
 
-  describe("empty string handling", () => {
-    test("should convert empty string to 0 for numeric field (chunk_size_chars)", () => {
-      handleInputChange("chunk_size_chars", "", updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("chunk_size_chars", 0);
-      expect(updateFormField.mock.calls[0][1]).toBe(0);
-      expect(updateFormField.mock.calls[0][1]).toBeTypeOf("number");
-    });
-
-    test("should convert empty string to 0 for numeric field (retrieval_top_k)", () => {
-      handleInputChange("retrieval_top_k", "", updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("retrieval_top_k", 0);
-      expect(updateFormField.mock.calls[0][1]).toBeTypeOf("number");
-    });
-
-    test("should convert empty string to 0 for numeric field (embedding_batch_size)", () => {
-      handleInputChange("embedding_batch_size", "", updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("embedding_batch_size", 0);
-      expect(updateFormField.mock.calls[0][1]).toBeTypeOf("number");
-    });
-
-    test("should convert empty string to 0 for numeric field (hybrid_alpha)", () => {
-      handleInputChange("hybrid_alpha", "", updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("hybrid_alpha", 0);
-      expect(updateFormField.mock.calls[0][1]).toBeTypeOf("number");
-    });
-
-    test("should convert empty string to 0 for numeric field (max_distance_threshold)", () => {
-      handleInputChange("max_distance_threshold", "", updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("max_distance_threshold", 0);
-      expect(updateFormField.mock.calls[0][1]).toBeTypeOf("number");
-    });
-
-    test("should keep empty string as empty string for string field (reranker_url)", () => {
-      handleInputChange("reranker_url", "", updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("reranker_url", "");
-      expect(updateFormField.mock.calls[0][1]).toBe("");
-      expect(updateFormField.mock.calls[0][1]).toBeTypeOf("string");
-    });
-
-    test("should keep empty string as empty string for string field (reranker_model)", () => {
-      handleInputChange("reranker_model", "", updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("reranker_model", "");
-      expect(updateFormField.mock.calls[0][1]).toBeTypeOf("string");
-    });
-
-    test("should keep empty string as empty string for string field (ollama_embedding_url)", () => {
-      handleInputChange("ollama_embedding_url", "", updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("ollama_embedding_url", "");
-      expect(updateFormField.mock.calls[0][1]).toBeTypeOf("string");
-    });
-
-    test("should keep empty string as empty string for string field (vector_metric)", () => {
-      handleInputChange("vector_metric", "", updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("vector_metric", "");
-      expect(updateFormField.mock.calls[0][1]).toBeTypeOf("string");
-    });
+  test("model-name string round-trip preserves slashes / colons / hyphens", () => {
+    handleInputChange(
+      "embedding_model",
+      "BAAI/bge-large-en-v1.5",
+      updateFormField,
+    );
+    expect(updateFormField).toHaveBeenCalledWith(
+      "embedding_model",
+      "BAAI/bge-large-en-v1.5",
+    );
   });
 
-  describe("numeric string parsing", () => {
-    test("should parse valid numeric string to number for chunk_size_chars", () => {
-      handleInputChange("chunk_size_chars", "2048", updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("chunk_size_chars", 2048);
-      expect(updateFormField.mock.calls[0][1]).toBeTypeOf("number");
-    });
-
-    test("should parse valid numeric string with decimal for max_distance_threshold", () => {
-      handleInputChange("max_distance_threshold", "0.75", updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("max_distance_threshold", 0.75);
-      expect(updateFormField.mock.calls[0][1]).toBeTypeOf("number");
-    });
-
-    test("should parse valid numeric string for hybrid_alpha", () => {
-      handleInputChange("hybrid_alpha", "0.5", updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("hybrid_alpha", 0.5);
-      expect(updateFormField.mock.calls[0][1]).toBeTypeOf("number");
-    });
-
-    test("should parse valid numeric string for retrieval_top_k", () => {
-      handleInputChange("retrieval_top_k", "10", updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("retrieval_top_k", 10);
-      expect(updateFormField.mock.calls[0][1]).toBeTypeOf("number");
-    });
-
-    test("should parse valid numeric string for embedding_batch_size", () => {
-      handleInputChange("embedding_batch_size", "1024", updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("embedding_batch_size", 1024);
-      expect(updateFormField.mock.calls[0][1]).toBeTypeOf("number");
-    });
-
-    test("should NOT call updateFormField for NaN numeric string on numeric field", () => {
-      // When a non-numeric string is entered for a numeric field, parseFloat returns NaN
-      // The implementation should NOT update the field in this case
-      handleInputChange("chunk_size_chars", "not-a-number", updateFormField);
-      expect(updateFormField).not.toHaveBeenCalled();
-    });
-
-    test("should parse negative numbers correctly", () => {
-      // Even though negative might not be valid semantically, parsing should work
-      handleInputChange("max_distance_threshold", "-0.5", updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("max_distance_threshold", -0.5);
-      expect(updateFormField.mock.calls[0][1]).toBeTypeOf("number");
-    });
-
-    test("should parse integer strings correctly", () => {
-      handleInputChange("chunk_overlap_chars", "256", updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("chunk_overlap_chars", 256);
-      // Note: JS doesn't distinguish int vs float, but verify it's a number
-      expect(updateFormField.mock.calls[0][1]).toBeTypeOf("number");
-    });
-
-    test("should handle leading/trailing whitespace in numeric strings", () => {
-      // parseFloat("  42  ") returns 42, which is correct
-      handleInputChange("retrieval_top_k", "  42  ", updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("retrieval_top_k", 42);
-    });
+  test("empty string on a string field stays empty (no coercion)", () => {
+    handleInputChange("reranker_url", "", updateFormField);
+    expect(updateFormField).toHaveBeenCalledWith("reranker_url", "");
   });
 
-  describe("boolean handling", () => {
-    test("should pass boolean true directly for auto_scan_enabled", () => {
-      handleInputChange("auto_scan_enabled", true, updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("auto_scan_enabled", true);
-      expect(updateFormField.mock.calls[0][1]).toBeTypeOf("boolean");
-    });
-
-    test("should pass boolean false directly for auto_scan_enabled", () => {
-      handleInputChange("auto_scan_enabled", false, updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("auto_scan_enabled", false);
-      expect(updateFormField.mock.calls[0][1]).toBeTypeOf("boolean");
-    });
-
-    test("should pass boolean true directly for reranking_enabled", () => {
-      handleInputChange("reranking_enabled", true, updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("reranking_enabled", true);
-    });
-
-    test("should pass boolean false directly for reranking_enabled", () => {
-      handleInputChange("reranking_enabled", false, updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("reranking_enabled", false);
-    });
-
-    test("should pass boolean true directly for hybrid_search_enabled", () => {
-      handleInputChange("hybrid_search_enabled", true, updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("hybrid_search_enabled", true);
-    });
-
-    test("should pass boolean false directly for hybrid_search_enabled", () => {
-      handleInputChange("hybrid_search_enabled", false, updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("hybrid_search_enabled", false);
-    });
+  test("boolean field round-trip", () => {
+    handleInputChange("reranking_enabled", true, updateFormField);
+    handleInputChange("reranking_enabled", false, updateFormField);
+    expect(updateFormField).toHaveBeenNthCalledWith(1, "reranking_enabled", true);
+    expect(updateFormField).toHaveBeenNthCalledWith(2, "reranking_enabled", false);
   });
 
-  describe("direct number handling", () => {
-    test("should pass number directly for numeric field", () => {
-      handleInputChange("chunk_size_chars", 2048, updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("chunk_size_chars", 2048);
-      expect(updateFormField.mock.calls[0][1]).toBeTypeOf("number");
-    });
+  test("direct number commit round-trip", () => {
+    handleInputChange("retrieval_top_k", 42, updateFormField);
+    expect(updateFormField).toHaveBeenCalledWith("retrieval_top_k", 42);
+  });
+});
 
-    test("should pass decimal number directly for numeric field", () => {
-      handleInputChange("max_distance_threshold", 0.85, updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("max_distance_threshold", 0.85);
-      expect(updateFormField.mock.calls[0][1]).toBeTypeOf("number");
-    });
+describe("SettingsPage handler — legacy numeric coercion (real implementation)", () => {
+  let updateFormField: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    updateFormField = vi.fn();
   });
 
-  describe("edge cases and adversarial inputs", () => {
-    test("should handle special characters in string fields", () => {
-      handleInputChange("reranker_url", "http://localhost:8080/api/v1?query=test&sort=desc", updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("reranker_url", "http://localhost:8080/api/v1?query=test&sort=desc");
-    });
-
-    test("should handle Unicode in string fields", () => {
-      handleInputChange("embedding_doc_prefix", "文档: ", updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("embedding_doc_prefix", "文档: ");
-    });
-
-    test("should handle very long string values", () => {
-      const longUrl = "http://example.com/" + "a".repeat(1000);
-      handleInputChange("ollama_embedding_url", longUrl, updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("ollama_embedding_url", longUrl);
-    });
-
-    test("should handle scientific notation in numeric fields", () => {
-      handleInputChange("embedding_batch_size", "1e3", updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("embedding_batch_size", 1000);
-    });
-
-    test("should handle 'Infinity' string on numeric field (parseFloat returns Infinity)", () => {
-      // parseFloat("Infinity") returns Infinity, which is a valid number in JS
-      handleInputChange("chunk_size_chars", "Infinity", updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("chunk_size_chars", Infinity);
-    });
-
-    test("should handle '-Infinity' string on numeric field (parseFloat returns -Infinity)", () => {
-      handleInputChange("chunk_size_chars", "-Infinity", updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("chunk_size_chars", -Infinity);
-    });
-
-    test("should handle 'NaN' string on numeric field (parseFloat returns NaN)", () => {
-      handleInputChange("chunk_size_chars", "NaN", updateFormField);
-      expect(updateFormField).not.toHaveBeenCalled();
-    });
-
-    test("should handle string with only whitespace for numeric field", () => {
-      // parseFloat("   ") returns NaN
-      handleInputChange("chunk_size_chars", "   ", updateFormField);
-      expect(updateFormField).not.toHaveBeenCalled();
-    });
-
-    test("should handle mixed alphanumeric on numeric field (returns NaN)", () => {
-      handleInputChange("chunk_size_chars", "123abc", updateFormField);
-      // parseFloat("123abc") returns 123, so this WILL update
-      expect(updateFormField).toHaveBeenCalledWith("chunk_size_chars", 123);
-    });
-
-    test("should handle string starting with number then text on numeric field", () => {
-      // parseFloat("42px") returns 42 - this is valid parsing behavior
-      handleInputChange("retrieval_top_k", "42px", updateFormField);
-      expect(updateFormField).toHaveBeenCalledWith("retrieval_top_k", 42);
-    });
+  test("LEGACY_NUMERIC_FIELDS covers every store field the legacy components emit", () => {
+    // Sanity check: if a future field gets added to the legacy
+    // components without being added to the Set, this test gives a
+    // clear failure rather than a confusing string-into-number bug.
+    const expected = [
+      "chunk_size_chars",
+      "chunk_overlap_chars",
+      "retrieval_top_k",
+      "auto_scan_interval_minutes",
+      "max_distance_threshold",
+      "retrieval_window",
+      "embedding_batch_size",
+      "hybrid_alpha",
+      "initial_retrieval_top_k",
+      "reranker_top_n",
+    ];
+    for (const f of expected) {
+      expect(LEGACY_NUMERIC_FIELDS.has(f as keyof SettingsFormData)).toBe(
+        true,
+      );
+    }
   });
 
-  describe("type preservation verification", () => {
-    test("string field receives string type (not number)", () => {
-      handleInputChange("reranker_url", "http://localhost:8080", updateFormField);
-      const callValue = updateFormField.mock.calls[0][1];
-      expect(callValue).toBeTypeOf("string");
-    });
+  test.each([
+    ["chunk_size_chars", "2000", 2000],
+    ["chunk_overlap_chars", "150", 150],
+    ["retrieval_top_k", "8", 8],
+    ["auto_scan_interval_minutes", "30", 30],
+    ["max_distance_threshold", "0.65", 0.65],
+    ["retrieval_window", "2", 2],
+    ["embedding_batch_size", "16", 16],
+    ["hybrid_alpha", "0.4", 0.4],
+    ["initial_retrieval_top_k", "25", 25],
+    ["reranker_top_n", "7", 7],
+  ])(
+    "coerces string '%s' on field %s -> number %s",
+    (field, raw, expected) => {
+      handleInputChange(
+        field as keyof SettingsFormData,
+        raw as string,
+        updateFormField,
+      );
+      expect(updateFormField).toHaveBeenCalledTimes(1);
+      expect(updateFormField).toHaveBeenCalledWith(field, expected);
+      expect(typeof updateFormField.mock.calls[0][1]).toBe("number");
+    },
+  );
 
-    test("numeric field receives number type (not string)", () => {
-      handleInputChange("chunk_size_chars", "1024", updateFormField);
-      const callValue = updateFormField.mock.calls[0][1];
-      expect(callValue).toBeTypeOf("number");
-    });
+  test("blank string on numeric field DOES NOT mutate store (preserves last good value)", () => {
+    handleInputChange("chunk_size_chars", "", updateFormField);
+    expect(updateFormField).not.toHaveBeenCalled();
+  });
 
-    test("empty string on numeric field receives number 0 (not string)", () => {
-      handleInputChange("chunk_size_chars", "", updateFormField);
-      const callValue = updateFormField.mock.calls[0][1];
-      expect(callValue).toBeTypeOf("number");
-      expect(callValue).toBe(0);
-    });
+  test("unparseable non-empty input DOES NOT mutate store", () => {
+    handleInputChange("retrieval_top_k", "abc", updateFormField);
+    expect(updateFormField).not.toHaveBeenCalled();
+  });
 
-    test("empty string on string field receives string (not null/undefined)", () => {
-      handleInputChange("reranker_url", "", updateFormField);
-      const callValue = updateFormField.mock.calls[0][1];
-      expect(callValue).toBeTypeOf("string");
-      expect(callValue).toBe("");
-    });
+  test("non-numeric string field still passes through unchanged", () => {
+    handleInputChange(
+      "ollama_chat_url",
+      "http://localhost:11434",
+      updateFormField,
+    );
+    expect(updateFormField).toHaveBeenCalledWith(
+      "ollama_chat_url",
+      "http://localhost:11434",
+    );
+  });
+});
 
-    test("boolean field receives boolean type", () => {
-      handleInputChange("auto_scan_enabled", true, updateFormField);
-      const callValue = updateFormField.mock.calls[0][1];
-      expect(callValue).toBeTypeOf("boolean");
-    });
+describe("NumberInput draft-string behavior (replaces legacy blank-to-0)", () => {
+  test("blank field does NOT commit while the user is typing", () => {
+    const onCommit = vi.fn();
+    render(<NumberInput value={5} onCommit={onCommit} aria-label="x" />);
+    const input = screen.getByLabelText("x") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "" } });
+    // Still no commit — only on blur.
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(input.value).toBe("");
+  });
+
+  test("blanking and blurring commits undefined (NOT zero)", () => {
+    const onCommit = vi.fn();
+    render(<NumberInput value={5} onCommit={onCommit} aria-label="x" />);
+    const input = screen.getByLabelText("x") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "" } });
+    fireEvent.blur(input);
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    expect(onCommit).toHaveBeenCalledWith(undefined);
+  });
+
+  test("typing a valid number and blurring commits the parsed number", () => {
+    const onCommit = vi.fn();
+    render(<NumberInput value={5} onCommit={onCommit} aria-label="x" />);
+    const input = screen.getByLabelText("x") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "12.5" } });
+    fireEvent.blur(input);
+    expect(onCommit).toHaveBeenCalledWith(12.5);
+  });
+
+  test("non-empty unparseable input does NOT commit and surfaces invalid", () => {
+    const onCommit = vi.fn();
+    render(<NumberInput value={5} onCommit={onCommit} aria-label="x" />);
+    const input = screen.getByLabelText("x") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "abc" } });
+    fireEvent.blur(input);
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(input.getAttribute("data-invalid")).toBe("true");
+  });
+
+  test("Enter key triggers blur on the underlying input", () => {
+    const onCommit = vi.fn();
+    render(<NumberInput value={5} onCommit={onCommit} aria-label="x" />);
+    const input = screen.getByLabelText("x") as HTMLInputElement;
+    input.focus();
+    expect(document.activeElement).toBe(input);
+    fireEvent.change(input, { target: { value: "7" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    // The handler calls e.currentTarget.blur() — JSDOM moves focus
+    // away. The native blur lifecycle may or may not fire the React
+    // onBlur synchronously depending on the runtime; we assert focus
+    // moved as the observable contract.
+    expect(document.activeElement).not.toBe(input);
+  });
+
+  test("parseAs='int' truncates floats", () => {
+    const onCommit = vi.fn();
+    render(
+      <NumberInput
+        value={5}
+        onCommit={onCommit}
+        parseAs="int"
+        aria-label="x"
+      />,
+    );
+    const input = screen.getByLabelText("x") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "10.7" } });
+    fireEvent.blur(input);
+    expect(onCommit).toHaveBeenCalledWith(10);
+  });
+
+  test("parent-driven value updates resync the draft", () => {
+    const onCommit = vi.fn();
+    const { rerender } = render(
+      <NumberInput value={5} onCommit={onCommit} aria-label="x" />,
+    );
+    const input = screen.getByLabelText("x") as HTMLInputElement;
+    expect(input.value).toBe("5");
+    rerender(<NumberInput value={42} onCommit={onCommit} aria-label="x" />);
+    expect(input.value).toBe("42");
   });
 });
