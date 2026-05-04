@@ -445,6 +445,7 @@ class BackgroundProcessor:
                 email_subject=task.email_subject,
                 email_sender=task.email_sender,
                 vault_id=task.vault_id,
+                file_id=task.file_id,
             )
             await self.queue.put(new_task)
         else:

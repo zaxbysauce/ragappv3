@@ -737,5 +737,103 @@ class TestStatusRouteAndAsyncUpload(unittest.TestCase):
         self.assertEqual(resp.status_code, 403, resp.text)
 
 
+class TestHandleFailurePreservesFileId(unittest.TestCase):
+    """_handle_failure must carry file_id into the requeued TaskItem.
+
+    Regression guard: the original implementation created a new TaskItem
+    without file_id, causing the retry to fall through to process_file
+    (legacy path) and re-run duplicate detection against an already-existing
+    files row.
+    """
+
+    def test_file_id_preserved_in_retry_task(self):
+        from app.services.background_tasks import TaskItem
+
+        bp = BackgroundProcessor(retry_delay=0)
+
+        async def runner():
+            task = TaskItem(
+                file_path="/tmp/x.txt",
+                attempt=1,
+                source="upload",
+                vault_id=1,
+                file_id=99,
+            )
+            await bp._handle_failure(task, "simulated error")
+            return await bp.queue.get()
+
+        retry_task = asyncio.run(runner())
+        self.assertEqual(retry_task.file_id, 99)
+        self.assertEqual(retry_task.attempt, 2)
+        self.assertEqual(retry_task.file_path, "/tmp/x.txt")
+        self.assertEqual(retry_task.vault_id, 1)
+
+    def test_retry_task_calls_process_existing_file(self):
+        """After failure, the requeued task (file_id set) must route to
+        process_existing_file — not to process_file which re-runs dedup."""
+        from app.services.background_tasks import TaskItem
+
+        bp = BackgroundProcessor(retry_delay=0)
+        bp.processor = MagicMock()
+        bp.processor.process_file = AsyncMock()
+        bp.processor.process_existing_file = AsyncMock()
+
+        async def runner():
+            task = TaskItem(
+                file_path="/tmp/x.txt",
+                attempt=1,
+                source="upload",
+                vault_id=1,
+                file_id=99,
+            )
+            await bp._handle_failure(task, "simulated error")
+            retry_task = await bp.queue.get()
+            await bp._process_task(retry_task)
+            bp.queue.task_done()
+
+        asyncio.run(runner())
+        bp.processor.process_existing_file.assert_awaited_once_with(
+            file_id=99, file_path="/tmp/x.txt", vault_id=1
+        )
+        bp.processor.process_file.assert_not_awaited()
+
+    def test_none_file_id_stays_none_in_retry(self):
+        """Legacy scan/email tasks (file_id=None) must also stay None after retry."""
+        from app.services.background_tasks import TaskItem
+
+        bp = BackgroundProcessor(retry_delay=0)
+
+        async def runner():
+            task = TaskItem(
+                file_path="/tmp/scan.txt",
+                attempt=1,
+                source="scan",
+                vault_id=1,
+                file_id=None,
+            )
+            await bp._handle_failure(task, "simulated error")
+            return await bp.queue.get()
+
+        retry_task = asyncio.run(runner())
+        self.assertIsNone(retry_task.file_id)
+
+
+class TestAdminRetryPassesFileId(unittest.TestCase):
+    """Admin retry route must pass file_id to enqueue so the worker does not
+    re-run duplicate detection on the already-existing files row."""
+
+    def test_retry_document_enqueue_includes_file_id(self):
+        import inspect
+
+        from app.api.routes.documents import retry_document
+
+        source = inspect.getsource(retry_document)
+        self.assertIn(
+            "file_id=file_id",
+            source,
+            "retry_document must pass file_id=file_id to background_processor.enqueue",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

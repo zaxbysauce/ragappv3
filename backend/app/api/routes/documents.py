@@ -164,7 +164,7 @@ async def retry_document(
         if not background_processor.is_running:
             await background_processor.start()
 
-        await background_processor.enqueue(row["file_path"], vault_id=row["vault_id"])
+        await background_processor.enqueue(row["file_path"], vault_id=row["vault_id"], file_id=file_id)
 
         user_id = (
             str(current_user["id"])
