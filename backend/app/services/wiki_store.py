@@ -68,6 +68,10 @@ class WikiClaim:
     status: str
     confidence: float
     created_by: Optional[int]
+    # 'deterministic' | 'llm_curator' | None.
+    # None for legacy rows pre-PR-C; readers should treat None as
+    # "deterministic / unknown".
+    created_by_kind: Optional[str]
     created_at: str
     updated_at: str
     sources: list = field(default_factory=list)
@@ -208,6 +212,7 @@ def _to_wiki_claim(row: sqlite3.Row) -> WikiClaim:
         status=d["status"],
         confidence=d.get("confidence") or 0.0,
         created_by=d.get("created_by"),
+        created_by_kind=d.get("created_by_kind"),
         created_at=d["created_at"],
         updated_at=d["updated_at"],
     )
@@ -502,16 +507,18 @@ class WikiStore:
         status: str = "active",
         confidence: float = 0.0,
         created_by: Optional[int] = None,
+        created_by_kind: Optional[str] = None,
         sources: Optional[list] = None,
     ) -> WikiClaim:
         now = datetime.utcnow().isoformat()
         cur = self._db.execute(
             """INSERT INTO wiki_claims
                (vault_id, page_id, claim_text, claim_type, subject, predicate, object,
-                source_type, status, confidence, created_by, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                source_type, status, confidence, created_by, created_by_kind,
+                created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (vault_id, page_id, claim_text, claim_type, subject, predicate, object,
-             source_type, status, confidence, created_by, now, now),
+             source_type, status, confidence, created_by, created_by_kind, now, now),
         )
         claim_id = cur.lastrowid
         if sources:

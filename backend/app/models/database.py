@@ -351,9 +351,13 @@ CREATE TABLE IF NOT EXISTS wiki_claims (
     source_type TEXT NOT NULL CHECK (source_type IN (
         'document','memory','chat_synthesis','manual','mixed')),
     status TEXT NOT NULL DEFAULT 'active' CHECK (status IN (
-        'active','contradicted','superseded','unverified','archived')),
+        'active','contradicted','superseded','unverified','archived','needs_review')),
     confidence REAL DEFAULT 0.0,
     created_by INTEGER,
+    -- 'deterministic' | 'llm_curator' | NULL (legacy / unknown).
+    -- Distinct from `created_by` (user id) so a curator-authored claim
+    -- can still record the operator who promoted/reviewed it.
+    created_by_kind TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -589,6 +593,7 @@ def run_migrations(sqlite_path: str) -> None:
     migrate_add_wiki_jobs_retry_count(sqlite_path)
     migrate_add_files_parsed_text(sqlite_path)
     migrate_add_files_processing_progress(sqlite_path)
+    migrate_add_curator_claim_support(sqlite_path)
 
     # Add partial unique index for duplicate hash detection (HIGH-10)
     # Wrapped in IntegrityError handler: existing databases may have duplicate
@@ -1122,9 +1127,10 @@ def migrate_add_wiki_tables(sqlite_path: str) -> None:
                 source_type TEXT NOT NULL CHECK (source_type IN (
                     'document','memory','chat_synthesis','manual','mixed')),
                 status TEXT NOT NULL DEFAULT 'active' CHECK (status IN (
-                    'active','contradicted','superseded','unverified','archived')),
+                    'active','contradicted','superseded','unverified','archived','needs_review')),
                 confidence REAL DEFAULT 0.0,
                 created_by INTEGER,
+                created_by_kind TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
@@ -1303,6 +1309,227 @@ def migrate_add_files_parsed_text(sqlite_path: str) -> None:
         if "parsed_text" not in existing_cols:
             conn.execute("ALTER TABLE files ADD COLUMN parsed_text TEXT")
         conn.commit()
+    finally:
+        conn.close()
+
+
+def migrate_add_curator_claim_support(sqlite_path: str) -> None:
+    """Migration (PR C): widen wiki_claims.status to include 'needs_review'
+    and add a TEXT ``created_by_kind`` column that records whether a claim
+    came from deterministic extraction or the optional LLM curator.
+
+    SQLite cannot ALTER a CHECK constraint, so we follow the rename-
+    recreate-copy pattern. Three subtleties matter:
+
+    1. CRITICAL — SQLite >= 3.26 with the default
+       ``legacy_alter_table=OFF`` rewrites the textual FK references in
+       *child* tables to follow ``ALTER TABLE … RENAME TO``. After we
+       drop ``wiki_claims_old``, those FKs would dangle silently:
+       ``wiki_claim_sources.claim_id`` and ``wiki_relations.claim_id``
+       would still point at ``wiki_claims_old`` and CASCADE would never
+       fire. We set ``legacy_alter_table=ON`` for the duration of the
+       swap so child FK references stay textually pointing at
+       ``wiki_claims``. Verified post-swap with
+       ``PRAGMA foreign_key_check`` and ``foreign_key_list``.
+
+    2. FTS triggers on wiki_claims are dropped before the rename and
+       recreated after the swap; the ``wiki_claims_fts`` virtual table
+       is repopulated via the standard ``('rebuild')`` command so search
+       keeps working.
+
+    3. Recovery — if a previous run died after the rename but before the
+       drop, ``wiki_claims_old`` will still exist on disk. The function
+       detects that at the top and restores by renaming back, then
+       re-runs cleanly. Without this an interrupted migration would
+       leave the DB unable to ever finish.
+
+    Idempotent — safe to run multiple times.
+    """
+    conn = sqlite3.connect(sqlite_path)
+    # Force autocommit so PRAGMA statements take effect outside of an
+    # implicit transaction. This matches the behaviour we verified in
+    # the SQLite reproduction case at PR-C reviewer time.
+    conn.isolation_level = None
+    try:
+        # Recovery: if a previous run crashed mid-migration, the old
+        # table may still be present alongside (or instead of) the new
+        # one. Restore the canonical name before doing anything else.
+        old_present = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='wiki_claims_old'"
+        ).fetchone()
+        new_present = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='wiki_claims'"
+        ).fetchone()
+        if old_present and not new_present:
+            # Crashed after rename but before CREATE TABLE wiki_claims.
+            # Restore the original name and let the migration run again.
+            logger.warning(
+                "migrate_add_curator_claim_support: detected "
+                "wiki_claims_old without wiki_claims; restoring."
+            )
+            conn.execute("PRAGMA legacy_alter_table = ON")
+            conn.execute("ALTER TABLE wiki_claims_old RENAME TO wiki_claims")
+            conn.execute("PRAGMA legacy_alter_table = OFF")
+            new_present = True
+
+        # Skip if wiki_claims doesn't exist yet (fresh install path will
+        # create it via migrate_add_wiki_tables, which already includes
+        # the new schema after this function lands).
+        if not new_present:
+            return
+
+        existing_cols = {
+            row[1] for row in conn.execute("PRAGMA table_info(wiki_claims)").fetchall()
+        }
+        if "created_by_kind" in existing_cols:
+            # Migration already applied; nothing to do — but if a stray
+            # wiki_claims_old somehow lingers (shouldn't, given the
+            # recovery branch above), drop it now.
+            if old_present:
+                conn.execute("DROP TABLE IF EXISTS wiki_claims_old")
+            return
+
+        # Third recovery branch (per PR-C critic Fix #1): both tables
+        # exist and wiki_claims is the OLD shape (no created_by_kind).
+        # This means a previous run completed the rename, started the
+        # new CREATE TABLE, but somehow ended up with both tables.
+        # The safe move is to drop the stale wiki_claims_old before the
+        # main path runs — otherwise the next ALTER ... RENAME TO
+        # wiki_claims_old below will fail with "table already exists".
+        if old_present:
+            logger.warning(
+                "migrate_add_curator_claim_support: detected stale "
+                "wiki_claims_old alongside pre-PR-C wiki_claims; "
+                "dropping the stale table before re-running migration."
+            )
+            conn.execute("DROP TABLE IF EXISTS wiki_claims_old")
+
+        # Snapshot row count for parity check.
+        before_count = conn.execute("SELECT COUNT(*) FROM wiki_claims").fetchone()[0]
+
+        # Detach FK validation for the duration of the swap and force
+        # legacy ALTER behaviour so child-table FK references stay
+        # textually pointing at the canonical table name.
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.execute("PRAGMA legacy_alter_table = ON")
+        try:
+            # Drop FTS triggers — they reference wiki_claims by name.
+            for trig in (
+                "wiki_claims_fts_insert",
+                "wiki_claims_fts_delete",
+                "wiki_claims_fts_update",
+            ):
+                conn.execute(f"DROP TRIGGER IF EXISTS {trig}")
+
+            # Move the old table out of the way.
+            conn.execute("ALTER TABLE wiki_claims RENAME TO wiki_claims_old")
+
+            # Create the new table with widened status CHECK + new column.
+            conn.execute(
+                """
+                CREATE TABLE wiki_claims (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    vault_id INTEGER NOT NULL,
+                    page_id INTEGER REFERENCES wiki_pages(id) ON DELETE SET NULL,
+                    claim_text TEXT NOT NULL,
+                    claim_type TEXT NOT NULL DEFAULT 'fact',
+                    subject TEXT,
+                    predicate TEXT,
+                    object TEXT,
+                    source_type TEXT NOT NULL CHECK (source_type IN (
+                        'document','memory','chat_synthesis','manual','mixed')),
+                    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN (
+                        'active','contradicted','superseded','unverified','archived','needs_review')),
+                    confidence REAL DEFAULT 0.0,
+                    created_by INTEGER,
+                    created_by_kind TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+
+            # Copy every column. created_by_kind defaults to NULL on
+            # backfill — interpreted by readers as "deterministic /
+            # unknown" (the curator path explicitly sets 'llm_curator').
+            conn.execute(
+                """
+                INSERT INTO wiki_claims (
+                    id, vault_id, page_id, claim_text, claim_type,
+                    subject, predicate, object, source_type, status,
+                    confidence, created_by, created_at, updated_at
+                )
+                SELECT id, vault_id, page_id, claim_text, claim_type,
+                       subject, predicate, object, source_type, status,
+                       confidence, created_by, created_at, updated_at
+                FROM wiki_claims_old
+                """
+            )
+
+            # Verify row count parity before dropping the old table.
+            after_count = conn.execute("SELECT COUNT(*) FROM wiki_claims").fetchone()[0]
+            if after_count != before_count:
+                # Bail out without dropping the old table so an operator
+                # can recover.
+                raise RuntimeError(
+                    f"migrate_add_curator_claim_support: row-count parity "
+                    f"failed ({before_count} -> {after_count}). "
+                    f"wiki_claims_old has been preserved."
+                )
+
+            conn.execute("DROP TABLE wiki_claims_old")
+
+            # Recreate the FTS triggers exactly as in the original schema.
+            conn.executescript(
+                """
+                CREATE TRIGGER IF NOT EXISTS wiki_claims_fts_insert
+                AFTER INSERT ON wiki_claims BEGIN
+                    INSERT INTO wiki_claims_fts(rowid, claim_text, subject, predicate, object)
+                    VALUES (new.id, new.claim_text, new.subject, new.predicate, new.object);
+                END;
+                CREATE TRIGGER IF NOT EXISTS wiki_claims_fts_delete
+                AFTER DELETE ON wiki_claims BEGIN
+                    INSERT INTO wiki_claims_fts(wiki_claims_fts, rowid, claim_text, subject, predicate, object)
+                    VALUES ('delete', old.id, old.claim_text, old.subject, old.predicate, old.object);
+                END;
+                CREATE TRIGGER IF NOT EXISTS wiki_claims_fts_update
+                AFTER UPDATE ON wiki_claims BEGIN
+                    INSERT INTO wiki_claims_fts(wiki_claims_fts, rowid, claim_text, subject, predicate, object)
+                    VALUES ('delete', old.id, old.claim_text, old.subject, old.predicate, old.object);
+                    INSERT INTO wiki_claims_fts(rowid, claim_text, subject, predicate, object)
+                    VALUES (new.id, new.claim_text, new.subject, new.predicate, new.object);
+                END;
+                """
+            )
+
+            # Repopulate the FTS virtual table from the new wiki_claims.
+            conn.execute(
+                "INSERT INTO wiki_claims_fts(wiki_claims_fts) VALUES('rebuild')"
+            )
+
+            # Re-create vault/page/status index (was on the original
+            # table; index is dropped by the rename pattern in some
+            # SQLite versions).
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_wiki_claims_vault_page_status "
+                "ON wiki_claims(vault_id, page_id, status)"
+            )
+        finally:
+            # Restore both PRAGMAs unconditionally; new connections
+            # otherwise inherit the legacy_alter_table=ON behaviour
+            # which is undesirable for normal traffic.
+            conn.execute("PRAGMA legacy_alter_table = OFF")
+            conn.execute("PRAGMA foreign_keys = ON")
+
+        # Validate FK integrity post-swap. Any violation here means we
+        # produced a broken DB; fail loudly so an operator notices.
+        violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise RuntimeError(
+                f"migrate_add_curator_claim_support: foreign_key_check "
+                f"reported {len(violations)} violation(s) post-swap: "
+                f"{violations[:5]}"
+            )
     finally:
         conn.close()
 

@@ -1454,9 +1454,19 @@ export interface WikiClaim {
   predicate: string | null;
   object: string | null;
   source_type: "document" | "memory" | "chat_synthesis" | "manual" | "mixed";
-  status: "active" | "contradicted" | "superseded" | "unverified" | "archived";
+  // 'needs_review' added by PR C — curator-authored claims default to
+  // this status in draft mode.
+  status:
+    | "active"
+    | "contradicted"
+    | "superseded"
+    | "unverified"
+    | "archived"
+    | "needs_review";
   confidence: number;
   created_by: number | null;
+  /** PR C: provenance — null for legacy / deterministic rows. */
+  created_by_kind?: "deterministic" | "llm_curator" | null;
   created_at: string;
   updated_at: string;
   sources: WikiClaimSource[];

@@ -1,10 +1,14 @@
 """
 WikiCompiler: Deterministic entity/acronym/relation extraction and memory promotion.
 
-All extraction is regex-based. No LLM required.
-Pronoun resolution: maintains current_org_context from most recently seen acronym/org entity.
+All deterministic extraction is regex-based. No LLM required for the
+trust boundary. The optional LLM Wiki Curator (PR C) runs *after* the
+deterministic pass and can only widen the candidate set — it can never
+overrule a deterministic claim, and its output only becomes an active
+wiki claim when its source_quote verifies against the chunk it cites.
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -13,6 +17,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from app.config import settings as _app_settings
+from app.services.wiki_curator import (
+    CuratorChunk,
+    WikiCurator,
+    deterministic_dedupe_key,
+)
+from app.services.wiki_curator_client import CuratorClient
 from app.services.wiki_store import WikiStore, normalize_slug
 
 # Approximate bytes per text chunk for deterministic chunk-uid generation.
@@ -431,12 +442,27 @@ class WikiCompiler:
         # Reload page with all relations
         page = self._store.get_page(page_id)
 
-        return {
+        # PR C: optional curator on the manual / promote_memory path.
+        # Gated by wiki_llm_curator_run_on_manual.
+        curator_summary = self._maybe_run_curator(
+            vault_id=vault_id,
+            file_id=None,
+            text=content,
+            trigger="manual",
+            deterministic_extraction=extraction,
+            page_id=page_id,
+            existing_entities=entities_created,
+        )
+
+        result_dict: dict = {
             "page": page,
             "claims": claims_created,
             "entities": entities_created,
             "relations": relations_created,
         }
+        if curator_summary is not None:
+            result_dict["curator"] = curator_summary
+        return result_dict
 
     def compile_query_job(self, vault_id: int, input_json: dict) -> dict:
         """
@@ -692,12 +718,30 @@ class WikiCompiler:
             )
             relations_created.append(relation)
 
-        return {
+        # PR C: optional curator on query path. Default-disabled
+        # (wiki_llm_curator_run_on_query=False) to protect chat latency,
+        # but operators who flip it on get the same provenance gating
+        # as the ingest path. file_id is None here — curator chunks
+        # therefore use a 'text_N' chunk_id prefix.
+        curator_summary = self._maybe_run_curator(
+            vault_id=vault_id,
+            file_id=None,
+            text=_clean_answer,
+            trigger="query",
+            deterministic_extraction=extraction,
+            page_id=None,
+            existing_entities=entities_created,
+        )
+
+        result_dict: dict = {
             "page": None,
             "claims": [{"id": c.id, "status": c.status} for c in claims_created],
             "entities": [{"id": e.id, "name": e.canonical_name} for e in entities_created],
             "relations_count": len(relations_created),
         }
+        if curator_summary is not None:
+            result_dict["curator"] = curator_summary
+        return result_dict
 
     def compile_ingest_job(self, vault_id: int, input_json: dict) -> dict:
         """
@@ -881,10 +925,257 @@ class WikiCompiler:
             )
             relations_count += 1
 
+        # ----------- Optional LLM Wiki Curator (PR C) -----------
+        # Gated by settings.wiki_llm_curator_enabled AND the per-trigger
+        # flag. Curator output never replaces deterministic output; it
+        # can only add candidates that pass quote+chunk verification.
+        # Errors are recorded into the result, never raised.
+        curator_summary = self._maybe_run_curator(
+            vault_id=vault_id,
+            file_id=file_id,
+            text=text,
+            trigger="ingest",
+            deterministic_extraction=extraction,
+            page_id=page_id,
+            existing_entities=entities_created,
+        )
+
         page = self._store.get_page(page_id)
-        return {
+        result_dict: dict = {
             "page": {"id": page_id, "slug": slug} if page else None,
             "claims": claims_created,
             "entities": [{"id": e.id, "name": e.canonical_name} for e in entities_created],
             "relations_count": relations_count,
         }
+        if curator_summary is not None:
+            result_dict["curator"] = curator_summary
+        return result_dict
+
+    # ------------------------------------------------------------------
+    # Optional LLM Wiki Curator integration (PR C)
+    # ------------------------------------------------------------------
+
+    def _maybe_run_curator(
+        self,
+        *,
+        vault_id: int,
+        file_id: Optional[int],
+        text: str,
+        trigger: str,  # 'ingest' | 'query' | 'manual'
+        deterministic_extraction,
+        page_id: Optional[int],
+        existing_entities: list,
+    ) -> Optional[dict]:
+        """Run the curator if enabled for this trigger; return summary
+        dict for ``result_json.curator`` or None when curator is off.
+
+        All exceptions are caught and recorded in the returned summary;
+        a curator failure must NEVER fail the underlying compile job.
+        """
+        if not getattr(_app_settings, "wiki_llm_curator_enabled", False):
+            return None
+        flag_for_trigger = {
+            "ingest": "wiki_llm_curator_run_on_ingest",
+            "query": "wiki_llm_curator_run_on_query",
+            "manual": "wiki_llm_curator_run_on_manual",
+        }.get(trigger)
+        if not flag_for_trigger or not getattr(
+            _app_settings, flag_for_trigger, False
+        ):
+            return None
+        url = getattr(_app_settings, "wiki_llm_curator_url", "") or ""
+        model = getattr(_app_settings, "wiki_llm_curator_model", "") or ""
+        if not url.strip() or not model.strip():
+            return {
+                "errors": ["disabled: missing url or model"],
+                "accepted": 0,
+                "rejected": 0,
+                "lint": 0,
+                "calls": 0,
+                "input_chars": 0,
+            }
+        if not text:
+            return None
+
+        # Build chunks the same way the deterministic pass infers them.
+        chunks = self._build_curator_chunks(text=text, file_id=file_id)
+        if not chunks:
+            return None
+
+        # Seed dedupe with deterministic role_claims so the curator
+        # can't re-emit the same fact as a duplicate "needs_review" row.
+        dedupe_seed: set[str] = set()
+        for rc in deterministic_extraction.role_claims:
+            dedupe_seed.add(
+                deterministic_dedupe_key(
+                    rc.get("subject", ""),
+                    rc.get("predicate", ""),
+                    rc.get("object_person", ""),
+                    rc.get("sentence", ""),
+                )
+            )
+
+        deterministic_summary = {
+            "acronyms": [
+                {"acronym": a.get("acronym"), "full_name": a.get("full_name")}
+                for a in deterministic_extraction.acronyms
+            ],
+            "role_claims": [
+                {
+                    "subject": rc.get("subject"),
+                    "predicate": rc.get("predicate"),
+                    "object": rc.get("object_person"),
+                }
+                for rc in deterministic_extraction.role_claims
+            ],
+        }
+        existing_brief = [e.canonical_name for e in existing_entities[:50]]
+
+        client = CuratorClient(
+            base_url=url,
+            model=model,
+            timeout=float(getattr(_app_settings, "wiki_llm_curator_timeout_sec", 120.0)),
+            max_tokens=int(getattr(_app_settings, "wiki_llm_curator_max_output_tokens", 2048)),
+            temperature=float(getattr(_app_settings, "wiki_llm_curator_temperature", 0.0)),
+        )
+        curator = WikiCurator(client=client, store=self._store)
+
+        try:
+            # The compiler is sync, but CuratorClient.propose is async.
+            # Use a fresh event loop only when there isn't one already
+            # running (background processor calls us from inside one).
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            if loop is None:
+                cur_result = asyncio.run(
+                    curator.curate(
+                        vault_id=vault_id,
+                        file_id=file_id,
+                        chunks=chunks,
+                        deterministic_summary=deterministic_summary,
+                        existing_entities_brief=existing_brief,
+                        deterministic_dedupe_keys=dedupe_seed,
+                    )
+                )
+            else:
+                # Schedule on the running loop and block until done.
+                # We can't do `loop.run_until_complete` from inside the
+                # loop, so spin a separate thread.
+                import concurrent.futures
+
+                def _runner():
+                    return asyncio.run(
+                        curator.curate(
+                            vault_id=vault_id,
+                            file_id=file_id,
+                            chunks=chunks,
+                            deterministic_summary=deterministic_summary,
+                            existing_entities_brief=existing_brief,
+                            deterministic_dedupe_keys=dedupe_seed,
+                        )
+                    )
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                    cur_result = ex.submit(_runner).result()
+        except Exception as e:  # broad — curator must never fail the job
+            logger.warning(
+                "wiki curator: orchestration failed for vault=%s file=%s: %s",
+                vault_id, file_id, e,
+            )
+            return {
+                "errors": [f"orchestration_error: {type(e).__name__}: {e}"],
+                "accepted": 0,
+                "rejected": 0,
+                "lint": 0,
+                "calls": 0,
+                "input_chars": 0,
+            }
+
+        # Persist accepted candidates as wiki_claims with provenance.
+        for accepted in cur_result.accepted:
+            try:
+                claim = self._store.create_claim(
+                    vault_id=vault_id,
+                    claim_text=accepted.claim_text,
+                    source_type="document",
+                    page_id=page_id,
+                    claim_type=accepted.claim_type,
+                    subject=accepted.subject,
+                    predicate=accepted.predicate,
+                    object=accepted.object,
+                    status=accepted.status,
+                    confidence=accepted.confidence,
+                    created_by_kind="llm_curator",
+                )
+                self._store.attach_source(
+                    claim_id=claim.id,
+                    source_kind="document",
+                    file_id=accepted.file_id,
+                    chunk_id=accepted.chunk_id,
+                    source_label=accepted.source_label or (
+                        f"file:{accepted.file_id}" if accepted.file_id else "curator"
+                    ),
+                    quote=accepted.source_quote,
+                    confidence=accepted.confidence,
+                )
+            except Exception as e:  # pragma: no cover - defensive
+                cur_result.errors.append(
+                    f"persist_error: {type(e).__name__}: {e}"
+                )
+                logger.warning(
+                    "wiki curator: failed to persist accepted claim: %s", e
+                )
+
+        # Persist lint findings.
+        for finding in cur_result.lint_findings:
+            try:
+                self._store.create_lint_finding(
+                    vault_id=vault_id,
+                    finding_type=finding["finding_type"],
+                    severity=finding.get("severity", "medium"),
+                    title=finding.get("title", "Curator lint"),
+                    details=finding.get("details", ""),
+                )
+            except Exception as e:  # pragma: no cover - defensive
+                cur_result.errors.append(
+                    f"lint_persist_error: {type(e).__name__}: {e}"
+                )
+
+        return cur_result.to_summary()
+
+    @staticmethod
+    def _build_curator_chunks(
+        *, text: str, file_id: Optional[int]
+    ) -> list[CuratorChunk]:
+        """Slice the source text into 2 000-char windows so the curator's
+        chunk_id values match the deterministic ``f"{file_id}_{idx}"``
+        format used elsewhere in the compiler."""
+        if not text:
+            return []
+        out: list[CuratorChunk] = []
+        max_input = int(getattr(_app_settings, "wiki_llm_curator_max_input_chars", 6000))
+        budget = max(_COMPILE_CHUNK_SIZE, max_input)
+        # Take from the start of the text up to budget; bounded by the
+        # curator's own per-call max_input_chars, so we don't need to
+        # paginate here.
+        bound_text = text[:budget]
+        for i in range(0, len(bound_text), _COMPILE_CHUNK_SIZE):
+            window = bound_text[i : i + _COMPILE_CHUNK_SIZE]
+            chunk_id = (
+                f"{file_id}_{i // _COMPILE_CHUNK_SIZE}"
+                if file_id is not None
+                else f"text_{i // _COMPILE_CHUNK_SIZE}"
+            )
+            out.append(
+                CuratorChunk(
+                    chunk_id=chunk_id,
+                    source_text=window,
+                    file_id=file_id,
+                    source_label=(
+                        f"file:{file_id}" if file_id is not None else None
+                    ),
+                )
+            )
+        return out
