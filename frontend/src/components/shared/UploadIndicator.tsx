@@ -10,7 +10,11 @@ export function UploadIndicator() {
   const [isExpanded, setIsExpanded] = useState(false);
 
   const activeUploads = uploads.filter(
-    (u) => u.status === "pending" || u.status === "uploading" || u.status === "indexing"
+    (u) =>
+      u.status === "pending" ||
+      u.status === "uploading" ||
+      u.status === "processing" ||
+      u.status === "indexing"
   );
   const completedCount = uploads.filter((u) => u.status === "indexed").length;
   const hasCompleted = uploads.some(
@@ -85,7 +89,7 @@ export function UploadIndicator() {
         {/* Progress bar - always visible if uploading */}
         {currentUpload && (
           <div className="px-3 pb-2">
-            <Progress value={currentUpload.progress} className="h-1" aria-label="Upload progress" />
+            <Progress value={currentUpload.uploadProgress} className="h-1" aria-label="Upload progress" />
           </div>
         )}
 
@@ -103,7 +107,7 @@ export function UploadIndicator() {
                     upload.status === "indexed" && "text-emerald-600",
                     upload.status === "error" && "text-destructive",
                     upload.status === "cancelled" && "text-muted-foreground",
-                    upload.status === "indexing" && "text-blue-600"
+                    (upload.status === "indexing" || upload.status === "processing") && "text-blue-600"
                   )}
                 >
                   {upload.status === "indexed" && "Done"}
@@ -111,8 +115,9 @@ export function UploadIndicator() {
                   {upload.status === "cancelled" && "Cancelled"}
                   {upload.status === "pending" && "Pending"}
                   {upload.status === "uploading" &&
-                    `${upload.progress > 0 ? upload.progress : 0}%`}
-                  {upload.status === "indexing" && "Indexing…"}
+                    `${upload.uploadProgress > 0 ? upload.uploadProgress : 0}%`}
+                  {(upload.status === "indexing" || upload.status === "processing") &&
+                    (upload.phaseLabel ?? "Processing…")}
                 </span>
               </div>
             ))}

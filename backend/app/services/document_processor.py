@@ -23,6 +23,16 @@ from ..utils.retry import with_retry
 from .chunk_enrichment import ChunkEnrichmentService
 from .chunking import ProcessedChunk, SemanticChunker, compute_parent_windows
 from .contextual_chunking import ContextualChunker
+from .document_progress import (
+    PHASE_CHUNKING,
+    PHASE_EMBEDDING,
+    PHASE_EXTRACTING_TEXT,
+    PHASE_PARSING,
+    PHASE_WRITING_INDEX,
+    clear_progress,
+    set_phase,
+    set_wiki_pending,
+)
 from .embeddings import EmbeddingService
 from .llm_client import LLMClient
 from .schema_parser import SchemaParser
@@ -611,6 +621,44 @@ class DocumentProcessor:
     @with_retry(
         max_attempts=3, retry_exceptions=(sqlite3.Error,), raise_last_exception=True
     )
+    def _check_duplicate_in_flight(
+        self, file_hash: str, conn: sqlite3.Connection, vault_id: int
+    ) -> Optional[sqlite3.Row]:
+        """
+        Check for any existing file with this hash in any non-terminal state.
+
+        Used by the async upload route to collapse two concurrent uploads of the
+        same content to a single ingestion. ``_check_duplicate`` only matches
+        ``status='indexed'`` (its legacy semantic for synchronous callers); the
+        async route inserts rows with ``status='pending'`` first, so it needs to
+        reject duplicates at every stage of the pipeline, not just indexed.
+
+        Args:
+            file_hash: The hash of the file to check.
+            conn: Database connection.
+            vault_id: Vault to scope the check to.
+
+        Returns:
+            The existing row when one of {pending, processing, indexed} matches,
+            else None. Rows in 'error' state are intentionally NOT matched —
+            re-uploading a previously-failed file should be allowed.
+        """
+        cursor = conn.execute(
+            """
+            SELECT * FROM files
+            WHERE file_hash = ?
+              AND vault_id = ?
+              AND status IN ('pending', 'processing', 'indexed')
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (file_hash, vault_id),
+        )
+        return cursor.fetchone()
+
+    @with_retry(
+        max_attempts=3, retry_exceptions=(sqlite3.Error,), raise_last_exception=True
+    )
     def _insert_or_get_file_record(
         self,
         file_path: str,
@@ -1007,6 +1055,15 @@ class DocumentProcessor:
             # Release connection before long-running operations
             self.pool.release_connection(conn)
 
+        # Mark processing started + initial phase. Best-effort; ignored on failure.
+        set_phase(
+            self.pool,
+            file_id,
+            phase=PHASE_PARSING,
+            message="Parsing document",
+            mark_processing_started=True,
+        )
+
         # Phase 2: Long operations (NO connection held!)
         try:
             # Process the file based on type
@@ -1014,12 +1071,25 @@ class DocumentProcessor:
                 chunks = await self._process_schema_file(file_path)
                 document_text = ""
             elif self._is_spreadsheet_file(file_path):
+                set_phase(
+                    self.pool,
+                    file_id,
+                    phase=PHASE_PARSING,
+                    message="Parsing spreadsheet (large spreadsheets can take several minutes)",
+                )
                 chunks = await self._process_spreadsheet_file(file_path)
                 document_text = " ".join(c.text for c in chunks)
             else:
                 chunks, document_text = await self._process_document_file(
                     file_path, file_id
                 )
+
+            set_phase(
+                self.pool,
+                file_id,
+                phase=PHASE_EXTRACTING_TEXT,
+                message="Text extracted",
+            )
 
             # Define source_filename here so it is available to both contextual
             # chunking and chunk enrichment below, regardless of which branches run.
@@ -1082,6 +1152,17 @@ class DocumentProcessor:
                     "The file may be empty, encrypted, or in an unsupported format."
                 )
 
+            set_phase(
+                self.pool,
+                file_id,
+                phase=PHASE_CHUNKING,
+                message=f"Prepared {len(chunks)} chunks",
+                total=len(chunks),
+                processed=len(chunks),
+                unit="chunks",
+                percent=100.0,
+            )
+
             # Chunk enrichment: generate auxiliary metadata (summary, questions, entities)
             enrichment_service = self._get_chunk_enrichment_service()
             if enrichment_service is not None:
@@ -1129,9 +1210,33 @@ class DocumentProcessor:
                     # Validate chunk sizes before embedding
                     self._validate_chunk_sizes(texts, source_filename)
 
+                    # Phase: embedding. embed_batch is opaque per-batch internally,
+                    # so we report total/processed at start and again on completion
+                    # rather than streaming sub-batch progress (avoids reaching into
+                    # the embedding service's batching boundary).
+                    set_phase(
+                        self.pool,
+                        file_id,
+                        phase=PHASE_EMBEDDING,
+                        message=f"Embedding {len(chunks)} chunks",
+                        total=len(chunks),
+                        processed=0,
+                        unit="chunks",
+                        percent=0.0,
+                    )
                     # Generate dense embeddings (Harrier dense-only)
                     embeddings = await self.embedding_service.embed_batch(texts)
                     sparse_embeddings = [None] * len(chunks)
+                    set_phase(
+                        self.pool,
+                        file_id,
+                        phase=PHASE_EMBEDDING,
+                        message="Embeddings ready",
+                        total=len(chunks),
+                        processed=len(chunks),
+                        unit="chunks",
+                        percent=100.0,
+                    )
 
                     # Validate embeddings count matches chunks count
                     if len(embeddings) != len(chunks):
@@ -1224,6 +1329,18 @@ class DocumentProcessor:
                                 record["sparse_embedding"] = None
                         records.append(record)
 
+                    # Phase: writing vector index
+                    set_phase(
+                        self.pool,
+                        file_id,
+                        phase=PHASE_WRITING_INDEX,
+                        message="Writing vector index",
+                        total=len(records),
+                        processed=0,
+                        unit="chunks",
+                        percent=0.0,
+                    )
+
                     # Initialize vector table with embedding dimension and add chunks
                     embedding_dim = len(embeddings[0])
                     await self.vector_store.init_table(embedding_dim)
@@ -1256,6 +1373,15 @@ class DocumentProcessor:
                 conn.commit()
             finally:
                 self.pool.release_connection(conn)
+            # Surface error in the phase fields so the frontend can render it
+            # without waiting for a status-route round-trip.
+            set_phase(
+                self.pool,
+                file_id,
+                phase="error",
+                message=str(e)[:500],
+                percent=None,
+            )
             raise
 
         # Phase 3: Final DB operations - update status to indexed
@@ -1281,15 +1407,406 @@ class DocumentProcessor:
                         (_full_text, file_id),
                     )
                     conn.commit()
+                # Mark wiki_pending=1 synchronously BEFORE the wiki job is created
+                # so the status route can report wiki_status="pending" during the
+                # brief window before the wiki_compile_jobs row exists.
+                set_wiki_pending(self.pool, file_id, True)
                 _WikiStore(conn).create_job(
                     vault_id=vault_id,
                     trigger_type="ingest",
                     trigger_id=f"file:{file_id}",
                     input_json={"file_id": file_id, "vault_id": vault_id},
                 )
+                # Job row now exists; the status route will derive wiki_status
+                # from it directly. Clear the flag so the row doesn't carry a
+                # permanently-stale wiki_pending=1 marker.
+                set_wiki_pending(self.pool, file_id, False)
             finally:
                 self.pool.release_connection(conn)
         except Exception as _wiki_exc:
             logger.warning("Failed to enqueue wiki ingest job for file_id=%d: %s", file_id, _wiki_exc)
+            # If wiki enqueue failed, don't leave wiki_pending=1 hanging.
+            set_wiki_pending(self.pool, file_id, False)
+
+        # Clear transient progress fields and pin phase=indexed so polls show
+        # a clean "ready" snapshot rather than stale embedding counters.
+        clear_progress(self.pool, file_id)
+
+        return ProcessedDocument(file_id=file_id, chunks=chunks)
+
+    async def process_existing_file(
+        self,
+        file_id: int,
+        file_path: str,
+        vault_id: int,
+    ) -> ProcessedDocument:
+        """Process a file whose `files` row already exists.
+
+        Used by the async upload path: the route inserts the `files` row
+        with status='pending' / phase='queued' and a duplicate-hash check
+        already passed. The worker then calls this method instead of
+        ``process_file`` to avoid re-running the duplicate check or
+        creating a second row.
+
+        Failure semantics match ``process_file``: status -> 'error',
+        phase -> 'error', error_message populated. Wiki ingest job is
+        enqueued at the end on success (same as ``process_file``).
+        """
+        path = Path(file_path)
+        if not path.exists():
+            # Surface as error on the existing row so the frontend can render it.
+            conn = self.pool.get_connection()
+            try:
+                self._update_status(
+                    file_id,
+                    "error",
+                    conn,
+                    error_message=f"File not found: {file_path}",
+                )
+                conn.commit()
+            finally:
+                self.pool.release_connection(conn)
+            set_phase(
+                self.pool,
+                file_id,
+                phase="error",
+                message=f"File not found: {file_path}",
+            )
+            raise FileNotFoundError(f"File not found: {file_path}")
+        if not path.is_file():
+            conn = self.pool.get_connection()
+            try:
+                self._update_status(
+                    file_id,
+                    "error",
+                    conn,
+                    error_message=f"Path is not a file: {file_path}",
+                )
+                conn.commit()
+            finally:
+                self.pool.release_connection(conn)
+            set_phase(
+                self.pool,
+                file_id,
+                phase="error",
+                message=f"Path is not a file: {file_path}",
+            )
+            raise FileNotFoundError(f"Path is not a file: {file_path}")
+
+        # Transition status: pending -> processing. Duplicate check intentionally
+        # skipped — the route already ran it before inserting the row.
+        conn = self.pool.get_connection()
+        try:
+            self._update_status(file_id, "processing", conn)
+            conn.commit()
+        finally:
+            self.pool.release_connection(conn)
+
+        set_phase(
+            self.pool,
+            file_id,
+            phase=PHASE_PARSING,
+            message="Parsing document",
+            mark_processing_started=True,
+        )
+
+        # The remainder mirrors process_file Phase 2/3 exactly so behavior is
+        # identical to the synchronous path. We re-derive file_hash here for
+        # the safe-reupload chunk-id prefix logic; this is cheap I/O.
+        file_hash = compute_file_hash(file_path)
+
+        try:
+            if self._is_schema_file(file_path):
+                chunks = await self._process_schema_file(file_path)
+                document_text = ""
+            elif self._is_spreadsheet_file(file_path):
+                set_phase(
+                    self.pool,
+                    file_id,
+                    phase=PHASE_PARSING,
+                    message="Parsing spreadsheet (large spreadsheets can take several minutes)",
+                )
+                chunks = await self._process_spreadsheet_file(file_path)
+                document_text = " ".join(c.text for c in chunks)
+            else:
+                chunks, document_text = await self._process_document_file(
+                    file_path, file_id
+                )
+
+            set_phase(
+                self.pool,
+                file_id,
+                phase=PHASE_EXTRACTING_TEXT,
+                message="Text extracted",
+            )
+
+            source_filename = Path(file_path).name
+
+            if settings.contextual_chunking_enabled and chunks and document_text:
+                chunker = self._get_contextual_chunker()
+                if chunker is not None:
+                    try:
+                        await chunker.contextualize_chunks(
+                            document_text=document_text,
+                            chunks=chunks,
+                            source_filename=source_filename,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Contextual chunking failed for %s: %s",
+                            source_filename,
+                            str(e),
+                        )
+
+            if document_text and chunks:
+                try:
+                    compute_parent_windows(
+                        chunks,
+                        document_text,
+                        window_chars=settings.parent_window_chars,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "compute_parent_windows failed for %s: %s",
+                        Path(file_path).name,
+                        e,
+                    )
+
+            if not chunks:
+                raise DocumentProcessingError(
+                    "No extractable content found in document. "
+                    "The file may be empty, encrypted, or in an unsupported format."
+                )
+
+            set_phase(
+                self.pool,
+                file_id,
+                phase=PHASE_CHUNKING,
+                message=f"Prepared {len(chunks)} chunks",
+                total=len(chunks),
+                processed=len(chunks),
+                unit="chunks",
+                percent=100.0,
+            )
+
+            enrichment_service = self._get_chunk_enrichment_service()
+            if enrichment_service is not None:
+                try:
+                    chunk_dicts = [
+                        {
+                            "chunk_uid": self._build_chunk_uid(file_id, c),
+                            "text": c.text,
+                            "metadata": c.metadata,
+                        }
+                        for c in chunks
+                    ]
+                    enrichments = await enrichment_service.enrich_chunks(
+                        chunk_dicts, document_title=source_filename
+                    )
+                    for chunk, enrichment in zip(chunks, enrichments):
+                        chunk.metadata["enrichment"] = enrichment.to_dict()
+                except Exception as e:
+                    logger.warning(
+                        "Chunk enrichment failed for %s: %s",
+                        source_filename,
+                        str(e),
+                    )
+
+            if self.embedding_service is not None and self.vector_store is not None:
+                if chunks:
+                    chunks = [c for c in chunks if c.text and c.text.strip()]
+                    if not chunks:
+                        raise DocumentProcessingError(
+                            "All chunks were empty after filtering. "
+                            "The document may contain only whitespace or unsupported content."
+                        )
+
+                    texts = [c.text for c in chunks]
+                    self._validate_chunk_sizes(texts, source_filename)
+
+                    set_phase(
+                        self.pool,
+                        file_id,
+                        phase=PHASE_EMBEDDING,
+                        message=f"Embedding {len(chunks)} chunks",
+                        total=len(chunks),
+                        processed=0,
+                        unit="chunks",
+                        percent=0.0,
+                    )
+                    embeddings = await self.embedding_service.embed_batch(texts)
+                    sparse_embeddings = [None] * len(chunks)
+                    set_phase(
+                        self.pool,
+                        file_id,
+                        phase=PHASE_EMBEDDING,
+                        message="Embeddings ready",
+                        total=len(chunks),
+                        processed=len(chunks),
+                        unit="chunks",
+                        percent=100.0,
+                    )
+
+                    if len(embeddings) != len(chunks):
+                        raise DocumentProcessingError(
+                            f"Embedding count mismatch: expected {len(chunks)}, got {len(embeddings)}"
+                        )
+                    expected_dim = len(embeddings[0]) if embeddings[0] else 0
+                    for i, emb in enumerate(embeddings):
+                        if not emb or not isinstance(emb, list):
+                            raise DocumentProcessingError(
+                                f"Embedding {i} is empty or not a list"
+                            )
+                        if len(emb) != expected_dim:
+                            raise DocumentProcessingError(
+                                f"Embedding {i} has dimension {len(emb)}, expected {expected_dim}"
+                            )
+
+                    records = []
+                    for chunk, embedding, sparse_emb in zip(
+                        chunks, embeddings, sparse_embeddings
+                    ):
+                        chunk_scale = chunk.metadata.get("chunk_scale", "default")
+                        chunk_uid = self._build_chunk_uid(file_id, chunk)
+                        chunk_metadata = chunk.metadata.copy()
+                        chunk_metadata["chunk_uid"] = chunk_uid
+                        chunk_metadata["file_id"] = str(file_id)
+                        chunk_metadata["chunk_count"] = chunk.metadata.get(
+                            "total_chunks", len(chunks)
+                        )
+                        chunk_metadata["chunk_scale"] = chunk_scale
+                        if hasattr(chunk, "raw_text") and chunk.raw_text:
+                            chunk_metadata["raw_text"] = chunk.raw_text
+
+                        if chunk.parent_window_start is not None:
+                            chunk_metadata["parent_window_start"] = chunk.parent_window_start
+                        if chunk.parent_window_end is not None:
+                            chunk_metadata["parent_window_end"] = chunk.parent_window_end
+                        if chunk.chunk_position is not None:
+                            chunk_metadata["chunk_position"] = chunk.chunk_position
+                        if (
+                            chunk.parent_window_start is not None
+                            and chunk.parent_window_end is not None
+                            and document_text
+                        ):
+                            chunk_metadata["parent_window_text"] = document_text[
+                                chunk.parent_window_start : chunk.parent_window_end
+                            ]
+
+                        if settings.reupload_safe_order:
+                            record_id = f"{file_id}_{file_hash[:8]}_{chunk_scale}_{chunk.chunk_index}"
+                        else:
+                            record_id = chunk_uid
+
+                        record = {
+                            "id": record_id,
+                            "text": chunk.text,
+                            "file_id": str(file_id),
+                            "chunk_index": chunk.chunk_index,
+                            "vault_id": str(vault_id),
+                            "chunk_scale": chunk_scale,
+                            "parent_doc_id": str(file_id),
+                            "parent_window_start": chunk.parent_window_start,
+                            "parent_window_end": chunk.parent_window_end,
+                            "chunk_position": chunk.chunk_position,
+                            "metadata": json.dumps(chunk_metadata),
+                            "embedding": embedding,
+                        }
+                        if sparse_emb is not None:
+                            try:
+                                record["sparse_embedding"] = json.dumps(sparse_emb)
+                            except (TypeError, ValueError) as e:
+                                logger.warning(
+                                    f"Failed to serialize sparse embedding: {e}"
+                                )
+                                record["sparse_embedding"] = None
+                        records.append(record)
+
+                    set_phase(
+                        self.pool,
+                        file_id,
+                        phase=PHASE_WRITING_INDEX,
+                        message="Writing vector index",
+                        total=len(records),
+                        processed=0,
+                        unit="chunks",
+                        percent=0.0,
+                    )
+
+                    embedding_dim = len(embeddings[0])
+                    await self.vector_store.init_table(embedding_dim)
+
+                    if settings.reupload_safe_order:
+                        await self.vector_store.add_chunks(records)
+                        deleted = await self.vector_store.delete_old_generation_by_file(
+                            str(file_id), file_hash[:8]
+                        )
+                        if deleted > 0:
+                            logger.info(
+                                "Safe re-upload: deleted %d old-generation chunks for file_id=%s",
+                                deleted,
+                                file_id,
+                            )
+                    else:
+                        await self.vector_store.delete_by_file(str(file_id))
+                        await self.vector_store.add_chunks(records)
+        except Exception as e:
+            conn = self.pool.get_connection()
+            try:
+                self._update_status(file_id, "error", conn, error_message=str(e))
+                conn.commit()
+            finally:
+                self.pool.release_connection(conn)
+            set_phase(
+                self.pool,
+                file_id,
+                phase="error",
+                message=str(e)[:500],
+                percent=None,
+            )
+            raise
+
+        # Mark indexed
+        conn = self.pool.get_connection()
+        try:
+            self._update_status(file_id, "indexed", conn, chunk_count=len(chunks))
+            conn.commit()
+        finally:
+            self.pool.release_connection(conn)
+
+        # Save parsed text + enqueue wiki ingest job (best-effort, non-blocking).
+        try:
+            from app.services.wiki_store import WikiStore as _WikiStore
+
+            _full_text = document_text or ""
+            conn = self.pool.get_connection()
+            try:
+                if _full_text:
+                    conn.execute(
+                        "UPDATE files SET parsed_text = ? WHERE id = ?",
+                        (_full_text, file_id),
+                    )
+                    conn.commit()
+                set_wiki_pending(self.pool, file_id, True)
+                _WikiStore(conn).create_job(
+                    vault_id=vault_id,
+                    trigger_type="ingest",
+                    trigger_id=f"file:{file_id}",
+                    input_json={"file_id": file_id, "vault_id": vault_id},
+                )
+                # Clear flag now that the job row exists — status route
+                # derives wiki_status from the job row directly.
+                set_wiki_pending(self.pool, file_id, False)
+            finally:
+                self.pool.release_connection(conn)
+        except Exception as _wiki_exc:
+            logger.warning(
+                "Failed to enqueue wiki ingest job for file_id=%d: %s",
+                file_id,
+                _wiki_exc,
+            )
+            set_wiki_pending(self.pool, file_id, False)
+
+        clear_progress(self.pool, file_id)
 
         return ProcessedDocument(file_id=file_id, chunks=chunks)

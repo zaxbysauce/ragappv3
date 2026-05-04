@@ -432,18 +432,37 @@ export interface UploadDocumentResponse {
 }
 
 /**
- * Status payload returned by GET /documents/{id}/status. Used by the chat
- * composer to poll whether an uploaded file has finished indexing before
- * letting the user submit a query that depends on it.
+ * Phase-aware status payload returned by GET /documents/{id}/status.
+ *
+ * `status` stays in the canonical 4-value enum
+ * ("pending" | "processing" | "indexed" | "error"). Async lifecycle detail
+ * (queued / parsing / extracting_text / chunking / embedding / writing_index)
+ * lives in `phase`. `wiki_status` is derived server-side from the latest
+ * wiki_compile_jobs row for this file (or "pending" when the processor has
+ * signalled intent but the job row hasn't appeared yet).
  */
 export interface DocumentStatusResponse {
   id: number;
   filename: string;
-  /** "pending" | "processing" | "indexed" | "error" */
   status: string;
   chunk_count: number;
   error_message?: string | null;
   processed_at?: string | null;
+  /** Granular pipeline phase. May be null for very old rows / fresh installs. */
+  phase?: string | null;
+  phase_message?: string | null;
+  progress_percent?: number | null;
+  processed_units?: number | null;
+  total_units?: number | null;
+  unit_label?: string | null;
+  phase_started_at?: string | null;
+  processing_started_at?: string | null;
+  /** Server-computed seconds since processing_started_at; null when not started. */
+  elapsed_seconds?: number | null;
+  /** "pending" | "running" | "completed" | "failed" | "cancelled" | null */
+  wiki_status?: string | null;
+  wiki_phase?: string | null;
+  wiki_job_id?: number | null;
 }
 
 export interface DocumentStatsResponse {

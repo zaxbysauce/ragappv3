@@ -48,6 +48,17 @@ CREATE TABLE IF NOT EXISTS files (
     document_date TEXT,
     supersedes_file_id INTEGER,
     ingestion_version INTEGER DEFAULT 1,
+    -- Phase-aware progress (status stays in the canonical 4-value enum;
+    -- async/queued/parsing/chunking/embedding live in `phase`).
+    phase TEXT,
+    phase_message TEXT,
+    progress_percent REAL,
+    processed_units INTEGER,
+    total_units INTEGER,
+    unit_label TEXT,
+    phase_started_at TIMESTAMP,
+    processing_started_at TIMESTAMP,
+    wiki_pending INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (vault_id) REFERENCES vaults(id)
 );
 
@@ -113,6 +124,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 -- Index for faster lookups
 CREATE INDEX IF NOT EXISTS idx_chat_messages_session_id ON chat_messages(session_id);
 CREATE INDEX IF NOT EXISTS idx_files_status ON files(status);
+CREATE INDEX IF NOT EXISTS idx_files_hash_vault_status ON files(file_hash, vault_id, status);
 
 -- Document actions for auditing admin operations
 CREATE TABLE IF NOT EXISTS document_actions (
@@ -576,6 +588,7 @@ def run_migrations(sqlite_path: str) -> None:
     migrate_add_wiki_refs_and_job_input(sqlite_path)
     migrate_add_wiki_jobs_retry_count(sqlite_path)
     migrate_add_files_parsed_text(sqlite_path)
+    migrate_add_files_processing_progress(sqlite_path)
 
     # Add partial unique index for duplicate hash detection (HIGH-10)
     # Wrapped in IntegrityError handler: existing databases may have duplicate
@@ -1289,6 +1302,49 @@ def migrate_add_files_parsed_text(sqlite_path: str) -> None:
         ]
         if "parsed_text" not in existing_cols:
             conn.execute("ALTER TABLE files ADD COLUMN parsed_text TEXT")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def migrate_add_files_processing_progress(sqlite_path: str) -> None:
+    """Migration: add phase-aware processing-progress columns to files table.
+
+    files.status stays in the canonical 4-value enum
+    ('pending','processing','indexed','error'). All async/queued/parsing/
+    chunking/embedding/writing-index detail lives in `phase` and friends.
+
+    Also creates ``idx_files_hash_vault_status`` to back the in-flight
+    duplicate check used by the async upload route. Without this index,
+    the ``IN ('pending','processing','indexed')`` filter falls back to
+    scanning every indexed row and the request-blocking dedup check
+    becomes O(indexed_rows).
+
+    Idempotent — safe to run multiple times.
+    """
+    conn = sqlite3.connect(sqlite_path)
+    try:
+        existing_cols = {
+            row[1] for row in conn.execute("PRAGMA table_info(files)").fetchall()
+        }
+        new_columns = (
+            ("phase", "TEXT"),
+            ("phase_message", "TEXT"),
+            ("progress_percent", "REAL"),
+            ("processed_units", "INTEGER"),
+            ("total_units", "INTEGER"),
+            ("unit_label", "TEXT"),
+            ("phase_started_at", "TIMESTAMP"),
+            ("processing_started_at", "TIMESTAMP"),
+            ("wiki_pending", "INTEGER NOT NULL DEFAULT 0"),
+        )
+        for name, ddl in new_columns:
+            if name not in existing_cols:
+                conn.execute(f"ALTER TABLE files ADD COLUMN {name} {ddl}")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_files_hash_vault_status "
+            "ON files(file_hash, vault_id, status)"
+        )
         conn.commit()
     finally:
         conn.close()
