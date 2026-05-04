@@ -20,13 +20,54 @@ const SEVERITY_COLORS: Record<string, string> = {
 };
 
 function ClaimRow({ claim }: { claim: WikiClaim }) {
+  // PR C: surface curator provenance + needs_review state distinctly.
+  // ``created_by_kind`` is "deterministic" | "llm_curator" | null.
+  // Null = legacy / unknown row; treat as deterministic for display.
+  const isCurator = claim.created_by_kind === "llm_curator";
+  const isNeedsReview = claim.status === "needs_review";
+  const rowBg = isNeedsReview
+    ? "bg-blue-50/60 dark:bg-blue-950/20 rounded-md px-2 -mx-2"
+    : "";
   return (
-    <div className="border-b border-border pb-2 mb-2 last:border-0 last:mb-0 last:pb-0">
+    <div
+      className={`border-b border-border pb-2 mb-2 last:border-0 last:mb-0 last:pb-0 ${rowBg}`}
+    >
       <p className="text-sm">{claim.claim_text}</p>
-      <div className="flex gap-2 mt-1 flex-wrap">
-        {claim.subject && <span className="text-xs text-muted-foreground">Subject: {claim.subject}</span>}
-        {claim.predicate && <span className="text-xs text-muted-foreground">· {claim.predicate}</span>}
-        {claim.object && <span className="text-xs text-muted-foreground">→ {claim.object}</span>}
+      <div className="flex gap-2 mt-1 flex-wrap items-center">
+        {claim.subject && (
+          <span className="text-xs text-muted-foreground">
+            Subject: {claim.subject}
+          </span>
+        )}
+        {claim.predicate && (
+          <span className="text-xs text-muted-foreground">· {claim.predicate}</span>
+        )}
+        {claim.object && (
+          <span className="text-xs text-muted-foreground">→ {claim.object}</span>
+        )}
+        {/* Provenance chip — distinguishes curator output from
+            deterministic extraction so reviewers know which claims to
+            scrutinise harder. */}
+        <Badge
+          variant={isCurator ? "secondary" : "outline"}
+          className="text-[10px] uppercase"
+          title={
+            isCurator
+              ? "Authored by the optional LLM curator. Active only when source quote verifies."
+              : "Authored by deterministic regex/parser extraction."
+          }
+        >
+          {isCurator ? "LLM curator" : "deterministic"}
+        </Badge>
+        {isNeedsReview && (
+          <Badge
+            variant="outline"
+            className="text-[10px] uppercase border-blue-300 text-blue-700 dark:text-blue-300"
+            title="Needs operator review before becoming an active claim."
+          >
+            Needs review
+          </Badge>
+        )}
       </div>
       {claim.sources && claim.sources.length > 0 && (
         <div className="flex gap-1 flex-wrap mt-1">

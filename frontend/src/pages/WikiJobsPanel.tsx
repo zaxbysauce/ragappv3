@@ -170,6 +170,9 @@ export function WikiJobsPanel({ vaultId }: WikiJobsPanelProps) {
               </p>
             )}
 
+            {/* PR C: optional curator summary, parsed from result_json. */}
+            <CuratorSummary resultJson={job.result_json} />
+
             {/* Actions */}
             <div className="flex gap-1.5 mt-0.5">
               {job.status === "failed" && (
@@ -208,6 +211,68 @@ export function WikiJobsPanel({ vaultId }: WikiJobsPanelProps) {
           </CardContent>
         </Card>
       ))}
+    </div>
+  );
+}
+
+/**
+ * PR C — curator summary block for a wiki compile job.
+ *
+ * Reads the optional ``curator`` block from the job's ``result_json``
+ * and renders accepted / rejected / lint / errors counts. Tolerates
+ * missing/malformed data; renders nothing when there is no curator
+ * activity (curator was disabled for this trigger or short-circuited
+ * before any output).
+ */
+function CuratorSummary({
+  resultJson,
+}: {
+  resultJson: string | null | undefined;
+}) {
+  if (!resultJson) return null;
+  let parsed: unknown;
+  try {
+    parsed =
+      typeof resultJson === "string" ? JSON.parse(resultJson) : resultJson;
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const curator = (parsed as { curator?: unknown }).curator;
+  if (!curator || typeof curator !== "object") return null;
+  const c = curator as {
+    accepted?: number;
+    rejected?: number;
+    lint?: number;
+    errors?: unknown;
+    calls?: number;
+  };
+  const accepted = Number(c.accepted ?? 0);
+  const rejected = Number(c.rejected ?? 0);
+  const lint = Number(c.lint ?? 0);
+  const calls = Number(c.calls ?? 0);
+  const errors = Array.isArray(c.errors) ? c.errors.length : 0;
+  if (accepted + rejected + lint + calls + errors === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-2 text-[11px] text-muted-foreground pt-0.5">
+      <span title="LLM curator candidates accepted (with verified source quote)">
+        Curator accepted: <strong className="text-foreground">{accepted}</strong>
+      </span>
+      <span title="Curator candidates rejected by quote/chunk verification">
+        rejected: <strong className="text-foreground">{rejected}</strong>
+      </span>
+      <span title="Curator-derived lint findings (e.g. unsupported_claim)">
+        lint: <strong className="text-foreground">{lint}</strong>
+      </span>
+      <span title="Curator transport / parse errors (job still completed)">
+        errors:{" "}
+        <strong className={errors ? "text-destructive" : "text-foreground"}>
+          {errors}
+        </strong>
+      </span>
+      <span title="HTTP calls issued to the curator">
+        calls: <strong className="text-foreground">{calls}</strong>
+      </span>
     </div>
   );
 }

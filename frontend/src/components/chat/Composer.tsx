@@ -248,18 +248,26 @@ export function Composer({ onSend, onStop, isStreaming, className, inputRef }: C
 
   /**
    * Begin polling the backend indexing status for an attachment that
-   * finished uploading. Polls every 1s, gives up after ~2 minutes (120
-   * attempts) and marks the chip as ``error`` with an explanatory message
-   * — the user can still send their query but is warned the file isn't
-   * searchable yet. Pollers self-cancel when the row is removed.
+   * finished uploading. The async upload route returns immediately with
+   * ``status="pending"`` and ``phase="queued"``; the worker advances the
+   * row through the canonical 4-value status enum
+   * (pending -> processing -> indexed | error). Phase strings
+   * (queued/parsing/embedding/...) are treated as mid-pipeline by mapping
+   * to the chip's "indexing" state.
+   *
+   * No frontend timeout: large files legitimately take many minutes. A
+   * 4-hour absolute cap stops a runaway poller. Transient fetch errors
+   * are tolerated until many consecutive failures.
    */
   const startIndexPoll = useCallback((rowId: string, fileId: string) => {
-    let attempts = 0;
-    const maxAttempts = 120;
+    const startedAt = Date.now();
+    const HARD_CAP_MS = 4 * 60 * 60 * 1000;
+    let consecutiveFailures = 0;
     const handle = setInterval(async () => {
-      attempts += 1;
+      const elapsedMs = Date.now() - startedAt;
       try {
         const status = await getDocumentStatus(fileId);
+        consecutiveFailures = 0;
         if (status.status === "indexed") {
           clearInterval(handle);
           pollersRef.current.delete(rowId);
@@ -280,7 +288,11 @@ export function Composer({ onSend, onStop, isStreaming, className, inputRef }: C
             )
           );
           toast.error(`Indexing failed for ${fileId}`, { description: msg });
-        } else if (status.status === "processing" || status.status === "pending") {
+        } else {
+          // "pending" / "processing" / any other non-terminal status
+          // means the worker is mid-pipeline. Phase string detail
+          // (queued/parsing/...) doesn't change the chip but is a
+          // healthy heartbeat from the backend.
           setAttachments((prev) =>
             prev.map((a) =>
               a.id === rowId && a.status !== "indexing"
@@ -288,17 +300,18 @@ export function Composer({ onSend, onStop, isStreaming, className, inputRef }: C
                 : a
             )
           );
-          if (attempts >= maxAttempts) {
+          if (elapsedMs >= HARD_CAP_MS) {
             clearInterval(handle);
             pollersRef.current.delete(rowId);
+            // Don't mark "error" — backend may still be working; just
+            // stop polling and let the chip show a soft notice.
             setAttachments((prev) =>
               prev.map((a) =>
                 a.id === rowId
                   ? {
                       ...a,
-                      status: "error",
                       error:
-                        "Indexing did not complete within 2 minutes. The file may still be processing.",
+                        "Indexing is taking longer than expected. The file may still be processing — refresh to recheck.",
                     }
                   : a
               )
@@ -306,8 +319,14 @@ export function Composer({ onSend, onStop, isStreaming, className, inputRef }: C
           }
         }
       } catch (err) {
-        // Transient fetch error: keep polling unless we've exhausted attempts.
-        if (attempts >= maxAttempts) {
+        consecutiveFailures += 1;
+        // 30 consecutive 1-second-spaced failures = ~30s of network
+        // blackout before the chat chip flips to error. Chosen to ride
+        // through brief LAN drops without blocking the user; any longer
+        // and the UX feels stuck. Tunable independently of the upload
+        // store's adaptive cadence (which uses the same constant but
+        // 1.5/3/6s spacing => much larger real-world tolerance).
+        if (consecutiveFailures >= 30 || elapsedMs >= HARD_CAP_MS) {
           clearInterval(handle);
           pollersRef.current.delete(rowId);
           const msg = err instanceof Error ? err.message : "Status check failed";
@@ -352,9 +371,11 @@ export function Composer({ onSend, onStop, isStreaming, className, inputRef }: C
           activeVaultId
         );
         const fileId = String(resp.id);
-        // Server may already report ``indexed`` for tiny files; otherwise
-        // start polling. Treat "uploaded" as the bridge state between the
-        // POST returning and the first indexer pass landing.
+        // The async upload route returns immediately with status="pending".
+        // We transition the chip to "uploaded" as the bridge state and let
+        // startIndexPoll drive subsequent transitions. The "indexed"
+        // short-circuit is preserved for any client that still sees the
+        // legacy synchronous response.
         const initialStatus: AttachmentStatus =
           resp.status === "indexed" ? "indexed" : "uploaded";
         setAttachments((prev) =>

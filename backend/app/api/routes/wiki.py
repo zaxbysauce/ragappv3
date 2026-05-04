@@ -281,6 +281,89 @@ async def update_wiki_claim(
         raise HTTPException(status_code=404, detail="Claim not found")
     await _require_vault_write(user, claim.vault_id)
     updates = request.model_dump(exclude_none=True)
+
+    # PR C: server-side source-quote re-verification on transitions to
+    # 'active'. Curator-authored claims default to 'needs_review' or
+    # 'active' depending on the curator mode setting; the operator can
+    # later promote a needs_review claim via this PUT, but ONLY if the
+    # source_quote stored on the claim's source row still matches the
+    # underlying chunk text. Otherwise the source has changed (or was
+    # never verifiable in the first place) and we must reject the
+    # promotion rather than silently activate an unverifiable claim.
+    new_status = updates.get("status")
+    if (
+        new_status == "active"
+        and claim.status != "active"
+        and claim.created_by_kind == "llm_curator"
+    ):
+        from app.services.wiki_curator import verify_quote
+
+        # Fetch every source row for this claim and require at least
+        # one verifiable quote against the file's parsed_text.
+        source_rows = db.execute(
+            "SELECT * FROM wiki_claim_sources WHERE claim_id = ?",
+            (claim_id,),
+        ).fetchall()
+        verified = False
+        any_file_source = False
+        any_quote = False
+        for src_row in source_rows:
+            try:
+                src = dict(src_row) if hasattr(src_row, "keys") else {}
+            except Exception:
+                src = {}
+            quote = src.get("quote")
+            file_id = src.get("file_id")
+            if quote:
+                any_quote = True
+            if not quote or file_id is None:
+                continue
+            any_file_source = True
+            file_row = db.execute(
+                "SELECT parsed_text FROM files WHERE id = ?",
+                (int(file_id),),
+            ).fetchone()
+            if not file_row:
+                continue
+            try:
+                parsed_text = file_row["parsed_text"]
+            except (KeyError, IndexError, TypeError):
+                parsed_text = file_row[0] if len(file_row) else None
+            if not parsed_text:
+                continue
+            if verify_quote(quote, parsed_text):
+                verified = True
+                break
+        if not verified:
+            # Distinguish "verifiable but mismatched" from "no file
+            # source attached" so the operator gets an actionable
+            # message rather than a generic 400. Curator claims
+            # authored on the query/manual trigger have file_id=None
+            # on every source row and can NEVER be auto-promoted to
+            # active — they must be edited manually or replaced.
+            if not any_file_source:
+                detail = (
+                    "Cannot auto-activate curator-authored claim: no source "
+                    "row references a document file (this claim was likely "
+                    "produced from a chat-query or manual-promote curator "
+                    "trigger). Edit the claim and attach a file source, or "
+                    "leave it in 'needs_review' status for manual handling."
+                )
+            elif not any_quote:
+                detail = (
+                    "Cannot auto-activate curator-authored claim: no source "
+                    "row carries a stored quote. Re-run the wiki compile "
+                    "or attach a verifiable source."
+                )
+            else:
+                detail = (
+                    "Cannot auto-activate curator-authored claim: source_quote "
+                    "no longer verifiable in any associated source. The "
+                    "underlying document may have changed; re-run the wiki "
+                    "compile or attach a new verifiable source."
+                )
+            raise HTTPException(status_code=400, detail=detail)
+
     updated = store.update_claim(claim_id, claim.vault_id, **updates)
     return _as_dict(updated)
 

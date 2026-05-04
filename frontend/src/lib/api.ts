@@ -346,6 +346,37 @@ export interface SettingsResponse {
   hybrid_search_enabled?: boolean;
   hybrid_alpha?: number;
 
+  // Wiki / Knowledge Compiler config (PR B)
+  wiki_enabled?: boolean;
+  wiki_compile_on_ingest?: boolean;
+  wiki_compile_on_query?: boolean;
+  wiki_compile_after_indexing?: boolean;
+  wiki_lint_enabled?: boolean;
+
+  // Optional LLM Wiki Curator config (PR B persists, PR C wires)
+  wiki_llm_curator_enabled?: boolean;
+  wiki_llm_curator_url?: string;
+  wiki_llm_curator_model?: string;
+  wiki_llm_curator_temperature?: number;
+  wiki_llm_curator_max_input_chars?: number;
+  wiki_llm_curator_max_output_tokens?: number;
+  wiki_llm_curator_timeout_sec?: number;
+  wiki_llm_curator_concurrency?: number;
+  wiki_llm_curator_mode?: string;
+  wiki_llm_curator_require_quote_match?: boolean;
+  wiki_llm_curator_require_chunk_id?: boolean;
+  wiki_llm_curator_run_on_ingest?: boolean;
+  wiki_llm_curator_run_on_query?: boolean;
+  wiki_llm_curator_run_on_manual?: boolean;
+
+  /**
+   * Per-field source map: which precedence level produced the
+   * effective runtime value. Reflects actual lifespan order
+   * (kv > env > default). Models tab uses this to label inputs
+   * without disabling them on env presence.
+   */
+  effective_sources?: Record<string, "kv" | "env" | "default">;
+
   // Limits
   max_file_size_mb: number;
   allowed_extensions: string[];
@@ -379,6 +410,34 @@ export interface UpdateSettingsRequest {
   ollama_chat_url?: string;
   embedding_model?: string;
   chat_model?: string;
+  // Wiki / Knowledge Compiler config
+  wiki_enabled?: boolean;
+  wiki_compile_on_ingest?: boolean;
+  wiki_compile_on_query?: boolean;
+  wiki_compile_after_indexing?: boolean;
+  wiki_lint_enabled?: boolean;
+  // Optional LLM Wiki Curator config
+  wiki_llm_curator_enabled?: boolean;
+  wiki_llm_curator_url?: string;
+  wiki_llm_curator_model?: string;
+  wiki_llm_curator_temperature?: number;
+  wiki_llm_curator_max_input_chars?: number;
+  wiki_llm_curator_max_output_tokens?: number;
+  wiki_llm_curator_timeout_sec?: number;
+  wiki_llm_curator_concurrency?: number;
+  wiki_llm_curator_mode?: string;
+  wiki_llm_curator_require_quote_match?: boolean;
+  wiki_llm_curator_require_chunk_id?: boolean;
+  wiki_llm_curator_run_on_ingest?: boolean;
+  wiki_llm_curator_run_on_query?: boolean;
+  wiki_llm_curator_run_on_manual?: boolean;
+}
+
+export interface CuratorTestResult {
+  ok: boolean;
+  model: string;
+  latency_ms: number | null;
+  error: string | null;
 }
 
 export interface SearchMemoriesRequest {
@@ -432,18 +491,37 @@ export interface UploadDocumentResponse {
 }
 
 /**
- * Status payload returned by GET /documents/{id}/status. Used by the chat
- * composer to poll whether an uploaded file has finished indexing before
- * letting the user submit a query that depends on it.
+ * Phase-aware status payload returned by GET /documents/{id}/status.
+ *
+ * `status` stays in the canonical 4-value enum
+ * ("pending" | "processing" | "indexed" | "error"). Async lifecycle detail
+ * (queued / parsing / extracting_text / chunking / embedding / writing_index)
+ * lives in `phase`. `wiki_status` is derived server-side from the latest
+ * wiki_compile_jobs row for this file (or "pending" when the processor has
+ * signalled intent but the job row hasn't appeared yet).
  */
 export interface DocumentStatusResponse {
   id: number;
   filename: string;
-  /** "pending" | "processing" | "indexed" | "error" */
   status: string;
   chunk_count: number;
   error_message?: string | null;
   processed_at?: string | null;
+  /** Granular pipeline phase. May be null for very old rows / fresh installs. */
+  phase?: string | null;
+  phase_message?: string | null;
+  progress_percent?: number | null;
+  processed_units?: number | null;
+  total_units?: number | null;
+  unit_label?: string | null;
+  phase_started_at?: string | null;
+  processing_started_at?: string | null;
+  /** Server-computed seconds since processing_started_at; null when not started. */
+  elapsed_seconds?: number | null;
+  /** "pending" | "running" | "completed" | "failed" | "cancelled" | null */
+  wiki_status?: string | null;
+  wiki_phase?: string | null;
+  wiki_job_id?: number | null;
 }
 
 export interface DocumentStatsResponse {
@@ -641,6 +719,20 @@ export async function getHealth(): Promise<HealthResponse> {
 
 export async function getSettings(): Promise<SettingsResponse> {
   const response = await apiClient.get<SettingsResponse>("/settings");
+  return response.data;
+}
+
+export async function testCuratorConnection(
+  url?: string,
+  model?: string,
+): Promise<CuratorTestResult> {
+  const body: Record<string, string> = {};
+  if (url !== undefined) body.url = url;
+  if (model !== undefined) body.model = model;
+  const response = await apiClient.post<CuratorTestResult>(
+    "/settings/curator/test",
+    body,
+  );
   return response.data;
 }
 
@@ -1362,9 +1454,19 @@ export interface WikiClaim {
   predicate: string | null;
   object: string | null;
   source_type: "document" | "memory" | "chat_synthesis" | "manual" | "mixed";
-  status: "active" | "contradicted" | "superseded" | "unverified" | "archived";
+  // 'needs_review' added by PR C — curator-authored claims default to
+  // this status in draft mode.
+  status:
+    | "active"
+    | "contradicted"
+    | "superseded"
+    | "unverified"
+    | "archived"
+    | "needs_review";
   confidence: number;
   created_by: number | null;
+  /** PR C: provenance — null for legacy / deterministic rows. */
+  created_by_kind?: "deterministic" | "llm_curator" | null;
   created_at: string;
   updated_at: string;
   sources: WikiClaimSource[];

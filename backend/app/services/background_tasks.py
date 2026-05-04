@@ -99,6 +99,12 @@ class TaskItem:
     email_subject: Optional[str] = None
     email_sender: Optional[str] = None
     vault_id: int = 1
+    # When set, the worker calls DocumentProcessor.process_existing_file
+    # against this row id instead of process_file. The async upload route
+    # populates this so the worker does NOT re-run duplicate detection or
+    # create a duplicate `files` row. Scan/email paths leave this None so
+    # legacy behavior (process_file) is preserved.
+    file_id: Optional[int] = None
 
 
 class BackgroundProcessor:
@@ -167,6 +173,13 @@ class BackgroundProcessor:
 
         Creates and starts the worker task that processes items from the queue.
         Safe to call multiple times - will not create duplicate workers.
+
+        Also runs a startup recovery sweep: under the async upload route the
+        request inserts a `files` row with status='pending' / phase='queued'
+        and only then enqueues. If the process crashes between the insert and
+        the worker pickup, the row would be stranded forever and the
+        in-flight duplicate check would 409 every retry of the same hash.
+        The sweep re-enqueues stranded rows so they are processed normally.
         """
         if self._running:
             logger.warning("Background processor is already running")
@@ -174,8 +187,78 @@ class BackgroundProcessor:
 
         self._running = True
         self.shutdown_event.clear()
+        await self._recover_stranded_pending_rows()
         self._worker_task = asyncio.create_task(self._worker_loop())
         logger.info("Background processor started")
+
+    async def _recover_stranded_pending_rows(self) -> None:
+        """Re-enqueue any `files` rows left at status='pending' from a prior process.
+
+        Detection: status='pending' AND phase='queued'. The async upload
+        route is the only writer of this exact combination; legacy scan/
+        email paths leave phase NULL. We deliberately do NOT touch rows
+        in any other phase (parsing/embedding/...) — those imply a worker
+        was actively in the middle of processing them and the operator
+        should investigate manually.
+
+        Best-effort: pool absence (e.g. tests) is silently skipped.
+        """
+        if self.processor is None or self.processor.pool is None:
+            return
+        try:
+            with self.processor.pool.connection() as conn:
+                cursor = conn.execute(
+                    """
+                    SELECT id, file_path, vault_id, source
+                    FROM files
+                    WHERE status = 'pending' AND phase = 'queued'
+                    """,
+                )
+                stranded = cursor.fetchall()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning("Stranded-row recovery sweep failed at SELECT: %s", e)
+            return
+
+        if not stranded:
+            return
+
+        logger.info(
+            "Recovering %d stranded async-upload row(s) left at status=pending/phase=queued",
+            len(stranded),
+        )
+        for row in stranded:
+            try:
+                row_id = row["id"] if hasattr(row, "keys") else row[0]
+                file_path = row["file_path"] if hasattr(row, "keys") else row[1]
+                vault_id = row["vault_id"] if hasattr(row, "keys") else row[2]
+                source = (
+                    (row["source"] if hasattr(row, "keys") else row[3]) or "upload"
+                )
+                # If the saved file no longer exists on disk, mark error
+                # rather than re-enqueueing — the worker would just fail.
+                from pathlib import Path as _Path
+
+                if not _Path(file_path).exists():
+                    try:
+                        with self.processor.pool.connection() as conn:
+                            conn.execute(
+                                "UPDATE files SET status='error', "
+                                "error_message='Upload file missing after process restart', "
+                                "phase='error' WHERE id = ?",
+                                (row_id,),
+                            )
+                            conn.commit()
+                    except Exception:  # pragma: no cover - defensive
+                        pass
+                    continue
+                await self.enqueue(
+                    file_path=file_path,
+                    source=source,
+                    vault_id=int(vault_id),
+                    file_id=int(row_id),
+                )
+            except Exception as e:  # pragma: no cover - defensive
+                logger.warning("Failed to re-enqueue stranded row id=%s: %s", row, e)
 
     async def stop(self, timeout: float = 60.0) -> None:
         """
@@ -215,6 +298,7 @@ class BackgroundProcessor:
         email_subject: Optional[str] = None,
         email_sender: Optional[str] = None,
         vault_id: int = 1,
+        file_id: Optional[int] = None,
     ) -> None:
         """
         Add a file to the processing queue.
@@ -224,6 +308,11 @@ class BackgroundProcessor:
             source: Source of the file ('upload', 'scan', 'email')
             email_subject: Subject line for email-sourced files
             email_sender: Sender address for email-sourced files
+            vault_id: Vault to associate the file with
+            file_id: When provided, the worker calls
+                ``DocumentProcessor.process_existing_file`` against this row
+                instead of ``process_file``. Used by the async upload route
+                so duplicate detection and row insertion do not run twice.
 
         Note:
             If the processor is not running, the item will still be queued
@@ -240,9 +329,10 @@ class BackgroundProcessor:
             email_subject=email_subject,
             email_sender=email_sender,
             vault_id=vault_id,
+            file_id=file_id,
         )
         await self.queue.put(task)
-        logger.debug(f"Enqueued file: {file_path}")
+        logger.debug(f"Enqueued file: {file_path} (file_id={file_id})")
 
     async def _worker_loop(self) -> None:
         """
@@ -293,16 +383,28 @@ class BackgroundProcessor:
         On failure, requeues the task with incremented attempt count
         and exponential backoff delay if retries remain.
         """
-        logger.info(f"Processing file: {task.file_path} (attempt {task.attempt})")
+        logger.info(
+            f"Processing file: {task.file_path} (attempt {task.attempt}, file_id={task.file_id})"
+        )
 
         try:
-            await self.processor.process_file(
-                task.file_path,
-                source=task.source,
-                email_subject=task.email_subject,
-                email_sender=task.email_sender,
-                vault_id=task.vault_id,
-            )
+            if task.file_id is not None:
+                # Async upload path: the row already exists with status='pending'
+                # / phase='queued' and the duplicate check has already passed.
+                await self.processor.process_existing_file(
+                    file_id=task.file_id,
+                    file_path=task.file_path,
+                    vault_id=task.vault_id,
+                )
+            else:
+                # Legacy path (scan/email): processor handles dup check + insert.
+                await self.processor.process_file(
+                    task.file_path,
+                    source=task.source,
+                    email_subject=task.email_subject,
+                    email_sender=task.email_sender,
+                    vault_id=task.vault_id,
+                )
             logger.info(f"Successfully processed: {task.file_path}")
 
         except DocumentProcessingError as e:
@@ -343,6 +445,7 @@ class BackgroundProcessor:
                 email_subject=task.email_subject,
                 email_sender=task.email_sender,
                 vault_id=task.vault_id,
+                file_id=task.file_id,
             )
             await self.queue.put(new_task)
         else:

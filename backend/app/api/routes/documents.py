@@ -164,7 +164,7 @@ async def retry_document(
         if not background_processor.is_running:
             await background_processor.start()
 
-        await background_processor.enqueue(row["file_path"], vault_id=row["vault_id"])
+        await background_processor.enqueue(row["file_path"], vault_id=row["vault_id"], file_id=file_id)
 
         user_id = (
             str(current_user["id"])
@@ -423,7 +423,15 @@ async def list_documents(
 
 
 class DocumentStatusResponse(BaseModel):
-    """Lightweight status response used by the upload UI to poll indexing."""
+    """Phase-aware status response used by the upload UI to poll indexing.
+
+    `status` stays in the canonical 4-value enum
+    ('pending','processing','indexed','error'); upload/queued/parsing/
+    chunking/embedding/writing-index detail lives in `phase` and friends.
+    `wiki_status` is derived from the latest `wiki_compile_jobs` row for
+    this file, or 'pending' when `files.wiki_pending=1` and no job row
+    has appeared yet, or null when no wiki job has been requested.
+    """
 
     id: int
     filename: str
@@ -431,6 +439,20 @@ class DocumentStatusResponse(BaseModel):
     chunk_count: int
     error_message: Optional[str] = None
     processed_at: Optional[str] = None
+    # Phase-aware progress
+    phase: Optional[str] = None
+    phase_message: Optional[str] = None
+    progress_percent: Optional[float] = None
+    processed_units: Optional[int] = None
+    total_units: Optional[int] = None
+    unit_label: Optional[str] = None
+    phase_started_at: Optional[str] = None
+    processing_started_at: Optional[str] = None
+    elapsed_seconds: Optional[float] = None
+    # Wiki state (derived)
+    wiki_status: Optional[str] = None
+    wiki_phase: Optional[str] = None
+    wiki_job_id: Optional[int] = None
 
 
 @router.get("/{file_id}/status", response_model=DocumentStatusResponse)
@@ -440,18 +462,19 @@ async def get_document_status(
     user: dict = Depends(get_current_active_user),
     evaluate: Callable = Depends(get_evaluate_policy),
 ):
-    """Return the current ingest status of a single document.
+    """Return the phase-aware ingest status of a single document.
 
-    Used by the composer attachment tray to poll whether an uploaded file has
-    finished indexing. Returns 404 when the file doesn't exist and 403 when
-    the user lacks read access to the file's vault. Status values are the
-    canonical ``files.status`` enum: ``pending`` | ``processing`` | ``indexed``
-    | ``error``.
+    Used by the composer attachment tray and the Documents upload queue to
+    poll progress. Returns 404 when the file doesn't exist and 403 when
+    the user lacks read access to the file's vault.
     """
     cursor = await asyncio.to_thread(
         conn.execute,
         """
-        SELECT id, vault_id, file_name, status, chunk_count, error_message, processed_at
+        SELECT id, vault_id, file_name, status, chunk_count, error_message,
+               processed_at, phase, phase_message, progress_percent,
+               processed_units, total_units, unit_label, phase_started_at,
+               processing_started_at, wiki_pending
         FROM files WHERE id = ?
         """,
         (file_id,),
@@ -463,16 +486,87 @@ async def get_document_status(
     if not await evaluate(user, "vault", row["vault_id"], "read"):
         raise HTTPException(status_code=403, detail="No read access to this vault")
 
+    # Derive wiki state from the latest wiki_compile_jobs row for this file.
+    # We look up by trigger_id="file:<id>" because that's how DocumentProcessor
+    # tags ingest jobs (see services/document_processor.py).
+    wiki_status: Optional[str] = None
+    wiki_phase: Optional[str] = None
+    wiki_job_id: Optional[int] = None
+    try:
+        wiki_cursor = await asyncio.to_thread(
+            conn.execute,
+            """
+            SELECT id, status FROM wiki_compile_jobs
+            WHERE trigger_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (f"file:{file_id}",),
+        )
+        wiki_row = await asyncio.to_thread(wiki_cursor.fetchone)
+        if wiki_row is not None:
+            wiki_job_id = int(wiki_row["id"])
+            wiki_status = wiki_row["status"]
+            wiki_phase = wiki_row["status"]
+        elif _safe_get(row, "wiki_pending", 0):
+            # Job hasn't appeared yet but processor has signalled intent.
+            wiki_status = "pending"
+            wiki_phase = "pending"
+    except sqlite3.Error:
+        # wiki_compile_jobs may not exist on very old test fixtures; treat as no wiki.
+        pass
+
+    # elapsed_seconds: from processing_started_at to now, when applicable.
+    # We compute on the server so the frontend doesn't need clock-skew handling.
+    elapsed_seconds: Optional[float] = None
+    started = _safe_get(row, "processing_started_at")
+    if started:
+        try:
+            from datetime import datetime, timezone
+            # SQLite stores CURRENT_TIMESTAMP as 'YYYY-MM-DD HH:MM:SS' (UTC, no tz).
+            started_dt = datetime.strptime(str(started), "%Y-%m-%d %H:%M:%S")
+            started_dt = started_dt.replace(tzinfo=timezone.utc)
+            elapsed_seconds = max(
+                0.0,
+                (datetime.now(timezone.utc) - started_dt).total_seconds(),
+            )
+        except (ValueError, TypeError):
+            elapsed_seconds = None
+
     return DocumentStatusResponse(
         id=row["id"],
         filename=row["file_name"],
         status=row["status"],
         chunk_count=row["chunk_count"] or 0,
-        error_message=row["error_message"]
-        if "error_message" in row.keys()
-        else None,
-        processed_at=row["processed_at"],
+        error_message=_safe_get(row, "error_message"),
+        processed_at=_safe_get(row, "processed_at"),
+        phase=_safe_get(row, "phase"),
+        phase_message=_safe_get(row, "phase_message"),
+        progress_percent=_safe_get(row, "progress_percent"),
+        processed_units=_safe_get(row, "processed_units"),
+        total_units=_safe_get(row, "total_units"),
+        unit_label=_safe_get(row, "unit_label"),
+        phase_started_at=_safe_get(row, "phase_started_at"),
+        processing_started_at=_safe_get(row, "processing_started_at"),
+        elapsed_seconds=elapsed_seconds,
+        wiki_status=wiki_status,
+        wiki_phase=wiki_phase,
+        wiki_job_id=wiki_job_id,
     )
+
+
+def _safe_get(row, key: str, default=None):
+    """sqlite3.Row.get-like helper: returns default when key is missing.
+
+    sqlite3.Row supports indexing by name but raises IndexError on missing
+    keys; in tests with hand-crafted dicts this avoids surprises.
+    """
+    try:
+        if hasattr(row, "keys"):
+            return row[key] if key in row.keys() else default
+        return row[key]  # tuple/dict
+    except (KeyError, IndexError, TypeError):
+        return default
 
 
 @router.get("/stats", response_model=DocumentStatsResponse)
@@ -573,14 +667,27 @@ async def upload_document_root(
     vector_store: VectorStore = Depends(get_vector_store),
     embedding_service: EmbeddingService = Depends(get_embedding_service),
     db_pool: SQLiteConnectionPool = Depends(get_db_pool),
+    background_processor: BackgroundProcessor = Depends(get_background_processor),
     user: dict = Depends(require_vault_permission("write")),
 ):
     """
     Upload endpoint at root /documents for frontend compatibility.
     Delegates to the main upload handler.
+
+    Returns promptly after the file is durably saved and a `files` row exists
+    with status='pending' / phase='queued'. Actual parsing/chunking/embedding
+    runs in the background processor; clients poll
+    ``GET /documents/{file_id}/status`` for progress.
     """
     return await _do_upload(
-        request, file, settings_dep, vector_store, embedding_service, db_pool, vault_id
+        request,
+        file,
+        settings_dep,
+        vector_store,
+        embedding_service,
+        db_pool,
+        background_processor,
+        vault_id,
     )
 
 
@@ -593,17 +700,27 @@ async def upload_document(
     vector_store: VectorStore = Depends(get_vector_store),
     embedding_service: EmbeddingService = Depends(get_embedding_service),
     db_pool: SQLiteConnectionPool = Depends(get_db_pool),
+    background_processor: BackgroundProcessor = Depends(get_background_processor),
     user: dict = Depends(require_vault_permission("write")),
 ):
     """
-    Upload a file and process it with strict security controls.
+    Upload a file with strict security controls and queue it for indexing.
 
-    Validates filename, extension, and file size before saving.
-    Saves the uploaded file to settings.uploads_dir using aiofiles,
-    then processes it via DocumentProcessor.process_file in asyncio.to_thread.
+    Validates filename, extension, and file size before saving. Saves the
+    uploaded file to settings.uploads_dir using aiofiles, registers a `files`
+    row with status='pending' / phase='queued', and enqueues the row for the
+    background processor. Returns immediately so the client can poll
+    ``GET /documents/{file_id}/status`` for phase-aware progress.
     """
     return await _do_upload(
-        request, file, settings_dep, vector_store, embedding_service, db_pool, vault_id
+        request,
+        file,
+        settings_dep,
+        vector_store,
+        embedding_service,
+        db_pool,
+        background_processor,
+        vault_id,
     )
 
 
@@ -614,6 +731,7 @@ async def _do_upload(
     vector_store: VectorStore,
     embedding_service: EmbeddingService,
     db_pool: SQLiteConnectionPool,
+    background_processor: BackgroundProcessor,
     vault_id: int,
 ) -> UploadResponse:
     # Validate file is provided
@@ -721,7 +839,17 @@ async def _do_upload(
                     )
                 await f.write(chunk)
 
-        # Process file with injected dependencies
+        # Async ingestion: register the file row synchronously (so duplicate
+        # detection still happens at the request, not in the worker), then
+        # enqueue the existing row for background processing. The route
+        # returns immediately with status='pending' / phase='queued' and the
+        # client polls GET /documents/{file_id}/status for phase progress.
+        from app.services.document_progress import (
+            PHASE_QUEUED,
+            set_phase,
+        )
+        from app.utils.file_utils import compute_file_hash
+
         processor = DocumentProcessor(
             chunk_size_chars=settings_dep.chunk_size_chars,
             chunk_overlap_chars=settings_dep.chunk_overlap_chars,
@@ -731,36 +859,106 @@ async def _do_upload(
         )
 
         try:
-            result = await processor.process_file(str(file_path), vault_id=vault_id)
+            file_hash = compute_file_hash(str(file_path))
+
+            # Phase 1: route-side duplicate check + row insert. Worker will
+            # NOT re-run these because we pass file_id on the queue task.
+            #
+            # The check uses ``_check_duplicate_in_flight`` (matches pending /
+            # processing / indexed) rather than the legacy ``_check_duplicate``
+            # (indexed only) so two concurrent uploads of the same file
+            # collapse to a single ingestion instead of both racing through
+            # to the partial unique index ``idx_files_hash_vault_indexed``,
+            # which would surface as a generic IntegrityError on the loser.
+            conn = db_pool.get_connection()
+            try:
+                duplicate = processor._check_duplicate_in_flight(
+                    file_hash, conn, vault_id
+                )
+                if duplicate:
+                    # Don't leak the existing file's storage path in the 409
+                    # detail (info disclosure). file_id + status + hash are
+                    # enough for the client to reconcile against /documents.
+                    file_path.unlink(missing_ok=True)
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            f"File with hash {file_hash} already exists in "
+                            f"this vault (status={duplicate['status']}, "
+                            f"file_id={duplicate['id']}). Uploaded copy was "
+                            f"cleaned up."
+                        ),
+                    )
+
+                # _insert_or_get_file_record itself can raise DuplicateFileError
+                # if the partial unique index trips (race window between the
+                # in-flight check and the INSERT/UPDATE). Translate to 409.
+                try:
+                    file_id = processor._insert_or_get_file_record(
+                        str(file_path),
+                        file_hash,
+                        conn,
+                        vault_id,
+                        "upload",
+                        None,
+                        None,
+                    )
+                except DuplicateFileError as e:
+                    file_path.unlink(missing_ok=True)
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"{e} (uploaded file was cleaned up)",
+                    )
+                conn.commit()
+            finally:
+                db_pool.release_connection(conn)
+
+            # Mark queued phase; status stays 'pending' until the worker
+            # transitions it to 'processing'. mark_processing_started=False
+            # because actual processing has not started yet — only queueing.
+            set_phase(
+                db_pool,
+                file_id,
+                phase=PHASE_QUEUED,
+                message="Queued for processing",
+            )
+
+            await background_processor.enqueue(
+                file_path=str(file_path),
+                source="upload",
+                vault_id=vault_id,
+                file_id=file_id,
+            )
 
             return UploadResponse(
-                file_id=result.file_id,
+                file_id=file_id,
                 file_name=file_name,
-                id=result.file_id,  # Frontend alias
-                filename=file_name,  # Frontend alias
-                status="indexed",
-                message=f"File '{file_name}' uploaded and processed successfully with {len(result.chunks)} chunks",
-            )
-        except DuplicateFileError as e:
-            # File is a duplicate, remove the uploaded file
-            file_path.unlink(missing_ok=True)
-            raise HTTPException(
-                status_code=409, detail=f"{e} (uploaded file was cleaned up)"
+                id=file_id,
+                filename=file_name,
+                status="pending",
+                message=(
+                    f"File '{file_name}' uploaded and queued for processing. "
+                    f"Poll GET /documents/{file_id}/status for progress."
+                ),
             )
         except HTTPException:
-            # Clean up partial file if it exists
-            if temp_file_path and temp_file_path.exists():
-                temp_file_path.unlink(missing_ok=True)
+            # Clean up partial file only if it still exists; duplicate path
+            # already removed it. Don't unconditionally unlink — the file is
+            # legitimately on disk for accepted uploads.
             raise
         except DocumentProcessingError as e:
+            file_path.unlink(missing_ok=True)
             logger.exception("Document processing error for file: %s", file_name)
             raise HTTPException(status_code=500, detail=f"Processing error: {e}")
         except Exception as e:
-            logger.exception("Unexpected error processing file: %s", file_name)
+            file_path.unlink(missing_ok=True)
+            logger.exception("Unexpected error registering file: %s", file_name)
             raise HTTPException(status_code=500, detail=f"Server error: {e}")
+    except HTTPException:
+        # Validation / size-limit errors already cleaned up partial files inline.
+        raise
     except Exception as e:
         logger.exception("Error uploading file: %s", file_name)
-        # Clean up file if it was created
         if temp_file_path and temp_file_path.exists():
             temp_file_path.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail=f"Upload failed: {e}")
