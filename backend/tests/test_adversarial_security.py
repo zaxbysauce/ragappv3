@@ -193,29 +193,92 @@ class TestEmbeddingsAdversarial:
             mock.embedding_batch_min_sub_size = 1
             yield mock
 
+    def _apply_mock_settings(self, mock_settings):
+        """Apply mock settings to the embeddings module, handling reimports.
+
+        After admin tests delete and reimport app.main, the embeddings module might
+        be reimported, which rebinds the settings reference. This helper ensures the
+        mocked settings are applied to the current module state.
+
+        Returns a tuple of (emb_mod, original_settings) so the caller can restore later.
+        """
+        from app.services import embeddings as emb_mod
+        original_settings = emb_mod.settings
+        emb_mod.settings = mock_settings
+        return emb_mod, original_settings
+
     def test_init_with_empty_url(self, mock_settings):
         """Attack: Empty URL should raise error."""
         mock_settings.ollama_embedding_url = ""
-        with pytest.raises(EmbeddingError, match="not configured"):
-            EmbeddingService()
+
+        # Handle module reimports: If the embeddings module was reimported (e.g., by
+        # admin tests that delete app.main), the EmbeddingService class imported at the
+        # top of this file might be from an old module reference. Reimport it to get
+        # the fresh class that uses the current module's settings.
+        from app.services.embeddings import EmbeddingService as EmbeddingService_Fresh, EmbeddingError
+        from app.services import embeddings as emb_mod
+
+        original_settings = emb_mod.settings
+        emb_mod.settings = mock_settings
+
+        try:
+            try:
+                EmbeddingService_Fresh()
+                # If we get here, no exception was raised, which is the error condition
+                pytest.fail(f"EmbeddingService() did not raise EmbeddingError")
+            except EmbeddingError as e:
+                # Verify the error message matches the expected pattern
+                if "not configured" not in str(e):
+                    pytest.fail(f"EmbeddingError message '{e}' does not contain 'not configured'")
+                # If we got here, the test passed
+        finally:
+            # Restore original settings
+            emb_mod.settings = original_settings
 
     def test_init_with_invalid_url_scheme(self, mock_settings):
         """Attack: Invalid URL scheme (ftp://, file://)."""
         mock_settings.ollama_embedding_url = "ftp://localhost:11434"
-        with pytest.raises(EmbeddingError, match="Invalid embedding URL"):
-            EmbeddingService()
+        from app.services.embeddings import EmbeddingService as EmbeddingService_Fresh, EmbeddingError
+        emb_mod, original_settings = self._apply_mock_settings(mock_settings)
+        try:
+            try:
+                EmbeddingService_Fresh()
+                pytest.fail("EmbeddingService() did not raise EmbeddingError")
+            except EmbeddingError as e:
+                if "Invalid embedding URL" not in str(e):
+                    pytest.fail(f"EmbeddingError message '{e}' does not contain 'Invalid embedding URL'")
+        finally:
+            emb_mod.settings = original_settings
 
     def test_init_with_javascript_url(self, mock_settings):
         """Attack: JavaScript URL (XSS attempt)."""
         mock_settings.ollama_embedding_url = "javascript:alert('xss')"
-        with pytest.raises(EmbeddingError, match="Invalid embedding URL"):
-            EmbeddingService()
+        from app.services.embeddings import EmbeddingService as EmbeddingService_Fresh, EmbeddingError
+        emb_mod, original_settings = self._apply_mock_settings(mock_settings)
+        try:
+            try:
+                EmbeddingService_Fresh()
+                pytest.fail("EmbeddingService() did not raise EmbeddingError")
+            except EmbeddingError as e:
+                if "Invalid embedding URL" not in str(e):
+                    pytest.fail(f"EmbeddingError message '{e}' does not contain 'Invalid embedding URL'")
+        finally:
+            emb_mod.settings = original_settings
 
     def test_init_with_data_url(self, mock_settings):
         """Attack: Data URL (potential injection)."""
         mock_settings.ollama_embedding_url = "data:text/html,<script>alert('xss')</script>"
-        with pytest.raises(EmbeddingError, match="Invalid embedding URL"):
-            EmbeddingService()
+        from app.services.embeddings import EmbeddingService as EmbeddingService_Fresh, EmbeddingError
+        emb_mod, original_settings = self._apply_mock_settings(mock_settings)
+        try:
+            try:
+                EmbeddingService_Fresh()
+                pytest.fail("EmbeddingService() did not raise EmbeddingError")
+            except EmbeddingError as e:
+                if "Invalid embedding URL" not in str(e):
+                    pytest.fail(f"EmbeddingError message '{e}' does not contain 'Invalid embedding URL'")
+        finally:
+            emb_mod.settings = original_settings
 
     def test_init_with_path_traversal_url(self, mock_settings):
         """Attack: Path traversal in URL."""
