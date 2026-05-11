@@ -103,43 +103,91 @@ class EmbeddingService:
     )
     MIN_SPLIT_CHARS = 200  # Minimum text length to attempt single-text splitting
 
+    # Qwen3 auto-prefixes applied when the configured model includes "qwen"
+    # and the user hasn't supplied explicit prefixes in settings.
+    _QWEN_DOC_PREFIX = (
+        "Instruct: Represent this technical documentation passage for retrieval.\n"
+        "Document: "
+    )
+    _QWEN_QUERY_PREFIX = (
+        "Instruct: Retrieve relevant technical documentation passages.\n"
+        "Query: "
+    )
+
     def __init__(self):
-        """Initialize the embedding service with HTTP client and provider detection."""
+        """Initialize the embedding service with HTTP client and provider detection.
+
+        URL, model name, and prefixes are read live from ``settings`` on each
+        call so admins can change them via the Settings UI without restarting.
+        The initial URL is validated here to fail fast at startup when the
+        service is unconfigured; subsequent reads tolerate an empty URL (the
+        operation will fail at request time with a clear error).
+        """
         base_url = settings.ollama_embedding_url
 
-        # Validate base_url
+        # Validate base_url at startup so misconfiguration is loud
         if not base_url:
             raise EmbeddingError("Embedding service is not configured")
         if not base_url.startswith(("http://", "https://")):
             raise EmbeddingError("Invalid embedding URL configuration")
 
-        # Detect provider mode based on URL path
-        self.provider_mode, self.embeddings_url = self._detect_provider_mode(base_url)
-
         self.timeout = 60.0
 
-        # Read embedding prefixes from settings
-        self.embedding_doc_prefix = settings.embedding_doc_prefix
-        self.embedding_query_prefix = settings.embedding_query_prefix
-        self.embedding_model = settings.embedding_model
-
-        # Auto-apply Qwen3 instruction prefixes for better retrieval quality
-        # With llama.cpp -ub 8192, we have plenty of headroom for these prefixes
-        if settings.embedding_model.lower().find("qwen") >= 0:
-            if not self.embedding_doc_prefix:
-                self.embedding_doc_prefix = "Instruct: Represent this technical documentation passage for retrieval.\nDocument: "
-            if not self.embedding_query_prefix:
-                self.embedding_query_prefix = "Instruct: Retrieve relevant technical documentation passages.\nQuery: "
-
-        # Persistent HTTP client — created once, reused for all embedding calls
+        # Persistent HTTP client — created once, reused for all embedding calls.
+        # URL is passed per-request from `embeddings_url`, so this pool survives
+        # endpoint changes.
         self._client = httpx.AsyncClient(
             timeout=self.timeout,
             limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
         )
 
-        # LRU cache for embed_single requests (disabled for local models if embedding_url is not set)
-        # Cache is enabled when using external embedding services
+        # LRU cache. Cache keys include the live model/url/prefix fingerprints,
+        # so a settings change naturally invalidates cached entries.
         self._embed_cache = LRUCache(maxsize=1000)
+
+    @property
+    def embedding_model(self) -> str:
+        """Live read of the configured embedding model name."""
+        return settings.embedding_model
+
+    @property
+    def embedding_doc_prefix(self) -> str:
+        """Live read of the document prefix; auto-applies Qwen3 default when unset."""
+        prefix = settings.embedding_doc_prefix
+        if not prefix and "qwen" in settings.embedding_model.lower():
+            return self._QWEN_DOC_PREFIX
+        return prefix
+
+    @property
+    def embedding_query_prefix(self) -> str:
+        """Live read of the query prefix; auto-applies Qwen3 default when unset."""
+        prefix = settings.embedding_query_prefix
+        if not prefix and "qwen" in settings.embedding_model.lower():
+            return self._QWEN_QUERY_PREFIX
+        return prefix
+
+    @property
+    def provider_mode(self) -> str:
+        """Live read of the provider mode derived from the configured URL."""
+        return self._resolved_url_and_mode()[0]
+
+    @property
+    def embeddings_url(self) -> str:
+        """Live read of the resolved embeddings endpoint URL."""
+        return self._resolved_url_and_mode()[1]
+
+    def _resolved_url_and_mode(self) -> tuple:
+        """Resolve provider mode and embeddings URL from the current settings.
+
+        Reads ``settings.ollama_embedding_url`` at call time so endpoint
+        changes take effect without re-instantiating the service.
+        """
+        base_url = settings.ollama_embedding_url
+        if not base_url:
+            raise EmbeddingError("Embedding service is not configured")
+        if not base_url.startswith(("http://", "https://")):
+            raise EmbeddingError("Invalid embedding URL configuration")
+        return self._detect_provider_mode(base_url)
 
     def _detect_provider_mode(self, base_url: str) -> tuple:
         """

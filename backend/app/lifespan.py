@@ -309,12 +309,9 @@ async def lifespan(app: FastAPI):
                 f"Failed to check FTS index status (hybrid search may not work): {e}"
             )
 
-    # Initialize RerankingService
-    app.state.reranking_service = RerankingService(
-        reranker_url=settings.reranker_url,
-        reranker_model=settings.reranker_model,
-        top_n=settings.reranker_top_n,
-    )
+    # Initialize RerankingService — no explicit args so URL/model/top_n are
+    # read live from settings on each call (admin can change via Settings UI).
+    app.state.reranking_service = RerankingService()
 
     # Validate schema at startup
     try:

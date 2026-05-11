@@ -700,8 +700,9 @@ class TestCacheKeyFormat:
             # API should not be called again
             assert mock_post.call_count == 1
 
-            # Now patch the model to a different value
-            service1.embedding_model = "different_model"
+            # Now change the model via settings — this should invalidate
+            # the cache because embedding_model is now read live.
+            self.mock_settings.embedding_model = "different_model"
 
             # Third call with same text but different model - should be cache MISS
             result3 = await service1.embed_single("test text")
