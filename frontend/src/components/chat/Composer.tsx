@@ -24,6 +24,9 @@ import { Progress } from "@/components/ui/progress";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useChatStore } from "@/stores/useChatStore";
+import { useChatModeStore } from "@/stores/useChatModeStore";
+import { useLlmHealthStore } from "@/stores/useLlmHealthStore";
+import { useSettingsStore } from "@/stores/useSettingsStore";
 import { useVaultStore } from "@/stores/useVaultStore";
 import { uploadDocument, getDocumentStatus } from "@/lib/api";
 import { MAX_INPUT_LENGTH } from "@/hooks/useSendMessage";
@@ -103,6 +106,23 @@ export function Composer({ onSend, onStop, isStreaming, className, inputRef }: C
   const textareaRef = (inputRef ?? internalRef) as React.RefObject<HTMLTextAreaElement>;
 
   const { input, setInput, inputError, activeChatId } = useChatStore();
+  const storedChatMode = useChatModeStore((s) => s.chatMode);
+  const setStoredChatMode = useChatModeStore((s) => s.setChatMode);
+  const defaultChatMode = useSettingsStore((s) => s.formData.default_chat_mode);
+  const thinkingHealthy = useLlmHealthStore((s) => s.thinking);
+  const instantHealthy = useLlmHealthStore((s) => s.instant);
+  const refreshLlmHealth = useLlmHealthStore((s) => s.refresh);
+  const effectiveChatMode: "instant" | "thinking" =
+    storedChatMode ?? defaultChatMode ?? "thinking";
+
+  // Poll backend LLM health on mount and every 30s so the Instant toggle
+  // can disable when LM Studio is unreachable.
+  useEffect(() => {
+    refreshLlmHealth();
+    const handle = setInterval(refreshLlmHealth, 30000);
+    return () => clearInterval(handle);
+  }, [refreshLlmHealth]);
+
   const { getActiveVault } = useVaultStore();
   const activeVault = getActiveVault();
   const activeVaultId = useVaultStore((s) => s.activeVaultId);
@@ -669,6 +689,56 @@ export function Composer({ onSend, onStop, isStreaming, className, inputRef }: C
                 Generating…
               </span>
             )}
+
+            {/* Mode toggle (Instant / Thinking) */}
+            <div
+              role="radiogroup"
+              aria-label="Chat mode"
+              className="flex h-8 items-center rounded-md border border-input text-xs overflow-hidden"
+            >
+              <button
+                type="button"
+                role="radio"
+                aria-checked={effectiveChatMode === "instant"}
+                disabled={!instantHealthy || isStreaming}
+                onClick={() => setStoredChatMode("instant")}
+                title={
+                  instantHealthy
+                    ? "Instant — fast, lightweight model"
+                    : "Instant mode unavailable (LM Studio unreachable)"
+                }
+                className={cn(
+                  "h-full px-3 transition-colors",
+                  effectiveChatMode === "instant"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground hover:bg-accent",
+                  (!instantHealthy || isStreaming) && "opacity-50 cursor-not-allowed",
+                )}
+              >
+                Instant
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={effectiveChatMode === "thinking"}
+                disabled={!thinkingHealthy || isStreaming}
+                onClick={() => setStoredChatMode("thinking")}
+                title={
+                  thinkingHealthy
+                    ? "Thinking — full-quality model"
+                    : "Thinking mode unavailable (backend unreachable)"
+                }
+                className={cn(
+                  "h-full px-3 border-l border-input transition-colors",
+                  effectiveChatMode === "thinking"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground hover:bg-accent",
+                  (!thinkingHealthy || isStreaming) && "opacity-50 cursor-not-allowed",
+                )}
+              >
+                Thinking
+              </button>
+            </div>
 
             {/* Send / Stop */}
             {isStreaming ? (

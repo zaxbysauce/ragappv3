@@ -16,7 +16,11 @@ from app.services.background_tasks import get_background_processor
 from app.services.email_service import EmailIngestionService
 from app.services.embeddings import EmbeddingService
 from app.services.file_watcher import FileWatcher
-from app.services.llm_client import LLMClient
+from app.services.llm_client import (
+    LLMClient,
+    create_instant_client,
+    create_thinking_client,
+)
 from app.services.llm_health import LLMHealthChecker
 from app.services.maintenance import MaintenanceService
 from app.services.memory_store import MemoryStore
@@ -199,8 +203,24 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Upload migration failed (continuing anyway): {e}")
 
     app.state.db_pool = get_pool(str(settings.sqlite_path), max_size=10)
-    app.state.llm_client = LLMClient()
-    await _safe_await(app.state.llm_client.start(), "LLM client start", timeout=10)
+
+    # Dual LLM clients: Thinking (gpt-oss-120b on DGX Spark via ollama_chat_url)
+    # and Instant (Nemotron 3 Nano 4B on LM Studio via instant_chat_url).
+    app.state.thinking_llm_client = create_thinking_client()
+    await _safe_await(
+        app.state.thinking_llm_client.start(),
+        "Thinking LLM client start",
+        timeout=10,
+    )
+    app.state.instant_llm_client = create_instant_client()
+    await _safe_await(
+        app.state.instant_llm_client.start(),
+        "Instant LLM client start",
+        timeout=10,
+    )
+    # Back-compat alias — every existing consumer (LLMHealthChecker,
+    # background_processor, keepalive, RAGEngine) reads ``llm_client``.
+    app.state.llm_client = app.state.thinking_llm_client
     app.state.embedding_service = EmbeddingService()
 
     # Validate that live TEI model matches EMBEDDING_MODEL config
@@ -358,6 +378,8 @@ async def lifespan(app: FastAPI):
     app.state.llm_health_checker = LLMHealthChecker(
         embedding_service=app.state.embedding_service,
         llm_client=app.state.llm_client,
+        thinking_client=app.state.thinking_llm_client,
+        instant_client=app.state.instant_llm_client,
     )
     app.state.model_checker = ModelChecker()
     app.state.model_validation = (
@@ -438,6 +460,8 @@ async def lifespan(app: FastAPI):
         llm_client=app.state.llm_client,
         reranking_service=app.state.reranking_service,
         wiki_retrieval=app.state.wiki_retrieval,
+        thinking_client=app.state.thinking_llm_client,
+        instant_client=app.state.instant_llm_client,
     )
     logger.info("RAGEngine singleton initialized with wiki retrieval")
 
@@ -454,12 +478,21 @@ async def lifespan(app: FastAPI):
 
     asyncio.create_task(_run_memory_backfill())
 
-    # Start LLM keep-alive task to prevent LM Studio from unloading model
-    keepalive_task = None
+    # Start LLM keep-alive tasks for both backends to prevent unload on idle.
+    keepalive_task_thinking = None
+    keepalive_task_instant = None
     try:
-        keepalive_task = asyncio.create_task(_llm_keepalive_task(app.state.llm_client))
+        keepalive_task_thinking = asyncio.create_task(
+            _llm_keepalive_task(app.state.thinking_llm_client)
+        )
     except Exception as e:
-        logger.warning(f"LLM keepalive task failed (continuing): {e}")
+        logger.warning(f"Thinking LLM keepalive task failed (continuing): {e}")
+    try:
+        keepalive_task_instant = asyncio.create_task(
+            _llm_keepalive_task(app.state.instant_llm_client)
+        )
+    except Exception as e:
+        logger.warning(f"Instant LLM keepalive task failed (continuing): {e}")
 
     yield
 
@@ -467,20 +500,28 @@ async def lifespan(app: FastAPI):
     # Stop email ingestion service
     if app.state.email_service:
         app.state.email_service.stop_polling()
-    if keepalive_task:
-        keepalive_task.cancel()
-        try:
-            await keepalive_task
-        except asyncio.CancelledError:
-            pass
+    for kt in (keepalive_task_thinking, keepalive_task_instant):
+        if kt:
+            kt.cancel()
+            try:
+                await kt
+            except asyncio.CancelledError:
+                pass
     if app.state.file_watcher:
         await app.state.file_watcher.stop()
     if app.state.background_processor:
         await app.state.background_processor.stop()
     if getattr(app.state, "wiki_compile_processor", None):
         await app.state.wiki_compile_processor.stop()
+    # Close both underlying LLM clients. The ``llm_client`` attr is an
+    # alias of ``thinking_llm_client`` so closing it separately is
+    # unnecessary; ``LLMClient.close()`` is also idempotent.
     try:
-        await app.state.llm_client.close()
+        await app.state.thinking_llm_client.close()
+    except Exception:
+        pass
+    try:
+        await app.state.instant_llm_client.close()
     except Exception:
         pass
     try:

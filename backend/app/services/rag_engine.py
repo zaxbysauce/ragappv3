@@ -110,11 +110,19 @@ class RAGEngine:
         document_retrieval_service: Optional[DocumentRetrievalService] = None,
         prompt_builder_service: Optional[PromptBuilderService] = None,
         wiki_retrieval: Optional[Any] = None,
+        thinking_client: Optional[LLMClient] = None,
+        instant_client: Optional[LLMClient] = None,
     ) -> None:
         self.embedding_service = embedding_service or EmbeddingService()
         self.vector_store = vector_store or None
         self.memory_store = memory_store or MemoryStore()
         self.llm_client = llm_client or LLMClient()
+        # Per-mode client overrides. When None, the ``thinking_client`` /
+        # ``instant_client`` properties fall back to ``self.llm_client`` so
+        # tests that mutate ``engine.llm_client`` post-construction continue
+        # to flow through both modes.
+        self._thinking_client_override = thinking_client
+        self._instant_client_override = instant_client
         self.reranking_service = reranking_service
 
         # Log warnings for missing dependencies (indicates non-DI usage)
@@ -195,12 +203,23 @@ class RAGEngine:
         # Wiki retrieval service (optional — injected at startup)
         self._wiki_retrieval = wiki_retrieval
 
+    @property
+    def thinking_client(self) -> LLMClient:
+        """LLM client for Thinking mode. Falls back to ``self.llm_client`` when no explicit override was passed at construction."""
+        return self._thinking_client_override or self.llm_client
+
+    @property
+    def instant_client(self) -> LLMClient:
+        """LLM client for Instant mode. Falls back to ``self.llm_client`` when no explicit override was passed at construction."""
+        return self._instant_client_override or self.llm_client
+
     async def query(
         self,
         user_input: str,
         chat_history: List[Dict[str, Any]],
         stream: bool = False,
         vault_id: Optional[int] = None,
+        mode: Optional["ChatMode"] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """Execute a RAG query: embed, search, build prompt, call LLM."""
         logger.info(
@@ -208,6 +227,33 @@ class RAGEngine:
             len(user_input),
             vault_id,
             stream,
+        )
+
+        # Resolve effective mode and per-mode retrieval budget.
+        from app.models.chat_mode import ChatMode  # local to avoid cycles
+        if mode is None:
+            try:
+                mode = ChatMode(settings.default_chat_mode)
+            except ValueError:
+                mode = ChatMode.THINKING
+
+        if mode == ChatMode.INSTANT:
+            effective_initial_top_k = settings.instant_initial_retrieval_top_k
+            effective_reranker_top_n = settings.instant_reranker_top_n
+            effective_memory_top_k = settings.instant_memory_context_top_k
+            effective_max_tokens = settings.instant_max_tokens
+            active_client = self.instant_client
+        else:
+            effective_initial_top_k = self.initial_retrieval_top_k
+            effective_reranker_top_n = self.reranker_top_n
+            effective_memory_top_k = settings.memory_context_top_k
+            effective_max_tokens = 32768
+            active_client = self.thinking_client
+
+        logger.debug(
+            "RAGEngine.query mode=%s client=%s",
+            mode.value,
+            getattr(active_client, "base_url", "<unknown>"),
         )
         # Per-query observability accumulator. Always built; emitted into
         # the done message only when ``rag_trace_in_response`` is on.
@@ -229,13 +275,14 @@ class RAGEngine:
         except Exception as exc:
             logger.error("Memory intent detection/add failed (%s): %s", type(exc).__name__, exc)
 
-        # Query transformation for broader retrieval (if enabled)
+        # Query transformation for broader retrieval (if enabled).
+        # Use the active (mode-selected) client so Instant mode doesn't
+        # pay Thinking latency on query rewrites.
         transformed_queries: List[Tuple[str, str]] = [('original', user_input)]
-        if settings.query_transformation_enabled and self.llm_client is not None:
+        if settings.query_transformation_enabled and active_client is not None:
             try:
-                if self._query_transformer is None:
-                    self._query_transformer = QueryTransformer(self.llm_client)
-                transformed_queries = await self._query_transformer.transform(
+                query_transformer = QueryTransformer(active_client)
+                transformed_queries = await query_transformer.transform(
                     user_input
                 )
                 # transformed_queries is now List[Tuple[str, str]] like [('original', '...'), ('step_back', '...'), ('hyde', '...')]
@@ -369,6 +416,8 @@ class RAGEngine:
                     vault_id,
                     effective_alpha=effective_alpha,
                     variants_dropped=variants_dropped,
+                    override_initial_top_k=effective_initial_top_k,
+                    override_reranker_top_n=effective_reranker_top_n,
                 )
                 logger.info(
                     "[query] _execute_retrieval returned: result_count=%d, first_3_distances=%s",
@@ -433,7 +482,7 @@ class RAGEngine:
             try:
                 distiller = ContextDistiller(
                     self.embedding_service,
-                    self.llm_client if settings.context_distillation_synthesis_enabled else None,
+                    active_client if settings.context_distillation_synthesis_enabled else None,
                 )
                 trace.distillation_before = len(relevant_chunks)
                 relevant_chunks = await distiller.distill(
@@ -496,7 +545,7 @@ class RAGEngine:
                 )
                 # Apply context_top_k cap after relevance filtering so prompt context
                 # stays bounded even when top_k is large.
-                memories = candidates[: settings.memory_context_top_k]
+                memories = candidates[:effective_memory_top_k]
                 logger.info(
                     "[query] Memory: %d candidates → %d after context_top_k cap",
                     len(candidates),
@@ -516,14 +565,18 @@ class RAGEngine:
         # content so citation labels can be parsed for the trace.
         assembled_response: List[str] = []
         if stream:
-            async for chunk in self._stream_llm_response(messages):
+            async for chunk in self._stream_llm_response(
+                messages, client=active_client, max_tokens=effective_max_tokens
+            ):
                 chunk_type = chunk.get("type", "unknown")
                 logger.debug("[query] Yielding '%s' chunk (stream)", chunk_type)
                 if chunk_type == "content":
                     assembled_response.append(chunk.get("content", ""))
                 yield chunk
         else:
-            async for chunk in self._get_llm_response(messages):
+            async for chunk in self._get_llm_response(
+                messages, client=active_client, max_tokens=effective_max_tokens
+            ):
                 chunk_type = chunk.get("type", "unknown")
                 logger.debug("[query] Yielding '%s' chunk (non-stream)", chunk_type)
                 if chunk_type == "content":
@@ -610,6 +663,8 @@ class RAGEngine:
         vault_id: Optional[int],
         effective_alpha: float = 0.6,
         variants_dropped: List[str] = None,
+        override_initial_top_k: Optional[int] = None,
+        override_reranker_top_n: Optional[int] = None,
     ) -> tuple[List[Dict[str, Any]], Optional[str], str, Optional[bool], str, str, int, str, List[str], bool, Dict[str, int]]:
         """Execute vector search and retrieval evaluation.
 
@@ -642,8 +697,13 @@ class RAGEngine:
         # Phase 1: Search phase - original query failures propagate immediately
         vector_results = []
         try:
+            effective_initial = (
+                override_initial_top_k
+                if override_initial_top_k is not None
+                else self.initial_retrieval_top_k
+            )
             fetch_k = (
-                self.initial_retrieval_top_k
+                effective_initial
                 if self.reranking_enabled
                 else self.retrieval_top_k
             )
@@ -811,7 +871,11 @@ class RAGEngine:
                     reranked_chunks, rerank_success = await self.reranking_service.rerank(
                         query=user_input,
                         chunks=vector_results,
-                        top_n=self.reranker_top_n,
+                        top_n=(
+                            override_reranker_top_n
+                            if override_reranker_top_n is not None
+                            else self.reranker_top_n
+                        ),
                     )
                     if reranked_chunks:
                         vector_results = reranked_chunks
@@ -995,17 +1059,22 @@ class RAGEngine:
     async def _stream_llm_response(
         self,
         messages: List[Dict[str, str]],
+        client: Optional[LLMClient] = None,
+        max_tokens: int = 32768,
     ) -> AsyncIterator[Dict[str, Any]]:
         """Stream LLM response chunks.
 
         Args:
             messages: List of message dictionaries
+            client: Override LLM client (defaults to self.llm_client for back-compat).
+            max_tokens: Max output tokens for the model.
 
         Yields:
             Response chunks as dictionaries
         """
+        target = client or self.llm_client
         try:
-            async for chunk in self.llm_client.chat_completion_stream(messages):
+            async for chunk in target.chat_completion_stream(messages, max_tokens=max_tokens):
                 yield {"type": "content", "content": chunk}
         except LLMError as exc:
             logger.error("[_stream_llm_response] LLMError: %s", exc)
@@ -1014,11 +1083,15 @@ class RAGEngine:
     async def _get_llm_response(
         self,
         messages: List[Dict[str, str]],
+        client: Optional[LLMClient] = None,
+        max_tokens: int = 32768,
     ) -> AsyncIterator[Dict[str, Any]]:
         """Get non-streaming LLM response.
 
         Args:
             messages: List of message dictionaries
+            client: Override LLM client (defaults to self.llm_client for back-compat).
+            max_tokens: Max output tokens for the model.
 
         Yields:
             Response content dictionary
@@ -1026,8 +1099,9 @@ class RAGEngine:
         Raises:
             RAGEngineError: If LLM call fails
         """
+        target = client or self.llm_client
         try:
-            content = await self.llm_client.chat_completion(messages)
+            content = await target.chat_completion(messages, max_tokens=max_tokens)
             yield {"type": "content", "content": content}
         except LLMError as exc:
             raise RAGEngineError(f"LLM chat failed: {exc}") from exc

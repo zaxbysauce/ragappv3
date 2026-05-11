@@ -48,6 +48,14 @@ export interface SettingsFormData {
   ollama_chat_url: string;
   embedding_model: string;
   chat_model: string;
+  // Instant mode (LM Studio on local GPU)
+  instant_chat_url: string;
+  instant_chat_model: string;
+  default_chat_mode: 'instant' | 'thinking';
+  instant_initial_retrieval_top_k: number;
+  instant_reranker_top_n: number;
+  instant_memory_context_top_k: number;
+  instant_max_tokens: number;
   // Wiki & curator (PR B + PR C)
   wiki_enabled: boolean;
   wiki_compile_on_ingest: boolean;
@@ -99,6 +107,13 @@ export const FIELD_TAB: Record<keyof SettingsFormData, SettingsTab> = {
   ollama_chat_url: "models",
   embedding_model: "models",
   chat_model: "models",
+  instant_chat_url: "models",
+  instant_chat_model: "models",
+  default_chat_mode: "models",
+  instant_initial_retrieval_top_k: "retrieval",
+  instant_reranker_top_n: "retrieval",
+  instant_memory_context_top_k: "retrieval",
+  instant_max_tokens: "retrieval",
   wiki_enabled: "wiki",
   wiki_compile_on_ingest: "wiki",
   wiki_compile_on_query: "wiki",
@@ -198,6 +213,13 @@ const defaultFormData: SettingsFormData = {
   ollama_chat_url: "",
   embedding_model: "",
   chat_model: "",
+  instant_chat_url: "",
+  instant_chat_model: "",
+  default_chat_mode: "thinking",
+  instant_initial_retrieval_top_k: 10,
+  instant_reranker_top_n: 4,
+  instant_memory_context_top_k: 2,
+  instant_max_tokens: 4096,
   wiki_enabled: true,
   wiki_compile_on_ingest: true,
   wiki_compile_on_query: true,
@@ -261,6 +283,15 @@ function fromSettings(settings: SettingsResponse): SettingsFormData {
     ollama_chat_url: decodeStr(settings.ollama_chat_url, ""),
     embedding_model: decodeStr(settings.embedding_model, ""),
     chat_model: decodeStr(settings.chat_model, ""),
+    instant_chat_url: decodeStr(settings.instant_chat_url ?? "", ""),
+    instant_chat_model: decodeStr(settings.instant_chat_model ?? "", ""),
+    default_chat_mode:
+      settings.default_chat_mode === "instant" ? "instant" : "thinking",
+    instant_initial_retrieval_top_k:
+      settings.instant_initial_retrieval_top_k ?? 10,
+    instant_reranker_top_n: settings.instant_reranker_top_n ?? 4,
+    instant_memory_context_top_k: settings.instant_memory_context_top_k ?? 2,
+    instant_max_tokens: settings.instant_max_tokens ?? 4096,
     wiki_enabled: settings.wiki_enabled ?? true,
     wiki_compile_on_ingest: settings.wiki_compile_on_ingest ?? true,
     wiki_compile_on_query: settings.wiki_compile_on_query ?? true,

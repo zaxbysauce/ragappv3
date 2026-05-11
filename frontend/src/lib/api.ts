@@ -314,6 +314,15 @@ export interface SettingsResponse {
   embedding_model: string;
   chat_model: string;
 
+  // Instant mode (LM Studio)
+  instant_chat_url?: string;
+  instant_chat_model?: string;
+  default_chat_mode?: 'instant' | 'thinking';
+  instant_initial_retrieval_top_k?: number;
+  instant_reranker_top_n?: number;
+  instant_memory_context_top_k?: number;
+  instant_max_tokens?: number;
+
   // Document processing (character-based)
   chunk_size_chars: number;
   chunk_overlap_chars: number;
@@ -410,6 +419,14 @@ export interface UpdateSettingsRequest {
   ollama_chat_url?: string;
   embedding_model?: string;
   chat_model?: string;
+  // Instant mode (LM Studio)
+  instant_chat_url?: string;
+  instant_chat_model?: string;
+  default_chat_mode?: 'instant' | 'thinking';
+  instant_initial_retrieval_top_k?: number;
+  instant_reranker_top_n?: number;
+  instant_memory_context_top_k?: number;
+  instant_max_tokens?: number;
   // Wiki / Knowledge Compiler config
   wiki_enabled?: boolean;
   wiki_compile_on_ingest?: boolean;
@@ -714,6 +731,16 @@ export interface VaultUpdateRequest {
 
 export async function getHealth(): Promise<HealthResponse> {
   const response = await apiClient.get<HealthResponse>("/health");
+  return response.data;
+}
+
+export interface LlmModeHealth {
+  thinking: boolean;
+  instant: boolean;
+}
+
+export async function getLlmModeHealth(): Promise<LlmModeHealth> {
+  const response = await apiClient.get<LlmModeHealth>("/llm-health/modes");
   return response.data;
 }
 
@@ -1027,9 +1054,17 @@ export async function parseSSEStream(
 export function chatStream(
   messages: ChatMessage[],
   callbacks: ChatStreamCallbacks,
-  vaultId?: number
+  vaultId?: number,
+  mode?: 'instant' | 'thinking',
 ): () => void {
   const abortController = new AbortController();
+  // Build the request body once and reuse for both the initial POST and
+  // the 401 token-refresh retry path. Keeps payload shape consistent.
+  const requestBody = JSON.stringify({
+    messages,
+    ...(vaultId != null && { vault_id: vaultId }),
+    ...(mode != null && { mode }),
+  });
 
   const startStream = async () => {
     try {
@@ -1063,7 +1098,7 @@ export function chatStream(
       const response = await fetch(`${API_BASE_URL}/chat/stream`, {
         method: "POST",
         headers,
-        body: JSON.stringify({ messages, ...(vaultId != null && { vault_id: vaultId }) }),
+        body: requestBody,
         signal: abortController.signal,
       });
 
@@ -1088,7 +1123,7 @@ export function chatStream(
                 const retryResponse = await fetch(`${API_BASE_URL}/chat/stream`, {
                   method: "POST",
                   headers,
-                  body: JSON.stringify({ messages, ...(vaultId != null && { vault_id: vaultId }) }),
+                  body: requestBody,
                   signal: abortController.signal,
                 });
                 if (!retryResponse.ok) {

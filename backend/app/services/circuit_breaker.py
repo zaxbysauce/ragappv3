@@ -246,6 +246,17 @@ llm_cb = AsyncCircuitBreaker(
     name="llm",
 )
 
+
+def create_llm_circuit_breaker(name: str = "llm") -> AsyncCircuitBreaker:
+    """Return a fresh per-instance LLM circuit breaker.
+
+    Each LLMClient instance owns its own breaker so failures on one
+    backend (e.g. Instant) cannot trip the breaker for another
+    (e.g. Thinking).
+    """
+    return AsyncCircuitBreaker(fail_max=5, reset_timeout=60, name=name)
+
+
 reranking_cb = AsyncCircuitBreaker(
     fail_max=3,
     reset_timeout=30,

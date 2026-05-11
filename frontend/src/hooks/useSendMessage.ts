@@ -8,6 +8,9 @@ import {
   type WikiReference,
 } from "@/lib/api";
 import { useChatStore, type Message } from "@/stores/useChatStore";
+import { useChatModeStore } from "@/stores/useChatModeStore";
+import { useLlmHealthStore } from "@/stores/useLlmHealthStore";
+import { useSettingsStore } from "@/stores/useSettingsStore";
 import type { UsedMemory } from "@/lib/api";
 
 export const MAX_INPUT_LENGTH = 2000;
@@ -104,6 +107,21 @@ export function useSendMessage(
       // Accumulate wiki refs from the SSE stream so they can be persisted with the message.
       let streamedWikiRefs: WikiReference[] = [];
 
+      // Resolve effective chat mode:
+      //   stored override (if any) → settings default → "thinking".
+      // If the selected mode's backend is unhealthy, fall back to the other.
+      const storedMode = useChatModeStore.getState().chatMode;
+      const defaultMode =
+        useSettingsStore.getState().formData.default_chat_mode ?? "thinking";
+      const desiredMode = storedMode ?? defaultMode;
+      const health = useLlmHealthStore.getState();
+      let effectiveMode: "instant" | "thinking" = desiredMode;
+      if (desiredMode === "instant" && !health.instant && health.thinking) {
+        effectiveMode = "thinking";
+      } else if (desiredMode === "thinking" && !health.thinking && health.instant) {
+        effectiveMode = "instant";
+      }
+
       const abort = chatStream(
         chatMessages,
         {
@@ -193,7 +211,8 @@ export function useSendMessage(
             }
           },
         },
-        activeVaultId ?? undefined
+        activeVaultId ?? undefined,
+        effectiveMode,
       );
 
       setAbortFn(abort);
