@@ -244,6 +244,61 @@ class TestRAGEngineLiveReads:
         mock_settings.maintenance_mode = True
         assert engine.maintenance_mode is True
 
+    def test_sync_propagates_live_settings_to_document_retrieval(
+        self, mock_settings
+    ):
+        """The production query path syncs live values into the DocumentRetrievalService
+        before each filter_relevant call. Without this sync, the service keeps
+        the snapshot it captured at engine construction.
+        """
+        from app.services.rag_engine import RAGEngine
+
+        # Build an engine and a fake document_retrieval. Avoid __init__ so we
+        # don't pull in lancedb-backed services in this constrained CI env.
+        engine = RAGEngine.__new__(RAGEngine)
+        fake_dr = MagicMock()
+        fake_dr.max_distance_threshold = 0.99  # stale snapshot
+        fake_dr.relevance_threshold = 0.99
+        fake_dr.retrieval_top_k = 99
+        fake_dr.retrieval_window = 99
+        engine.document_retrieval = fake_dr
+        engine.prompt_builder = MagicMock()
+
+        # Admin changes settings via the UI
+        mock_settings.max_distance_threshold = 0.3
+        mock_settings.retrieval_top_k = 7
+        mock_settings.retrieval_window = 2
+        mock_settings.rag_relevance_threshold = 0.5
+
+        engine._sync_document_retrieval_settings()
+
+        assert fake_dr.max_distance_threshold == 0.3
+        assert fake_dr.retrieval_top_k == 7
+        assert fake_dr.retrieval_window == 2
+        assert fake_dr.relevance_threshold == 0.5
+
+    def test_sync_propagates_per_instance_overrides(self, mock_settings):
+        """Pinned per-instance values (engine.X = Y) win over live settings."""
+        from app.services.rag_engine import RAGEngine
+
+        engine = RAGEngine.__new__(RAGEngine)
+        fake_dr = MagicMock()
+        engine.document_retrieval = fake_dr
+        engine.prompt_builder = MagicMock()
+
+        # Test pins values on the engine
+        engine.retrieval_top_k = 42
+        engine.max_distance_threshold = 0.1
+
+        # Settings change after the pin — should NOT win
+        mock_settings.retrieval_top_k = 99
+        mock_settings.max_distance_threshold = 0.99
+
+        engine._sync_document_retrieval_settings()
+
+        assert fake_dr.retrieval_top_k == 42
+        assert fake_dr.max_distance_threshold == 0.1
+
 
 # ---------------------------------------------------------------------------
 # DocumentProcessor chunker rebuild

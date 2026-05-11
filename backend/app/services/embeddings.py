@@ -243,9 +243,9 @@ class EmbeddingService:
             Dictionary payload for the API request
         """
         if self.provider_mode == "openai":
-            return {"model": settings.embedding_model, "input": text}
+            return {"model": self.embedding_model, "input": text}
         else:  # ollama mode
-            return {"model": settings.embedding_model, "prompt": text}
+            return {"model": self.embedding_model, "prompt": text}
 
     def _extract_embedding(self, data: dict) -> List[float]:
         """
@@ -582,9 +582,9 @@ class EmbeddingService:
         try:
             # Build payload with array of inputs
             if self.provider_mode == "openai":
-                payload = {"model": settings.embedding_model, "input": texts}
+                payload = {"model": self.embedding_model, "input": texts}
             else:  # ollama mode
-                payload = {"model": settings.embedding_model, "input": texts}
+                payload = {"model": self.embedding_model, "input": texts}
 
             try:
                 response = await embeddings_cb(client.post)(

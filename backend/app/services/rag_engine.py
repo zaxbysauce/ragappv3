@@ -607,7 +607,10 @@ class RAGEngine:
         trace.token_pack_skipped = token_pack_stats.get("token_pack_skipped", 0)
         trace.token_pack_truncated = token_pack_stats.get("token_pack_truncated", 0)
 
-        # Filter relevant chunks using document retrieval service
+        # Filter relevant chunks using document retrieval service.
+        # Push live settings to the service before each call so admin Settings
+        # UI changes (and per-instance test overrides) take effect immediately.
+        self._sync_document_retrieval_settings()
         relevant_chunks = await self.document_retrieval.filter_relevant(
             vector_results,
             reranked=rerank_success if rerank_success is not None else False,
@@ -1370,25 +1373,32 @@ class RAGEngine:
         if not hasattr(self, "prompt_builder") or self.prompt_builder is None:
             self.prompt_builder = PromptBuilderService()
 
+    def _sync_document_retrieval_settings(self) -> None:
+        """Push the engine's live settings into the DocumentRetrievalService.
+
+        Called before any ``filter_relevant`` invocation so the service uses
+        current values when settings have changed since construction (or when
+        a test pinned values via ``engine.X = Y`` per-instance overrides).
+        Without this sync, DocumentRetrievalService keeps the snapshot it
+        captured at construction time.
+        """
+        self._ensure_services()
+        self.document_retrieval.max_distance_threshold = self.max_distance_threshold
+        self.document_retrieval.relevance_threshold = self.relevance_threshold
+        self.document_retrieval.retrieval_top_k = self.retrieval_top_k
+        self.document_retrieval.retrieval_window = self.retrieval_window
+
     # Backward compatibility methods - delegate to document_retrieval service
     async def _filter_relevant(
         self, results: List[Dict[str, Any]], top_k: Optional[int] = None
     ) -> List[RAGSource]:
         """Filter retrieved documents by relevance (backward compatibility).
 
-        Syncs threshold settings from engine to document_retrieval service
-        to support tests that modify engine settings after initialization.
+        Syncs live settings from the engine to document_retrieval before each
+        call so admin Settings UI changes and per-instance test overrides take
+        effect without re-instantiating the service.
         """
-        self._ensure_services()
-        # Sync settings from engine to service
-        self.document_retrieval.max_distance_threshold = getattr(
-            self, "max_distance_threshold", None
-        )
-        self.document_retrieval.relevance_threshold = getattr(
-            self, "relevance_threshold", None
-        )
-        self.document_retrieval.retrieval_top_k = getattr(self, "retrieval_top_k", None)
-        self.document_retrieval.retrieval_window = getattr(self, "retrieval_window", 0)
+        self._sync_document_retrieval_settings()
         return await self.document_retrieval.filter_relevant(results, top_k)
 
     def _pack_context_by_token_budget(
