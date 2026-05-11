@@ -23,6 +23,7 @@ from app.api.deps import (
     get_user_accessible_vault_ids,
 )
 from app.config import settings
+from app.models.chat_mode import ChatMode
 from app.models.database import get_pool
 from app.services.citation_validator import repair_against_sources_and_memories
 from app.services.rag_engine import RAGEngine, RAGEngineError
@@ -48,6 +49,7 @@ class ChatRequest(BaseModel):
     history: List[Dict[str, Any]] = Field(default_factory=list)
     stream: bool = False
     vault_id: Optional[int] = None
+    mode: Optional[Literal["instant", "thinking"]] = None
 
 
 class UsedMemory(BaseModel):
@@ -93,6 +95,7 @@ class ChatMessage(BaseModel):
 class ChatStreamRequest(BaseModel):
     messages: List[ChatMessage]
     vault_id: Optional[int] = None
+    mode: Optional[Literal["instant", "thinking"]] = None
 
 
 class CreateSessionRequest(BaseModel):
@@ -200,6 +203,7 @@ def stream_chat_response(
     history: List[Dict[str, Any]],
     rag_engine: Optional[RAGEngine],
     vault_id: Optional[int] = None,
+    mode: Optional[ChatMode] = None,
 ) -> StreamingResponse:
     """
     Generate a streaming chat response using SSE format.
@@ -230,7 +234,7 @@ def stream_chat_response(
 
         try:
             async for chunk in rag_engine.query(
-                message, history, stream=True, vault_id=vault_id
+                message, history, stream=True, vault_id=vault_id, mode=mode
             ):
                 chunk_type = chunk.get("type")
 
@@ -321,6 +325,7 @@ async def non_stream_chat_response(
     history: List[Dict[str, Any]],
     rag_engine: Optional[RAGEngine],
     vault_id: Optional[int] = None,
+    mode: Optional[ChatMode] = None,
 ) -> ChatResponse:
     """
     Generate a non-streaming chat response.
@@ -344,7 +349,7 @@ async def non_stream_chat_response(
 
     try:
         async for chunk in rag_engine.query(
-            message, history, stream=False, vault_id=vault_id
+            message, history, stream=False, vault_id=vault_id, mode=mode
         ):
             chunk_type = chunk.get("type")
             logger.debug(
@@ -454,9 +459,14 @@ async def chat(
                 status_code=403,
                 detail="Searching all vaults requires admin access. Please select a specific vault.",
             )
+    effective_mode = ChatMode(request.mode) if request.mode else None
     try:
         return await non_stream_chat_response(
-            request.message, request.history, rag_engine, vault_id=request.vault_id
+            request.message,
+            request.history,
+            rag_engine,
+            vault_id=request.vault_id,
+            mode=effective_mode,
         )
     except Exception:
         logger.exception("[chat] UNHANDLED EXCEPTION during chat processing")
@@ -492,8 +502,13 @@ async def chat_stream(
             )
 
     history = [msg.model_dump(exclude_none=True) for msg in request.messages[:-1]]
+    effective_mode = ChatMode(request.mode) if request.mode else None
     return stream_chat_response(
-        last_message.content, history, rag_engine, vault_id=request.vault_id
+        last_message.content,
+        history,
+        rag_engine,
+        vault_id=request.vault_id,
+        mode=effective_mode,
     )
 
 

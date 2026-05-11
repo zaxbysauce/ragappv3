@@ -125,6 +125,19 @@ class AsyncCircuitBreaker:
             self.name,
         )
 
+    def reset(self) -> None:
+        """Force the circuit breaker back to a clean CLOSED state.
+
+        Intended for use when the underlying endpoint or model is reconfigured
+        so a previously opened breaker does not block requests to the new target.
+        Caller is responsible for ensuring no concurrent requests are in flight.
+        """
+        self._state = CircuitBreakerState.CLOSED
+        self._fail_counter = 0
+        self._success_counter = 0
+        self._last_failure_time = None
+        logger.info("Circuit breaker '%s' reset to CLOSED", self.name)
+
     def _check_timeout(self) -> None:
         """Check if the reset timeout has expired and transition to half-open."""
         if self._state == CircuitBreakerState.OPEN:
@@ -245,6 +258,17 @@ llm_cb = AsyncCircuitBreaker(
     reset_timeout=60,
     name="llm",
 )
+
+
+def create_llm_circuit_breaker(name: str = "llm") -> AsyncCircuitBreaker:
+    """Return a fresh per-instance LLM circuit breaker.
+
+    Each LLMClient instance owns its own breaker so failures on one
+    backend (e.g. Instant) cannot trip the breaker for another
+    (e.g. Thinking).
+    """
+    return AsyncCircuitBreaker(fail_max=5, reset_timeout=60, name=name)
+
 
 reranking_cb = AsyncCircuitBreaker(
     fail_max=3,

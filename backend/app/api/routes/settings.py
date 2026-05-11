@@ -3,7 +3,7 @@ import sqlite3
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, field_validator, model_validator
 
 from app.api.deps import get_csrf_manager, get_current_active_user, get_db, require_role
@@ -48,6 +48,17 @@ class SettingsUpdate(BaseModel):
     ollama_chat_url: Optional[str] = None
     embedding_model: Optional[str] = None
     chat_model: Optional[str] = None
+
+    # Instant mode (LM Studio on local GPU)
+    instant_chat_url: Optional[str] = None
+    instant_chat_model: Optional[str] = None
+    default_chat_mode: Optional[str] = None
+
+    # Per-mode retrieval overrides
+    instant_initial_retrieval_top_k: Optional[int] = None
+    instant_reranker_top_n: Optional[int] = None
+    instant_memory_context_top_k: Optional[int] = None
+    instant_max_tokens: Optional[int] = None
 
     # Feature flags (still supported)
     auto_scan_enabled: Optional[bool] = None
@@ -111,6 +122,25 @@ class SettingsUpdate(BaseModel):
     def validate_vector_top_k(cls, v):
         if v is not None and v <= 0:
             raise ValueError("vector_top_k must be a positive integer")
+        return v
+
+    @field_validator("default_chat_mode")
+    @classmethod
+    def validate_default_chat_mode(cls, v):
+        if v is not None and v not in ("instant", "thinking"):
+            raise ValueError("default_chat_mode must be 'instant' or 'thinking'")
+        return v
+
+    @field_validator(
+        "instant_initial_retrieval_top_k",
+        "instant_reranker_top_n",
+        "instant_memory_context_top_k",
+        "instant_max_tokens",
+    )
+    @classmethod
+    def validate_instant_positive_ints(cls, v):
+        if v is not None and v <= 0:
+            raise ValueError("must be a positive integer")
         return v
 
     @field_validator("chunk_size_chars")
@@ -183,7 +213,7 @@ class SettingsUpdate(BaseModel):
             raise ValueError("hybrid_alpha must be between 0 and 1")
         return v
 
-    @field_validator("ollama_embedding_url", "ollama_chat_url", mode="before")
+    @field_validator("ollama_embedding_url", "ollama_chat_url", "instant_chat_url", mode="before")
     @classmethod
     def validate_ollama_url(cls, v):
         if v is None:
@@ -197,7 +227,7 @@ class SettingsUpdate(BaseModel):
             raise ValueError("URL must not contain credentials (@)")
         return v
 
-    @field_validator("embedding_model", "chat_model", mode="before")
+    @field_validator("embedding_model", "chat_model", "instant_chat_model", mode="before")
     @classmethod
     def validate_model_name(cls, v):
         if v is None:
@@ -330,6 +360,14 @@ ALLOWED_FIELDS = [
     "ollama_chat_url",
     "embedding_model",
     "chat_model",
+    # Instant mode (LM Studio)
+    "instant_chat_url",
+    "instant_chat_model",
+    "default_chat_mode",
+    "instant_initial_retrieval_top_k",
+    "instant_reranker_top_n",
+    "instant_memory_context_top_k",
+    "instant_max_tokens",
     # Wiki / Knowledge Compiler
     "wiki_enabled",
     "wiki_compile_on_ingest",
@@ -422,6 +460,15 @@ class SettingsResponse(BaseModel):
     # Model config
     embedding_model: str
     chat_model: str
+
+    # Instant mode (LM Studio)
+    instant_chat_url: str = "http://host.docker.internal:1234"
+    instant_chat_model: str = "nvidia/nemotron-3-nano-4b"
+    default_chat_mode: str = "thinking"
+    instant_initial_retrieval_top_k: int = 10
+    instant_reranker_top_n: int = 4
+    instant_memory_context_top_k: int = 2
+    instant_max_tokens: int = 4096
 
     # Document processing (user-configurable)
     chunk_size: Optional[int] = None  # Legacy, deprecated
@@ -519,6 +566,14 @@ def _build_settings_dict() -> dict:
         "ollama_chat_url": settings.ollama_chat_url,
         "embedding_model": settings.embedding_model,
         "chat_model": settings.chat_model,
+        # Instant mode (LM Studio)
+        "instant_chat_url": settings.instant_chat_url,
+        "instant_chat_model": settings.instant_chat_model,
+        "default_chat_mode": settings.default_chat_mode,
+        "instant_initial_retrieval_top_k": settings.instant_initial_retrieval_top_k,
+        "instant_reranker_top_n": settings.instant_reranker_top_n,
+        "instant_memory_context_top_k": settings.instant_memory_context_top_k,
+        "instant_max_tokens": settings.instant_max_tokens,
         "chunk_size": settings.chunk_size,
         "chunk_overlap": settings.chunk_overlap,
         "max_context_chunks": settings.max_context_chunks,
@@ -617,6 +672,34 @@ def _compute_effective_sources(conn: Optional[sqlite3.Connection]) -> dict[str, 
     return out
 
 
+def _hot_rebind_llm_clients(app, update: SettingsUpdate) -> None:
+    """Apply live URL/model updates to the running LLMClient instances.
+
+    The ``settings`` singleton has already been mutated by
+    ``_apply_settings_update`` before this is called, so we read the new
+    values from settings directly. We do NOT recreate the httpx pools —
+    ``LLMClient.reconfigure`` mutates ``base_url``/``model`` in place,
+    preserving every external reference (LLMHealthChecker,
+    background_processor, keepalive task, RAGEngine).
+    """
+    thinking_client = getattr(app.state, "thinking_llm_client", None)
+    instant_client = getattr(app.state, "instant_llm_client", None)
+    if thinking_client is not None and (
+        update.ollama_chat_url is not None or update.chat_model is not None
+    ):
+        thinking_client.reconfigure(
+            base_url=settings.ollama_chat_url,
+            model=settings.chat_model,
+        )
+    if instant_client is not None and (
+        update.instant_chat_url is not None or update.instant_chat_model is not None
+    ):
+        instant_client.reconfigure(
+            base_url=settings.instant_chat_url,
+            model=settings.instant_chat_model,
+        )
+
+
 def _apply_settings_update(update: SettingsUpdate) -> SettingsResponse:
     """Shared logic to apply settings update and return updated settings."""
     updated = False
@@ -646,6 +729,7 @@ def get_settings(
 @router.post("/settings")
 def post_settings(
     update: SettingsUpdate,
+    request: Request,
     conn: sqlite3.Connection = Depends(get_db),
     _role: dict = Depends(require_role("admin")),
 ):
@@ -653,6 +737,7 @@ def post_settings(
     _enforce_curator_required_when_enabled(update)
     result = _apply_settings_update(update)
     _persist_settings(conn, update)
+    _hot_rebind_llm_clients(request.app, update)
     # Re-derive effective_sources now that we've persisted.
     result = SettingsResponse.model_validate(
         {**_build_settings_dict(), "effective_sources": _compute_effective_sources(conn)}
@@ -663,6 +748,7 @@ def post_settings(
 @router.put("/settings")
 def put_settings(
     update: SettingsUpdate,
+    request: Request,
     conn: sqlite3.Connection = Depends(get_db),
     _role: dict = Depends(require_role("admin")),
 ):
@@ -670,6 +756,7 @@ def put_settings(
     _enforce_curator_required_when_enabled(update)
     result = _apply_settings_update(update)
     _persist_settings(conn, update)
+    _hot_rebind_llm_clients(request.app, update)
     result = SettingsResponse.model_validate(
         {**_build_settings_dict(), "effective_sources": _compute_effective_sources(conn)}
     )

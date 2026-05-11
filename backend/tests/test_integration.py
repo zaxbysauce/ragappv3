@@ -118,7 +118,9 @@ class FakeLLMClient:
         self.raise_error = raise_error
         self.call_count = 0
 
-    async def chat_completion(self, messages: List[Dict[str, str]]) -> str:
+    async def chat_completion(
+        self, messages: List[Dict[str, str]], **kwargs
+    ) -> str:
         self.call_count += 1
         if self.raise_error:
             from app.services.llm_client import LLMError
@@ -126,7 +128,9 @@ class FakeLLMClient:
             raise LLMError("LLM service unavailable")
         return self.response
 
-    async def chat_completion_stream(self, messages: List[Dict[str, str]]):
+    async def chat_completion_stream(
+        self, messages: List[Dict[str, str]], **kwargs
+    ):
         self.call_count += 1
         if self.raise_error:
             from app.services.llm_client import LLMError

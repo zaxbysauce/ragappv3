@@ -13,7 +13,7 @@ from app.config import settings
 from app.services.circuit_breaker import (
     CircuitBreakerError,
     CircuitBreakerState,
-    llm_cb,
+    create_llm_circuit_breaker,
 )
 from app.utils.assistant_sanitizer import sanitize_assistant_content
 
@@ -40,17 +40,55 @@ class LLMError(Exception):
 class LLMClient:
     """OpenAI-compatible LLM chat client."""
 
-    def __init__(self, timeout: float = 300.0):
+    def __init__(
+        self,
+        timeout: float = 300.0,
+        base_url: Optional[str] = None,
+        model: Optional[str] = None,
+        cb_name: str = "llm",
+    ):
         """
         Initialize the LLM client.
 
         Args:
             timeout: Request timeout in seconds (default: 300.0 for model loading)
+            base_url: Override for the chat endpoint. Defaults to settings.ollama_chat_url.
+            model: Override for the model name. Defaults to settings.chat_model.
+            cb_name: Circuit breaker name (for logging / metrics distinction).
         """
-        self.base_url = settings.ollama_chat_url.rstrip("/")
-        self.model = settings.chat_model
+        self.base_url = (base_url or settings.ollama_chat_url).rstrip("/")
+        self.model = model or settings.chat_model
         self.timeout = timeout
+        self._circuit_breaker = create_llm_circuit_breaker(name=cb_name)
         self._client: Optional[httpx.AsyncClient] = None
+
+    def reconfigure(
+        self,
+        base_url: Optional[str] = None,
+        model: Optional[str] = None,
+    ) -> None:
+        """Hot-update base_url and/or model in place.
+
+        Per-request URLs are computed from ``self.base_url`` at call time, so
+        in-place updates take effect immediately without recreating the
+        httpx pool or invalidating any stored references held by callers
+        (LLMHealthChecker, background_processor, keepalive tasks, RAGEngine).
+
+        Resets the circuit breaker on any change so a previously opened
+        breaker from a now-unreachable endpoint does not block requests to
+        the newly configured target.
+        """
+        changed = False
+        if base_url is not None:
+            new_base_url = base_url.rstrip("/")
+            if new_base_url != self.base_url:
+                self.base_url = new_base_url
+                changed = True
+        if model is not None and model != self.model:
+            self.model = model
+            changed = True
+        if changed:
+            self._circuit_breaker.reset()
 
     async def start(self):
         """Start the HTTP client. Must be called before using the client."""
@@ -151,7 +189,7 @@ class LLMClient:
         }
 
         try:
-            response = await llm_cb(client.post)(url, json=payload)
+            response = await self._circuit_breaker(client.post)(url, json=payload)
             response.raise_for_status()
             data = response.json()
 
@@ -214,10 +252,10 @@ class LLMClient:
 
         # Check circuit breaker state before attempting stream connection.
         # Use the lock to avoid race conditions with concurrent requests.
-        async with llm_cb._lock:
-            if llm_cb.current_state == CircuitBreakerState.OPEN:
-                llm_cb._check_timeout()
-                if llm_cb.current_state == CircuitBreakerState.OPEN:
+        async with self._circuit_breaker._lock:
+            if self._circuit_breaker.current_state == CircuitBreakerState.OPEN:
+                self._circuit_breaker._check_timeout()
+                if self._circuit_breaker.current_state == CircuitBreakerState.OPEN:
                     raise LLMError(
                         "LLM service is currently unavailable (circuit breaker open)"
                     )
@@ -396,12 +434,12 @@ class LLMClient:
             # not a service-unavailability signal.
             raise
         except httpx.TimeoutException as e:
-            async with llm_cb._lock:
-                llm_cb.record_failure()
+            async with self._circuit_breaker._lock:
+                self._circuit_breaker.record_failure()
             raise LLMError(f"Streaming request timed out after {self.timeout}s") from e
         except httpx.HTTPStatusError as e:
-            async with llm_cb._lock:
-                llm_cb.record_failure()
+            async with self._circuit_breaker._lock:
+                self._circuit_breaker.record_failure()
             # Read response content first to avoid ResponseNotRead error in streaming context
             try:
                 response_text = (await e.response.aread()).decode(
@@ -413,19 +451,39 @@ class LLMClient:
                 f"HTTP error {e.response.status_code}: {response_text}"
             ) from e
         except httpx.RequestError as e:
-            async with llm_cb._lock:
-                llm_cb.record_failure()
+            async with self._circuit_breaker._lock:
+                self._circuit_breaker.record_failure()
             raise LLMError(f"Streaming request failed: {str(e)}") from e
         finally:
             if stream_succeeded:
-                async with llm_cb._lock:
-                    llm_cb.record_success()
+                async with self._circuit_breaker._lock:
+                    self._circuit_breaker.record_success()
 
         # Log connection pool metrics after streaming completes
         self._log_pool_stats()
 
     async def close(self):
-        """Close the HTTP client."""
+        """Close the HTTP client (idempotent — safe to call multiple times)."""
         if self._client is not None:
             await self._client.aclose()
             self._client = None
+
+
+def create_thinking_client(timeout: float = 300.0) -> "LLMClient":
+    """Create an LLMClient configured for the Thinking backend (gpt-oss-120b / DGX Spark)."""
+    return LLMClient(
+        timeout=timeout,
+        base_url=settings.ollama_chat_url,
+        model=settings.chat_model,
+        cb_name="llm_thinking",
+    )
+
+
+def create_instant_client(timeout: float = 120.0) -> "LLMClient":
+    """Create an LLMClient configured for the Instant backend (LM Studio / Nemotron 4B)."""
+    return LLMClient(
+        timeout=timeout,
+        base_url=settings.instant_chat_url,
+        model=settings.instant_chat_model,
+        cb_name="llm_instant",
+    )

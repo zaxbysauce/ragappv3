@@ -24,8 +24,12 @@ import { Progress } from "@/components/ui/progress";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useChatStore } from "@/stores/useChatStore";
+import { useChatModeStore } from "@/stores/useChatModeStore";
+import { useLlmHealthStore } from "@/stores/useLlmHealthStore";
+import { useSettingsStore } from "@/stores/useSettingsStore";
 import { useVaultStore } from "@/stores/useVaultStore";
 import { uploadDocument, getDocumentStatus } from "@/lib/api";
+import { computeEffectiveChatMode } from "@/lib/chatMode";
 import { MAX_INPUT_LENGTH } from "@/hooks/useSendMessage";
 import { toast } from "sonner";
 
@@ -103,6 +107,32 @@ export function Composer({ onSend, onStop, isStreaming, className, inputRef }: C
   const textareaRef = (inputRef ?? internalRef) as React.RefObject<HTMLTextAreaElement>;
 
   const { input, setInput, inputError, activeChatId } = useChatStore();
+  const storedChatMode = useChatModeStore((s) => s.chatMode);
+  const setStoredChatMode = useChatModeStore((s) => s.setChatMode);
+  const defaultChatMode = useSettingsStore((s) => s.formData.default_chat_mode);
+  const thinkingHealthy = useLlmHealthStore((s) => s.thinking);
+  const instantHealthy = useLlmHealthStore((s) => s.instant);
+  const refreshLlmHealth = useLlmHealthStore((s) => s.refresh);
+  // Reflects the mode that will actually be sent, including health fallback,
+  // so the toggle highlight cannot disagree with the request payload.
+  const effectiveChatMode = computeEffectiveChatMode({
+    stored: storedChatMode,
+    defaultMode: defaultChatMode,
+    thinkingHealthy,
+    instantHealthy,
+  });
+  const desiredChatMode: "instant" | "thinking" =
+    storedChatMode ?? defaultChatMode ?? "thinking";
+  const isFallenBack = effectiveChatMode !== desiredChatMode;
+
+  // Poll backend LLM health on mount and every 30s so the Instant toggle
+  // can disable when LM Studio is unreachable.
+  useEffect(() => {
+    refreshLlmHealth();
+    const handle = setInterval(refreshLlmHealth, 30000);
+    return () => clearInterval(handle);
+  }, [refreshLlmHealth]);
+
   const { getActiveVault } = useVaultStore();
   const activeVault = getActiveVault();
   const activeVaultId = useVaultStore((s) => s.activeVaultId);
@@ -669,6 +699,71 @@ export function Composer({ onSend, onStop, isStreaming, className, inputRef }: C
                 Generating…
               </span>
             )}
+
+            {/* Mode toggle (Instant / Thinking) */}
+            <div className="flex flex-col items-end gap-0.5">
+              <div
+                role="radiogroup"
+                aria-label="Chat mode"
+                className="flex h-8 items-center rounded-md border border-input text-xs overflow-hidden"
+              >
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={effectiveChatMode === "instant"}
+                  disabled={!instantHealthy || isStreaming}
+                  onClick={() => setStoredChatMode("instant")}
+                  title={
+                    !instantHealthy
+                      ? "Instant mode unavailable (LM Studio unreachable)"
+                      : isFallenBack && desiredChatMode === "thinking"
+                        ? "Instant — auto-selected because Thinking is unavailable"
+                        : "Instant — fast, lightweight model"
+                  }
+                  className={cn(
+                    "h-full px-3 transition-colors",
+                    effectiveChatMode === "instant"
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground hover:bg-accent",
+                    (!instantHealthy || isStreaming) && "opacity-50 cursor-not-allowed",
+                  )}
+                >
+                  Instant
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={effectiveChatMode === "thinking"}
+                  disabled={!thinkingHealthy || isStreaming}
+                  onClick={() => setStoredChatMode("thinking")}
+                  title={
+                    !thinkingHealthy
+                      ? "Thinking mode unavailable (backend unreachable)"
+                      : isFallenBack && desiredChatMode === "instant"
+                        ? "Thinking — auto-selected because Instant is unavailable"
+                        : "Thinking — full-quality model"
+                  }
+                  className={cn(
+                    "h-full px-3 border-l border-input transition-colors",
+                    effectiveChatMode === "thinking"
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground hover:bg-accent",
+                    (!thinkingHealthy || isStreaming) && "opacity-50 cursor-not-allowed",
+                  )}
+                >
+                  Thinking
+                </button>
+              </div>
+              {isFallenBack && (
+                <span
+                  role="status"
+                  aria-live="polite"
+                  className="text-[10px] text-amber-700 dark:text-amber-300"
+                >
+                  Using {effectiveChatMode} — {desiredChatMode} unavailable
+                </span>
+              )}
+            </div>
 
             {/* Send / Stop */}
             {isStreaming ? (

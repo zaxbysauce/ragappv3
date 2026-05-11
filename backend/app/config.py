@@ -33,6 +33,17 @@ class Settings(BaseSettings):
     embedding_model: str = "microsoft/harrier-oss-v1-0.6b"
     chat_model: str = "gemma-4-26b-a4b-it-apex"
 
+    # Instant mode (LM Studio on local GPU)
+    instant_chat_url: str = "http://host.docker.internal:1234"
+    instant_chat_model: str = "nvidia/nemotron-3-nano-4b"
+    default_chat_mode: str = "thinking"  # "instant" | "thinking"
+
+    # Per-mode retrieval overrides (Instant uses smaller budget)
+    instant_initial_retrieval_top_k: int = 10
+    instant_reranker_top_n: int = 4
+    instant_memory_context_top_k: int = 2
+    instant_max_tokens: int = 4096
+
     # Embedding dimension (auto-detected from model, but can be overridden)
     embedding_dim: int = 1024
 

@@ -76,6 +76,31 @@ export function ModelConnectionSettings({
           </div>
 
           <div className="space-y-2">
+            <Label htmlFor="instant_chat_url" className="text-sm font-medium">
+              Instant LLM Service URL
+            </Label>
+            <Input
+              id="instant_chat_url"
+              type="url"
+              placeholder="http://host.docker.internal:1234"
+              value={formData.instant_chat_url || ""}
+              onChange={(e) => onChange("instant_chat_url", e.target.value)}
+              aria-describedby="instant_chat_url-desc"
+              aria-invalid={!!errors.instant_chat_url}
+              className={errors.instant_chat_url ? "border-destructive" : ""}
+            />
+            {errors.instant_chat_url && (
+              <p className="text-xs text-destructive" role="alert">
+                {errors.instant_chat_url}
+              </p>
+            )}
+            <p id="instant_chat_url-desc" className="text-xs text-muted-foreground">
+              URL for the Instant chat backend (e.g., LM Studio on the host machine
+              listening on port 1234). Changes apply immediately.
+            </p>
+          </div>
+
+          <div className="space-y-2">
             <Label htmlFor="reranker_url" className="text-sm font-medium">
               Reranker Service URL
             </Label>
@@ -164,6 +189,76 @@ export function ModelConnectionSettings({
             )}
             <p id="chat_model-desc" className="text-xs text-muted-foreground">
               Model used for chat responses. Examples: llama3, mistral, openai/gpt-oss-20b
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="instant_chat_model" className="text-sm font-medium">
+              Instant Chat Model
+            </Label>
+            <Input
+              id="instant_chat_model"
+              type="text"
+              placeholder="nvidia/nemotron-3-nano-4b"
+              value={formData.instant_chat_model || ""}
+              onChange={(e) => onChange("instant_chat_model", e.target.value)}
+              aria-describedby="instant_chat_model-desc"
+              aria-invalid={!!errors.instant_chat_model}
+              className={errors.instant_chat_model ? "border-destructive" : ""}
+            />
+            {errors.instant_chat_model && (
+              <p className="text-xs text-destructive" role="alert">
+                {errors.instant_chat_model}
+              </p>
+            )}
+            <p id="instant_chat_model-desc" className="text-xs text-muted-foreground">
+              Small/fast model loaded in LM Studio for Instant mode. Changes apply
+              immediately.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="default_chat_mode" className="text-sm font-medium">
+              Default Chat Mode
+            </Label>
+            <div
+              id="default_chat_mode"
+              role="radiogroup"
+              aria-describedby="default_chat_mode-desc"
+              className="flex gap-2"
+            >
+              <button
+                type="button"
+                role="radio"
+                aria-checked={formData.default_chat_mode === "instant"}
+                onClick={() => onChange("default_chat_mode", "instant")}
+                className={
+                  "rounded-md border px-3 py-1.5 text-sm transition-colors " +
+                  (formData.default_chat_mode === "instant"
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-input bg-background text-foreground hover:bg-accent")
+                }
+              >
+                Instant
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={formData.default_chat_mode === "thinking"}
+                onClick={() => onChange("default_chat_mode", "thinking")}
+                className={
+                  "rounded-md border px-3 py-1.5 text-sm transition-colors " +
+                  (formData.default_chat_mode === "thinking"
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-input bg-background text-foreground hover:bg-accent")
+                }
+              >
+                Thinking
+              </button>
+            </div>
+            <p id="default_chat_mode-desc" className="text-xs text-muted-foreground">
+              Default mode for new chats. Users can still override per message
+              via the composer toggle.
             </p>
           </div>
 

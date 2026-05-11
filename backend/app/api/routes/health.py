@@ -42,6 +42,11 @@ async def health_check(
 
     if deep:
         llm_status = await llm_checker.check_all()
+        try:
+            llm_mode_status = await llm_checker.check_chat_modes()
+        except Exception as exc:
+            logger.debug("check_chat_modes unavailable: %s", exc)
+            llm_mode_status = {"thinking": False, "instant": False}
         models_status = await model_checker.check_models()
 
         # Probe vector store connectivity and embedding dimension consistency
@@ -85,6 +90,7 @@ async def health_check(
             vector_status = {"ok": False, "error": str(e)}
 
         result["llm"] = llm_status
+        result["llm_modes"] = llm_mode_status
         result["models"] = models_status
         result["vector_store"] = vector_status
         result["services"] = {
@@ -95,6 +101,18 @@ async def health_check(
         }
 
     return result
+
+
+@router.get("/llm-health/modes")
+async def llm_mode_health(
+    llm_checker: LLMHealthChecker = Depends(get_llm_health_checker),
+):
+    """Probe both Thinking and Instant LLM endpoints.
+
+    Returns ``{"thinking": bool, "instant": bool}``. Used by the chat
+    composer to enable/disable the per-message mode toggle.
+    """
+    return await llm_checker.check_chat_modes()
 
 
 @router.get("/healthz")

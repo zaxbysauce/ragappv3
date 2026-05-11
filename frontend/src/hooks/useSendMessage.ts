@@ -8,6 +8,10 @@ import {
   type WikiReference,
 } from "@/lib/api";
 import { useChatStore, type Message } from "@/stores/useChatStore";
+import { useChatModeStore } from "@/stores/useChatModeStore";
+import { useLlmHealthStore } from "@/stores/useLlmHealthStore";
+import { useSettingsStore } from "@/stores/useSettingsStore";
+import { computeEffectiveChatMode } from "@/lib/chatMode";
 import type { UsedMemory } from "@/lib/api";
 
 export const MAX_INPUT_LENGTH = 2000;
@@ -104,6 +108,18 @@ export function useSendMessage(
       // Accumulate wiki refs from the SSE stream so they can be persisted with the message.
       let streamedWikiRefs: WikiReference[] = [];
 
+      // Resolve effective chat mode using the same logic as the Composer
+      // toggle so the highlighted mode and the sent payload never diverge.
+      // Read .getState() (not hook subscriptions) to capture values at send
+      // time and avoid stale closures.
+      const health = useLlmHealthStore.getState();
+      const effectiveMode = computeEffectiveChatMode({
+        stored: useChatModeStore.getState().chatMode,
+        defaultMode: useSettingsStore.getState().formData.default_chat_mode,
+        thinkingHealthy: health.thinking,
+        instantHealthy: health.instant,
+      });
+
       const abort = chatStream(
         chatMessages,
         {
@@ -193,7 +209,8 @@ export function useSendMessage(
             }
           },
         },
-        activeVaultId ?? undefined
+        activeVaultId ?? undefined,
+        effectiveMode,
       );
 
       setAbortFn(abort);

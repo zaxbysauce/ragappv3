@@ -24,7 +24,9 @@ class LLMHealthChecker:
         self,
         timeout: float = 5.0,
         embedding_service: Optional[EmbeddingService] = None,
-        llm_client: Optional[LLMClient] = None
+        llm_client: Optional[LLMClient] = None,
+        thinking_client: Optional[LLMClient] = None,
+        instant_client: Optional[LLMClient] = None,
     ):
         """
         Initialize the health checker.
@@ -32,11 +34,16 @@ class LLMHealthChecker:
         Args:
             timeout: Request timeout in seconds for health checks (default: 5.0)
             embedding_service: Optional injected EmbeddingService instance
-            llm_client: Optional injected LLMClient instance
+            llm_client: Optional injected LLMClient instance (legacy single-client API)
+            thinking_client: Optional injected Thinking-mode LLMClient instance
+            instant_client: Optional injected Instant-mode LLMClient instance
         """
         self.timeout = timeout
         self._embedding_service = embedding_service
+        # Preserve legacy single-client API: `llm_client` alone targets Thinking.
         self._llm_client = llm_client
+        self._thinking_client = thinking_client or llm_client
+        self._instant_client = instant_client
 
     async def check_embeddings(self) -> Dict[str, Any]:
         """
@@ -110,6 +117,36 @@ class LLMHealthChecker:
             # Ensure locally created client is closed
             if created_locally and client is not None:
                 await client.close()
+
+    async def _probe_client(self, client: LLMClient) -> bool:
+        """Send a minimal ping through ``client`` and return True iff successful."""
+        try:
+            await client.chat_completion(
+                [{"role": "user", "content": "ping"}],
+                max_tokens=1,
+            )
+            return True
+        except Exception:
+            return False
+
+    async def check_chat_modes(self) -> Dict[str, bool]:
+        """Probe both the Thinking and Instant endpoints independently.
+
+        Returns:
+            ``{"thinking": bool, "instant": bool}``. A missing client is
+            reported as ``False`` so the frontend fails closed.
+        """
+        thinking_ok = (
+            await self._probe_client(self._thinking_client)
+            if self._thinking_client is not None
+            else False
+        )
+        instant_ok = (
+            await self._probe_client(self._instant_client)
+            if self._instant_client is not None
+            else False
+        )
+        return {"thinking": thinking_ok, "instant": instant_ok}
 
     async def check_all(self) -> Dict[str, Any]:
         """
