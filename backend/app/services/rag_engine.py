@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any, AsyncIterator, Dict, List, Optional, Set, Tuple
 
 from app.config import settings
+from app.models.chat_mode import ChatMode
 from app.services.citation_validator import (
     parse_citations,
     parse_wiki_citations,
@@ -219,7 +220,7 @@ class RAGEngine:
         chat_history: List[Dict[str, Any]],
         stream: bool = False,
         vault_id: Optional[int] = None,
-        mode: Optional["ChatMode"] = None,
+        mode: Optional[ChatMode] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """Execute a RAG query: embed, search, build prompt, call LLM."""
         logger.info(
