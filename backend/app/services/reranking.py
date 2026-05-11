@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
+from app.config import settings
 from app.services.circuit_breaker import CircuitBreakerError, reranking_cb
 
 logger = logging.getLogger(__name__)
@@ -62,11 +63,57 @@ class RerankingService:
     Returns the top_n highest-scoring chunks, ordered by relevance descending.
     """
 
-    def __init__(self, reranker_url: str, reranker_model: str, top_n: int = 5):
-        self.reranker_url = reranker_url.rstrip("/") if reranker_url else ""
-        self.reranker_model = reranker_model
-        self.top_n = top_n
+    # Sentinel marking "no explicit override given at construction".
+    # Distinct from ``None``/``""`` so callers can intentionally pass an empty
+    # string to mean "always local mode" if they ever want to.
+    _UNSET = object()
+
+    def __init__(
+        self,
+        reranker_url: Any = _UNSET,
+        reranker_model: Any = _UNSET,
+        top_n: Any = _UNSET,
+    ):
+        """Initialize the reranking service.
+
+        When no arguments are passed, URL/model/top_n are read live from
+        ``settings`` on every call so admins can change them via the Settings
+        UI without restarting. When arguments are passed (e.g. from tests),
+        those values become per-instance overrides that shadow the live read.
+        """
+        self._reranker_url_override = (
+            reranker_url.rstrip("/") if isinstance(reranker_url, str) and reranker_url
+            else "" if reranker_url == ""
+            else None if reranker_url is self._UNSET
+            else reranker_url
+        )
+        self._reranker_model_override = (
+            None if reranker_model is self._UNSET else reranker_model
+        )
+        self._top_n_override = None if top_n is self._UNSET else top_n
         self._http_client: Optional[httpx.AsyncClient] = None
+
+    @property
+    def reranker_url(self) -> str:
+        """Live read of the reranker URL (empty string → local mode)."""
+        if self._reranker_url_override is not None:
+            return self._reranker_url_override
+        url = settings.reranker_url
+        return url.rstrip("/") if url else ""
+
+    @property
+    def reranker_model(self) -> str:
+        """Live read of the reranker model name."""
+        if self._reranker_model_override is not None:
+            return self._reranker_model_override
+        return settings.reranker_model
+
+    @property
+    def top_n(self) -> int:
+        """Live read of the default top_n. Caller can still override per-call."""
+        if self._top_n_override is not None:
+            return self._top_n_override
+        return settings.reranker_top_n
 
     async def rerank(
         self,

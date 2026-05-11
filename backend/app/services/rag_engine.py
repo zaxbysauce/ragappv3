@@ -25,6 +25,12 @@ from app.services.retrieval_evaluator import RetrievalEvaluator
 from app.services.vector_store import VectorStore
 from app.utils.fusion import rrf_fuse
 
+# Sentinel marking "no per-instance override set" for live-settings properties.
+# Used so a value of ``None`` can be an intentional override (e.g. for
+# ``max_distance_threshold = None`` meaning "no threshold") rather than a
+# fallback to the live settings read.
+_UNSET = object()
+
 
 def _get_pool():
     """Deferred import to avoid circular dependency."""
@@ -148,38 +154,28 @@ class RAGEngine:
         if self.vector_store is None:
             self.vector_store = VectorStore()
 
-        # Use new character-based fields, with fallback to legacy fields for backward compatibility
-        self.chunk_size_chars = settings.chunk_size_chars
-        self.chunk_overlap_chars = settings.chunk_overlap_chars
-        self.retrieval_top_k = settings.retrieval_top_k
-        self.vector_metric = settings.vector_metric
-        self.max_distance_threshold = settings.max_distance_threshold
-        self.embedding_doc_prefix = settings.embedding_doc_prefix
-        self.embedding_query_prefix = settings.embedding_query_prefix
-        self.retrieval_window = settings.retrieval_window
+        # Retrieval/chunking/reranking/hybrid config is exposed via @property
+        # below — each reads ``settings.X`` live so admin Settings UI changes
+        # take effect on the next query without restarting. Per-instance
+        # assignment (e.g. ``engine.retrieval_top_k = 5`` in tests) sets an
+        # override that shadows the live read for that instance only.
 
-        # Reranking config
-        self.reranking_enabled = settings.reranking_enabled
-        self.reranker_top_n = settings.reranker_top_n
-        self.initial_retrieval_top_k = settings.initial_retrieval_top_k
-
-        # Hybrid search config
-        self.hybrid_search_enabled = settings.hybrid_search_enabled
-        self.hybrid_alpha = settings.hybrid_alpha
-
-        # Legacy field support (deprecated) - warn if different from canonical fields
-        self.relevance_threshold = settings.rag_relevance_threshold
-        self.top_k = settings.vector_top_k
-        if self.top_k is not None and self.top_k != self.retrieval_top_k:
+        # Legacy vector_top_k consistency warning (read live)
+        if (
+            settings.vector_top_k is not None
+            and settings.vector_top_k != settings.retrieval_top_k
+        ):
             logger.warning(
                 "vector_top_k (%s) is deprecated and differs from retrieval_top_k (%s). "
                 "Using retrieval_top_k. Please update your settings.",
-                self.top_k,
-                self.retrieval_top_k,
+                settings.vector_top_k,
+                settings.retrieval_top_k,
             )
-        self.maintenance_mode = settings.maintenance_mode
 
-        # Initialize extracted services (lazy initialization if not provided)
+        # Initialize extracted services (lazy initialization if not provided).
+        # DocumentRetrievalService receives current values at construction; the
+        # engine syncs live values back to it before each filter_relevant call
+        # (see ``_filter_relevant``).
         if document_retrieval_service:
             self.document_retrieval = document_retrieval_service
         else:
@@ -213,6 +209,152 @@ class RAGEngine:
     def instant_client(self) -> LLMClient:
         """LLM client for Instant mode. Falls back to ``self.llm_client`` when no explicit override was passed at construction."""
         return self._instant_client_override or self.llm_client
+
+    # ------------------------------------------------------------------
+    # Live settings properties
+    #
+    # Each property reads ``settings.X`` so admin Settings UI changes take
+    # effect on the next query without restart. Assigning via the setter
+    # (e.g. ``engine.retrieval_top_k = 5``) stores a per-instance override
+    # in ``__dict__`` that shadows the live read — used by tests and by any
+    # caller that wants to pin a value without mutating global settings.
+    # ------------------------------------------------------------------
+
+    def _live(self, key: str, setting_name: str) -> Any:
+        override = self.__dict__.get(key, _UNSET)
+        if override is _UNSET:
+            return getattr(settings, setting_name)
+        return override
+
+    @property
+    def chunk_size_chars(self) -> int:
+        return self._live("_chunk_size_chars", "chunk_size_chars")
+
+    @chunk_size_chars.setter
+    def chunk_size_chars(self, value: int) -> None:
+        self.__dict__["_chunk_size_chars"] = value
+
+    @property
+    def chunk_overlap_chars(self) -> int:
+        return self._live("_chunk_overlap_chars", "chunk_overlap_chars")
+
+    @chunk_overlap_chars.setter
+    def chunk_overlap_chars(self, value: int) -> None:
+        self.__dict__["_chunk_overlap_chars"] = value
+
+    @property
+    def retrieval_top_k(self) -> int:
+        return self._live("_retrieval_top_k", "retrieval_top_k")
+
+    @retrieval_top_k.setter
+    def retrieval_top_k(self, value: int) -> None:
+        self.__dict__["_retrieval_top_k"] = value
+
+    @property
+    def vector_metric(self) -> str:
+        return self._live("_vector_metric", "vector_metric")
+
+    @vector_metric.setter
+    def vector_metric(self, value: str) -> None:
+        self.__dict__["_vector_metric"] = value
+
+    @property
+    def max_distance_threshold(self) -> Optional[float]:
+        return self._live("_max_distance_threshold", "max_distance_threshold")
+
+    @max_distance_threshold.setter
+    def max_distance_threshold(self, value: Optional[float]) -> None:
+        self.__dict__["_max_distance_threshold"] = value
+
+    @property
+    def embedding_doc_prefix(self) -> str:
+        return self._live("_embedding_doc_prefix", "embedding_doc_prefix")
+
+    @embedding_doc_prefix.setter
+    def embedding_doc_prefix(self, value: str) -> None:
+        self.__dict__["_embedding_doc_prefix"] = value
+
+    @property
+    def embedding_query_prefix(self) -> str:
+        return self._live("_embedding_query_prefix", "embedding_query_prefix")
+
+    @embedding_query_prefix.setter
+    def embedding_query_prefix(self, value: str) -> None:
+        self.__dict__["_embedding_query_prefix"] = value
+
+    @property
+    def retrieval_window(self) -> int:
+        return self._live("_retrieval_window", "retrieval_window")
+
+    @retrieval_window.setter
+    def retrieval_window(self, value: int) -> None:
+        self.__dict__["_retrieval_window"] = value
+
+    @property
+    def reranking_enabled(self) -> bool:
+        return self._live("_reranking_enabled", "reranking_enabled")
+
+    @reranking_enabled.setter
+    def reranking_enabled(self, value: bool) -> None:
+        self.__dict__["_reranking_enabled"] = value
+
+    @property
+    def reranker_top_n(self) -> int:
+        return self._live("_reranker_top_n", "reranker_top_n")
+
+    @reranker_top_n.setter
+    def reranker_top_n(self, value: int) -> None:
+        self.__dict__["_reranker_top_n"] = value
+
+    @property
+    def initial_retrieval_top_k(self) -> int:
+        return self._live("_initial_retrieval_top_k", "initial_retrieval_top_k")
+
+    @initial_retrieval_top_k.setter
+    def initial_retrieval_top_k(self, value: int) -> None:
+        self.__dict__["_initial_retrieval_top_k"] = value
+
+    @property
+    def hybrid_search_enabled(self) -> bool:
+        return self._live("_hybrid_search_enabled", "hybrid_search_enabled")
+
+    @hybrid_search_enabled.setter
+    def hybrid_search_enabled(self, value: bool) -> None:
+        self.__dict__["_hybrid_search_enabled"] = value
+
+    @property
+    def hybrid_alpha(self) -> float:
+        return self._live("_hybrid_alpha", "hybrid_alpha")
+
+    @hybrid_alpha.setter
+    def hybrid_alpha(self, value: float) -> None:
+        self.__dict__["_hybrid_alpha"] = value
+
+    @property
+    def relevance_threshold(self) -> Optional[float]:
+        return self._live("_relevance_threshold", "rag_relevance_threshold")
+
+    @relevance_threshold.setter
+    def relevance_threshold(self, value: Optional[float]) -> None:
+        self.__dict__["_relevance_threshold"] = value
+
+    @property
+    def top_k(self) -> Optional[int]:
+        """Legacy/deprecated; reads ``settings.vector_top_k`` for back-compat."""
+        return self._live("_top_k", "vector_top_k")
+
+    @top_k.setter
+    def top_k(self, value: Optional[int]) -> None:
+        self.__dict__["_top_k"] = value
+
+    @property
+    def maintenance_mode(self) -> bool:
+        return self._live("_maintenance_mode", "maintenance_mode")
+
+    @maintenance_mode.setter
+    def maintenance_mode(self, value: bool) -> None:
+        self.__dict__["_maintenance_mode"] = value
+
 
     async def query(
         self,
@@ -466,7 +608,10 @@ class RAGEngine:
         trace.token_pack_skipped = token_pack_stats.get("token_pack_skipped", 0)
         trace.token_pack_truncated = token_pack_stats.get("token_pack_truncated", 0)
 
-        # Filter relevant chunks using document retrieval service
+        # Filter relevant chunks using document retrieval service.
+        # Push live settings to the service before each call so admin Settings
+        # UI changes (and per-instance test overrides) take effect immediately.
+        self._sync_document_retrieval_settings()
         relevant_chunks = await self.document_retrieval.filter_relevant(
             vector_results,
             reranked=rerank_success if rerank_success is not None else False,
@@ -1229,25 +1374,32 @@ class RAGEngine:
         if not hasattr(self, "prompt_builder") or self.prompt_builder is None:
             self.prompt_builder = PromptBuilderService()
 
+    def _sync_document_retrieval_settings(self) -> None:
+        """Push the engine's live settings into the DocumentRetrievalService.
+
+        Called before any ``filter_relevant`` invocation so the service uses
+        current values when settings have changed since construction (or when
+        a test pinned values via ``engine.X = Y`` per-instance overrides).
+        Without this sync, DocumentRetrievalService keeps the snapshot it
+        captured at construction time.
+        """
+        self._ensure_services()
+        self.document_retrieval.max_distance_threshold = self.max_distance_threshold
+        self.document_retrieval.relevance_threshold = self.relevance_threshold
+        self.document_retrieval.retrieval_top_k = self.retrieval_top_k
+        self.document_retrieval.retrieval_window = self.retrieval_window
+
     # Backward compatibility methods - delegate to document_retrieval service
     async def _filter_relevant(
         self, results: List[Dict[str, Any]], top_k: Optional[int] = None
     ) -> List[RAGSource]:
         """Filter retrieved documents by relevance (backward compatibility).
 
-        Syncs threshold settings from engine to document_retrieval service
-        to support tests that modify engine settings after initialization.
+        Syncs live settings from the engine to document_retrieval before each
+        call so admin Settings UI changes and per-instance test overrides take
+        effect without re-instantiating the service.
         """
-        self._ensure_services()
-        # Sync settings from engine to service
-        self.document_retrieval.max_distance_threshold = getattr(
-            self, "max_distance_threshold", None
-        )
-        self.document_retrieval.relevance_threshold = getattr(
-            self, "relevance_threshold", None
-        )
-        self.document_retrieval.retrieval_top_k = getattr(self, "retrieval_top_k", None)
-        self.document_retrieval.retrieval_window = getattr(self, "retrieval_window", 0)
+        self._sync_document_retrieval_settings()
         return await self.document_retrieval.filter_relevant(results, top_k)
 
     def _pack_context_by_token_budget(

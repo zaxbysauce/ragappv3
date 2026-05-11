@@ -503,6 +503,13 @@ class DocumentProcessor:
             contextual_chunker: Pre-configured ContextualChunker instance (optional)
         """
         self.parser = DocumentParser()
+        # Construction-time chunk params are retained only as a fallback for
+        # callers that bypass settings. The active chunker is rebuilt per
+        # document via ``_get_chunker()`` so admin Settings UI changes to
+        # chunk_size_chars / chunk_overlap_chars take effect immediately for
+        # the next ingested document without restart.
+        self._chunk_size_fallback = chunk_size_chars
+        self._chunk_overlap_fallback = chunk_overlap_chars
         self.chunker = SemanticChunker(
             chunk_size_chars=chunk_size_chars, chunk_overlap_chars=chunk_overlap_chars
         )
@@ -517,6 +524,29 @@ class DocumentProcessor:
         self._llm_client = llm_client
         self._contextual_chunker = contextual_chunker
         self._chunk_enrichment_service: Optional[ChunkEnrichmentService] = None
+
+    def _get_chunker(self) -> SemanticChunker:
+        """Return a chunker configured with the live settings values.
+
+        Reading ``settings.chunk_size_chars`` / ``settings.chunk_overlap_chars``
+        at call time lets admins change chunking via the Settings UI and have
+        the next ingested document use the new values without restarting.
+        Falls back to the values passed to ``__init__`` when settings are unset.
+        """
+        size = settings.chunk_size_chars or self._chunk_size_fallback
+        overlap = settings.chunk_overlap_chars or self._chunk_overlap_fallback
+        # Reuse the cached chunker if it already matches; rebuild when settings change.
+        existing = getattr(self, "chunker", None)
+        if (
+            existing is not None
+            and getattr(existing, "chunk_size", None) == size
+            and getattr(existing, "chunk_overlap", None) == overlap
+        ):
+            return existing
+        self.chunker = SemanticChunker(
+            chunk_size_chars=size, chunk_overlap_chars=overlap
+        )
+        return self.chunker
 
     def _get_contextual_chunker(self) -> Optional[ContextualChunker]:
         """
@@ -986,8 +1016,10 @@ class DocumentProcessor:
 
             return all_chunks, document_text
         else:
-            # Existing single-scale behavior
-            chunks = await asyncio.to_thread(self.chunker.chunk_elements, elements)
+            # Existing single-scale behavior — use the live-settings chunker so
+            # chunk_size_chars / chunk_overlap_chars changes apply per-document.
+            active_chunker = self._get_chunker()
+            chunks = await asyncio.to_thread(active_chunker.chunk_elements, elements)
             return chunks, document_text
 
     async def process_file(
