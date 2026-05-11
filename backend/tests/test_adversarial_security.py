@@ -306,8 +306,10 @@ class TestEmbeddingsAdversarial:
         sql_injection_text = "'; DROP TABLE users; --"
         # Should not execute SQL, should treat as plain text
         with patch.object(service._client, 'post', new_callable=AsyncMock) as mock_post:
-            mock_post.return_value.status_code = 200
-            mock_post.return_value.json.return_value = {"embedding": [0.1, 0.2, 0.3]}
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {"embedding": [0.1, 0.2, 0.3]}
+            mock_post.return_value = mock_response
 
             try:
                 await service.embed_single(sql_injection_text)
@@ -327,8 +329,10 @@ class TestEmbeddingsAdversarial:
 
         xss_text = "<script>alert('xss')</script>"
         with patch.object(service._client, 'post', new_callable=AsyncMock) as mock_post:
-            mock_post.return_value.status_code = 200
-            mock_post.return_value.json.return_value = {"embedding": [0.1, 0.2, 0.3]}
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {"embedding": [0.1, 0.2, 0.3]}
+            mock_post.return_value = mock_response
 
             await service.embed_single(xss_text)
             # XSS should be preserved as text, not executed
@@ -361,15 +365,26 @@ class TestEmbeddingsAdversarial:
         # Create batch larger than MAX_BATCH_SIZE
         texts = ["test"] * (service.MAX_BATCH_SIZE + 100)
         with patch.object(service._client, 'post', new_callable=AsyncMock) as mock_post:
-            mock_post.return_value.status_code = 200
-            mock_post.return_value.json.return_value = {
-                "data": [{"embedding": [0.1, 0.2]}] * len(texts)
-            }
+            # Mock should return different responses for each batch call
+            # First call: 512 embeddings, second call: 100 embeddings
+            def create_response(batch_size):
+                mock_response = MagicMock()
+                mock_response.status_code = 200
+                mock_response.json.return_value = {
+                    "embeddings": [[0.1, 0.2]] * batch_size
+                }
+                return mock_response
+
+            # Use side_effect to return different responses for each call
+            mock_post.side_effect = [
+                create_response(512),  # First batch
+                create_response(100),  # Second batch
+            ]
 
             # Should process in chunks, not fail
             await service.embed_batch(texts)
             # Verify multiple calls were made due to batch size limit
-            assert mock_post.call_count > 1
+            assert mock_post.call_count == 2
 
     @pytest.mark.asyncio
     async def test_embed_batch_with_negative_batch_size(self, mock_settings):
@@ -377,12 +392,21 @@ class TestEmbeddingsAdversarial:
         service = EmbeddingService()
 
         texts = ["test1", "test2"]
-        # Negative batch_size should be clamped to valid range
+        # Negative batch_size should be clamped to valid range (1)
         with patch.object(service._client, 'post', new_callable=AsyncMock) as mock_post:
-            mock_post.return_value.status_code = 200
-            mock_post.return_value.json.return_value = {
-                "data": [{"embedding": [0.1, 0.2]}, {"embedding": [0.3, 0.4]}]
-            }
+            # With batch_size=1 and 2 texts, expect 2 calls with 1 embedding each
+            def create_response(batch_size):
+                mock_response = MagicMock()
+                mock_response.status_code = 200
+                mock_response.json.return_value = {
+                    "embeddings": [[0.1, 0.2]] * batch_size
+                }
+                return mock_response
+
+            mock_post.side_effect = [
+                create_response(1),  # First batch
+                create_response(1),  # Second batch
+            ]
 
             result = await service.embed_batch(texts, batch_size=-10)
             # Should handle gracefully (clamped to 1)
@@ -394,12 +418,21 @@ class TestEmbeddingsAdversarial:
         service = EmbeddingService()
 
         texts = ["test1", "test2"]
-        # Zero batch_size should be clamped to valid range
+        # Zero batch_size should be clamped to valid range (1)
         with patch.object(service._client, 'post', new_callable=AsyncMock) as mock_post:
-            mock_post.return_value.status_code = 200
-            mock_post.return_value.json.return_value = {
-                "data": [{"embedding": [0.1, 0.2]}, {"embedding": [0.3, 0.4]}]
-            }
+            # With batch_size=1 and 2 texts, expect 2 calls with 1 embedding each
+            def create_response(batch_size):
+                mock_response = MagicMock()
+                mock_response.status_code = 200
+                mock_response.json.return_value = {
+                    "embeddings": [[0.1, 0.2]] * batch_size
+                }
+                return mock_response
+
+            mock_post.side_effect = [
+                create_response(1),  # First batch
+                create_response(1),  # Second batch
+            ]
 
             result = await service.embed_batch(texts, batch_size=0)
             # Should handle gracefully (clamped to 1)
@@ -412,8 +445,10 @@ class TestEmbeddingsAdversarial:
 
         with patch.object(service._client, 'post', new_callable=AsyncMock) as mock_post:
             # Response with missing embedding field
-            mock_post.return_value.status_code = 200
-            mock_post.return_value.json.return_value = {"data": [{"invalid": "response"}]}
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {"data": [{"invalid": "response"}]}
+            mock_post.return_value = mock_response
 
             with pytest.raises(EmbeddingError):
                 await service.embed_single("test")
@@ -424,9 +459,11 @@ class TestEmbeddingsAdversarial:
         service = EmbeddingService()
 
         with patch.object(service._client, 'post', new_callable=AsyncMock) as mock_post:
-            mock_post.return_value.status_code = 200
-            mock_post.return_value.json.side_effect = json.JSONDecodeError("test", "", 0)
-            mock_post.return_value.text = "<html><body>Access Denied</body></html>"
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.side_effect = json.JSONDecodeError("test", "", 0)
+            mock_response.text = "<html><body>Access Denied</body></html>"
+            mock_post.return_value = mock_response
 
             with pytest.raises(EmbeddingError, match="Invalid response"):
                 await service.embed_single("test")
@@ -437,12 +474,14 @@ class TestEmbeddingsAdversarial:
         service = EmbeddingService()
 
         with patch.object(service._client, 'post', new_callable=AsyncMock) as mock_post:
-            mock_post.return_value.status_code = 200
+            mock_response = MagicMock()
+            mock_response.status_code = 200
             # Create a deeply nested structure
             nested = {"embedding": [0.1]}
             for _ in range(1000):
                 nested = {"embedding": nested}
-            mock_post.return_value.json.return_value = {"data": [nested]}
+            mock_response.json.return_value = {"data": [nested]}
+            mock_post.return_value = mock_response
 
             with pytest.raises(EmbeddingError):
                 await service.embed_single("test")
