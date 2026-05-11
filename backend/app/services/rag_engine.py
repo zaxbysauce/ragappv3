@@ -355,6 +355,7 @@ class RAGEngine:
     def maintenance_mode(self, value: bool) -> None:
         self.__dict__["_maintenance_mode"] = value
 
+
     async def query(
         self,
         user_input: str,
