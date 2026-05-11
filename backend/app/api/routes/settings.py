@@ -213,7 +213,7 @@ class SettingsUpdate(BaseModel):
             raise ValueError("hybrid_alpha must be between 0 and 1")
         return v
 
-    @field_validator("ollama_embedding_url", "ollama_chat_url", mode="before")
+    @field_validator("ollama_embedding_url", "ollama_chat_url", "instant_chat_url", mode="before")
     @classmethod
     def validate_ollama_url(cls, v):
         if v is None:
@@ -227,7 +227,7 @@ class SettingsUpdate(BaseModel):
             raise ValueError("URL must not contain credentials (@)")
         return v
 
-    @field_validator("embedding_model", "chat_model", mode="before")
+    @field_validator("embedding_model", "chat_model", "instant_chat_model", mode="before")
     @classmethod
     def validate_model_name(cls, v):
         if v is None:

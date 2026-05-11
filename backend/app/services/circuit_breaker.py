@@ -125,6 +125,19 @@ class AsyncCircuitBreaker:
             self.name,
         )
 
+    def reset(self) -> None:
+        """Force the circuit breaker back to a clean CLOSED state.
+
+        Intended for use when the underlying endpoint or model is reconfigured
+        so a previously opened breaker does not block requests to the new target.
+        Caller is responsible for ensuring no concurrent requests are in flight.
+        """
+        self._state = CircuitBreakerState.CLOSED
+        self._fail_counter = 0
+        self._success_counter = 0
+        self._last_failure_time = None
+        logger.info("Circuit breaker '%s' reset to CLOSED", self.name)
+
     def _check_timeout(self) -> None:
         """Check if the reset timeout has expired and transition to half-open."""
         if self._state == CircuitBreakerState.OPEN:

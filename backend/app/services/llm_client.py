@@ -73,11 +73,22 @@ class LLMClient:
         in-place updates take effect immediately without recreating the
         httpx pool or invalidating any stored references held by callers
         (LLMHealthChecker, background_processor, keepalive tasks, RAGEngine).
+
+        Resets the circuit breaker on any change so a previously opened
+        breaker from a now-unreachable endpoint does not block requests to
+        the newly configured target.
         """
+        changed = False
         if base_url is not None:
-            self.base_url = base_url.rstrip("/")
-        if model is not None:
+            new_base_url = base_url.rstrip("/")
+            if new_base_url != self.base_url:
+                self.base_url = new_base_url
+                changed = True
+        if model is not None and model != self.model:
             self.model = model
+            changed = True
+        if changed:
+            self._circuit_breaker.reset()
 
     async def start(self):
         """Start the HTTP client. Must be called before using the client."""
