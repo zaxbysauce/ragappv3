@@ -51,6 +51,8 @@ import { OverviewTab } from "@/components/settings/OverviewTab";
 import { WikiCuratorSettings } from "@/components/settings/WikiCuratorSettings";
 import { MaintenanceSettings } from "@/components/settings/MaintenanceSettings";
 import { SaveDiscardFooter } from "@/components/settings/SaveDiscardFooter";
+import { ReindexConfirmDialog } from "@/components/settings/ReindexConfirmDialog";
+import { REINDEX_REQUIRED_FIELDS } from "@/stores/useSettingsStore";
 import { useVaultStore } from "@/stores/useVaultStore";
 
 function pickDirtyPayload(
@@ -96,11 +98,11 @@ function SettingsPageContent({
     discard,
     dirtyFields,
     dirtyByTab,
-    checkReindexRequired,
   } = useSettingsStore();
 
   const activeVaultId = useVaultStore((s) => s.activeVaultId);
   const [activeTab, setActiveTab] = useState<SettingsTab>("overview");
+  const [reindexDialogOpen, setReindexDialogOpen] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -143,12 +145,17 @@ function SettingsPageContent({
     handleSettingsInputChange(field, value, updateFormField);
   };
 
-  const handleSave = async () => {
-    if (!validateForm()) {
-      toast.error("Please fix the highlighted errors before saving.");
-      return;
-    }
-    const willRequireReindex = checkReindexRequired();
+  // Fields that are both dirty AND in the re-index-required set. Listed in
+  // the confirmation dialog so the user sees exactly what triggered it.
+  const dirtyReindexFields = useMemo(
+    () =>
+      Array.from(dirtySet).filter((f) =>
+        REINDEX_REQUIRED_FIELDS.has(f),
+      ) as string[],
+    [dirtySet],
+  );
+
+  const persistSave = async () => {
     setSaving(true);
     setError(null);
     try {
@@ -158,7 +165,7 @@ function SettingsPageContent({
       // Re-initialize so the snapshot reflects the new persisted state
       // and dirtyFields drops to zero.
       initializeForm(updated);
-      if (willRequireReindex) {
+      if (dirtyReindexFields.length > 0) {
         setReindexRequired(true);
         toast.warning(
           "Settings saved. Existing document embeddings are stale — reindex required.",
@@ -172,7 +179,22 @@ function SettingsPageContent({
       toast.error(msg);
     } finally {
       setSaving(false);
+      setReindexDialogOpen(false);
     }
+  };
+
+  const handleSave = async () => {
+    if (!validateForm()) {
+      toast.error("Please fix the highlighted errors before saving.");
+      return;
+    }
+    // If any re-index-required field is dirty, gate the save behind an
+    // explicit confirmation so the consequence is acknowledged.
+    if (dirtyReindexFields.length > 0) {
+      setReindexDialogOpen(true);
+      return;
+    }
+    await persistSave();
   };
 
   const handleDiscard = () => {
@@ -335,6 +357,16 @@ function SettingsPageContent({
         saving={saving}
         onSave={handleSave}
         onDiscard={handleDiscard}
+      />
+
+      <ReindexConfirmDialog
+        open={reindexDialogOpen}
+        onOpenChange={(open) => {
+          if (!saving) setReindexDialogOpen(open);
+        }}
+        dirtyReindexFields={dirtyReindexFields}
+        onConfirm={persistSave}
+        saving={saving}
       />
     </>
   );

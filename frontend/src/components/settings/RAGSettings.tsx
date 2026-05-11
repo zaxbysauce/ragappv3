@@ -4,6 +4,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { SettingsFormData, SettingsErrors } from "@/stores/useSettingsStore";
+import { ReindexFieldWarning } from "./ReindexFieldWarning";
 
 interface RAGSettingsProps {
   formData: SettingsFormData;
@@ -98,6 +99,7 @@ export function RAGSettings({
             <p className="text-xs text-muted-foreground">
               Distance metric used for vector similarity search
             </p>
+            <ReindexFieldWarning />
           </div>
 
           {/* Embedding Batch Size */}
@@ -145,6 +147,7 @@ export function RAGSettings({
             <p className="text-xs text-muted-foreground">
               Prefix added to document chunks before embedding (default: &quot;Passage: &quot;)
             </p>
+            <ReindexFieldWarning />
           </div>
 
           <div className="space-y-2">
@@ -162,6 +165,7 @@ export function RAGSettings({
             <p className="text-xs text-muted-foreground">
               Prefix added to queries before embedding (default: &quot;Query: &quot;)
             </p>
+            <ReindexFieldWarning />
           </div>
         </CardContent>
       </Card>

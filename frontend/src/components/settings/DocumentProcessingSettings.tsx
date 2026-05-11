@@ -3,6 +3,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import type { SettingsFormData, SettingsErrors } from "@/stores/useSettingsStore";
+import { ReindexFieldWarning } from "./ReindexFieldWarning";
 
 interface DocumentProcessingSettingsProps {
   formData: SettingsFormData;
@@ -39,6 +40,7 @@ export function DocumentProcessingSettings({
           <p className="text-xs text-muted-foreground">
             Number of characters per document chunk
           </p>
+          <ReindexFieldWarning />
         </div>
 
         {/* Chunk Overlap */}
@@ -58,6 +60,7 @@ export function DocumentProcessingSettings({
           <p className="text-xs text-muted-foreground">
             Number of overlapping characters between chunks (must be less than chunk size)
           </p>
+          <ReindexFieldWarning />
         </div>
 
         {/* Retrieval Top-K */}

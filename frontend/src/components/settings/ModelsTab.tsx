@@ -21,7 +21,12 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import type { SettingsErrors, SettingsFormData } from "@/stores/useSettingsStore";
+import {
+  REINDEX_REQUIRED_FIELDS,
+  type SettingsErrors,
+  type SettingsFormData,
+} from "@/stores/useSettingsStore";
+import { ReindexFieldWarning } from "./ReindexFieldWarning";
 
 export interface ModelsTabProps {
   formData: SettingsFormData;
@@ -104,6 +109,7 @@ function StringField({
         </p>
       )}
       <p className="text-xs text-muted-foreground">{description}</p>
+      {REINDEX_REQUIRED_FIELDS.has(field) && <ReindexFieldWarning />}
     </div>
   );
 }
