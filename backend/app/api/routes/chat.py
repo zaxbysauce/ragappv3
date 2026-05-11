@@ -23,9 +23,9 @@ from app.api.deps import (
     get_user_accessible_vault_ids,
 )
 from app.config import settings
+from app.models.chat_mode import ChatMode
 from app.models.database import get_pool
 from app.services.citation_validator import repair_against_sources_and_memories
-from app.models.chat_mode import ChatMode
 from app.services.rag_engine import RAGEngine, RAGEngineError
 from app.services.wiki_citation_helpers import (
     build_per_claim_sources as _build_per_claim_sources_impl,

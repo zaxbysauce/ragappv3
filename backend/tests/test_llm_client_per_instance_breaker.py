@@ -15,7 +15,11 @@ import asyncio
 import pytest
 
 from app.services.circuit_breaker import AsyncCircuitBreaker, CircuitBreakerState
-from app.services.llm_client import LLMClient, create_instant_client, create_thinking_client
+from app.services.llm_client import (
+    LLMClient,
+    create_instant_client,
+    create_thinking_client,
+)
 
 
 def test_per_instance_circuit_breaker_distinct_objects():
