@@ -24,8 +24,15 @@ function baseSettings(): SettingsResponse {
     data_dir: "/tmp/data",
     ollama_embedding_url: "http://localhost:11434",
     ollama_chat_url: "http://localhost:11434",
+    instant_chat_url: "http://localhost:1234",
     embedding_model: "harrier",
     chat_model: "llama3",
+    instant_chat_model: "tinyllm",
+    default_chat_mode: "thinking",
+    instant_initial_retrieval_top_k: 10,
+    instant_reranker_top_n: 4,
+    instant_memory_context_top_k: 2,
+    instant_max_tokens: 4096,
     chunk_size_chars: 2000,
     chunk_overlap_chars: 200,
     retrieval_top_k: 5,
@@ -65,7 +72,7 @@ function baseSettings(): SettingsResponse {
     wiki_llm_curator_run_on_ingest: true,
     wiki_llm_curator_run_on_query: false,
     wiki_llm_curator_run_on_manual: true,
-    effective_sources: { ollama_chat_url: "kv" },
+    effective_sources: { ollama_chat_url: "kv", instant_chat_model: "env" },
     max_file_size_mb: 100,
     allowed_extensions: [".pdf", ".txt"],
     backend_cors_origins: ["http://localhost:3000"],
@@ -106,6 +113,23 @@ describe("useSettingsStore (PR B)", () => {
     expect(tabs.documents).toBe(0);
     expect(tabs.maintenance).toBe(0);
     expect(tabs.overview).toBe(0);
+  });
+
+  it("tracks instant model settings as model-tab changes", () => {
+    useSettingsStore.getState().initializeForm(baseSettings());
+    useSettingsStore
+      .getState()
+      .updateFormField("instant_chat_model", "faster-model");
+    useSettingsStore.getState().updateFormField("default_chat_mode", "instant");
+    useSettingsStore
+      .getState()
+      .updateFormField("instant_initial_retrieval_top_k", 8);
+    const dirty = useSettingsStore.getState().dirtyFields();
+    expect(dirty.has("instant_chat_model")).toBe(true);
+    expect(dirty.has("default_chat_mode")).toBe(true);
+    expect(dirty.has("instant_initial_retrieval_top_k")).toBe(true);
+    expect(useSettingsStore.getState().dirtyByTab().models).toBe(3);
+    expect(useSettingsStore.getState().dirtyByTab().retrieval).toBe(0);
   });
 
   it("discard restores the snapshot and clears dirty + errors", () => {
@@ -181,6 +205,23 @@ describe("useSettingsStore (PR B)", () => {
     expect(
       useSettingsStore.getState().errors.wiki_llm_curator_mode,
     ).toBeTruthy();
+  });
+
+  it("validateForm rejects invalid instant model settings", () => {
+    useSettingsStore.getState().initializeForm(baseSettings());
+    useSettingsStore.getState().updateFormField("instant_chat_url", "localhost:1234");
+    useSettingsStore.getState().updateFormField("instant_chat_model", "");
+    useSettingsStore
+      .getState()
+      .updateFormField("default_chat_mode", "turbo" as never);
+    useSettingsStore.getState().updateFormField("instant_max_tokens", 1.5);
+    const ok = useSettingsStore.getState().validateForm();
+    expect(ok).toBe(false);
+    const errs = useSettingsStore.getState().errors;
+    expect(errs.instant_chat_url).toBeTruthy();
+    expect(errs.instant_chat_model).toBeTruthy();
+    expect(errs.default_chat_mode).toBeTruthy();
+    expect(errs.instant_max_tokens).toBeTruthy();
   });
 
   it("save snapshot resync via initializeForm zeroes dirty after persist round-trip", () => {

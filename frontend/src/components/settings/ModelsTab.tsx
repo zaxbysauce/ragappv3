@@ -21,6 +21,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 import {
   REINDEX_REQUIRED_FIELDS,
   type SettingsErrors,
@@ -114,6 +115,123 @@ function StringField({
   );
 }
 
+interface NumberFieldProps {
+  field: keyof SettingsFormData;
+  label: string;
+  description: string;
+  min?: number;
+  max?: number;
+  formData: SettingsFormData;
+  errors: SettingsErrors;
+  onChange: ModelsTabProps["onChange"];
+  source?: "kv" | "env" | "default";
+}
+
+function NumberField({
+  field,
+  label,
+  description,
+  min,
+  max,
+  formData,
+  errors,
+  onChange,
+  source,
+}: NumberFieldProps) {
+  const value =
+    (formData as unknown as Record<string, number>)[field as string] ?? "";
+  const err = (errors as Record<string, string | undefined>)[field as string];
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <Label htmlFor={String(field)} className="text-sm font-medium">
+          {label}
+        </Label>
+        <SourceBadge source={source} />
+      </div>
+      <Input
+        id={String(field)}
+        type="number"
+        min={min}
+        max={max}
+        step={1}
+        value={value}
+        onChange={(e) =>
+          onChange(field, Number(e.target.value) as SettingsFormData[typeof field])
+        }
+        aria-invalid={err ? true : undefined}
+        className={err ? "border-destructive" : undefined}
+      />
+      {err && (
+        <p className="text-xs text-destructive" role="alert">
+          {err}
+        </p>
+      )}
+      <p className="text-xs text-muted-foreground">{description}</p>
+    </div>
+  );
+}
+
+function DefaultModeField({
+  formData,
+  errors,
+  onChange,
+  source,
+}: {
+  formData: SettingsFormData;
+  errors: SettingsErrors;
+  onChange: ModelsTabProps["onChange"];
+  source?: "kv" | "env" | "default";
+}) {
+  const err = errors.default_chat_mode;
+  const modes: Array<{ value: "instant" | "thinking"; label: string }> = [
+    { value: "thinking", label: "Thinking" },
+    { value: "instant", label: "Instant" },
+  ];
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <Label htmlFor="default_chat_mode" className="text-sm font-medium">
+          Default chat mode
+        </Label>
+        <SourceBadge source={source} />
+      </div>
+      <div
+        id="default_chat_mode"
+        role="radiogroup"
+        aria-describedby="default_chat_mode-desc"
+        className="inline-grid grid-cols-2 rounded-md border border-input bg-background p-1"
+      >
+        {modes.map((mode) => (
+          <button
+            key={mode.value}
+            type="button"
+            role="radio"
+            aria-checked={formData.default_chat_mode === mode.value}
+            onClick={() => onChange("default_chat_mode", mode.value)}
+            className={cn(
+              "rounded-sm px-3 py-1.5 text-sm font-medium transition-colors",
+              formData.default_chat_mode === mode.value
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:bg-accent hover:text-foreground",
+            )}
+          >
+            {mode.label}
+          </button>
+        ))}
+      </div>
+      {err && (
+        <p className="text-xs text-destructive" role="alert">
+          {err}
+        </p>
+      )}
+      <p id="default_chat_mode-desc" className="text-xs text-muted-foreground">
+        New chats use this mode unless the composer mode picker is pinned.
+      </p>
+    </div>
+  );
+}
+
 export function ModelsTab({
   formData,
   errors,
@@ -145,14 +263,25 @@ export function ModelsTab({
           />
           <StringField
             field="ollama_chat_url"
-            label="Chat / LLM service URL"
+            label="Thinking chat service URL"
             placeholder="http://localhost:11434"
-            description="Chat model endpoint. For Docker, use http://host.docker.internal:11434 to reach a host Ollama."
+            description="Endpoint for the larger Thinking chat model. For Docker, use http://host.docker.internal:11434 to reach a host Ollama."
             type="url"
             formData={formData}
             errors={errors}
             onChange={onChange}
             source={effectiveSources.ollama_chat_url}
+          />
+          <StringField
+            field="instant_chat_url"
+            label="Instant chat service URL"
+            placeholder="http://host.docker.internal:1234"
+            description="Endpoint for the smaller/faster Instant chat model, such as LM Studio on the host."
+            type="url"
+            formData={formData}
+            errors={errors}
+            onChange={onChange}
+            source={effectiveSources.instant_chat_url}
           />
           <StringField
             field="reranker_url"
@@ -187,13 +316,29 @@ export function ModelsTab({
           />
           <StringField
             field="chat_model"
-            label="Chat model"
-            placeholder="llama3"
-            description="Used for chat responses."
+            label="Thinking chat model"
+            placeholder="gemma-4-26b-a4b-it-apex"
+            description="Larger model used for Thinking mode responses."
             formData={formData}
             errors={errors}
             onChange={onChange}
             source={effectiveSources.chat_model}
+          />
+          <StringField
+            field="instant_chat_model"
+            label="Instant chat model"
+            placeholder="nvidia/nemotron-3-nano-4b"
+            description="Smaller/faster model used for Instant mode responses."
+            formData={formData}
+            errors={errors}
+            onChange={onChange}
+            source={effectiveSources.instant_chat_model}
+          />
+          <DefaultModeField
+            formData={formData}
+            errors={errors}
+            onChange={onChange}
+            source={effectiveSources.default_chat_mode}
           />
           <StringField
             field="reranker_model"
@@ -204,6 +349,56 @@ export function ModelsTab({
             errors={errors}
             onChange={onChange}
             source={effectiveSources.reranker_model}
+          />
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>Instant mode tuning</CardTitle>
+          <CardDescription>
+            Smaller retrieval and output budgets keep Instant mode responsive.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-6 md:grid-cols-2">
+          <NumberField
+            field="instant_initial_retrieval_top_k"
+            label="Initial retrieval top-k"
+            description="Number of candidates retrieved before instant-mode reranking."
+            min={1}
+            formData={formData}
+            errors={errors}
+            onChange={onChange}
+            source={effectiveSources.instant_initial_retrieval_top_k}
+          />
+          <NumberField
+            field="instant_reranker_top_n"
+            label="Reranker top-n"
+            description="Number of reranked documents kept for Instant mode."
+            min={1}
+            formData={formData}
+            errors={errors}
+            onChange={onChange}
+            source={effectiveSources.instant_reranker_top_n}
+          />
+          <NumberField
+            field="instant_memory_context_top_k"
+            label="Memory context top-k"
+            description="Number of memories included in Instant mode context."
+            min={1}
+            formData={formData}
+            errors={errors}
+            onChange={onChange}
+            source={effectiveSources.instant_memory_context_top_k}
+          />
+          <NumberField
+            field="instant_max_tokens"
+            label="Max output tokens"
+            description="Maximum completion size for Instant mode."
+            min={1}
+            formData={formData}
+            errors={errors}
+            onChange={onChange}
+            source={effectiveSources.instant_max_tokens}
           />
         </CardContent>
       </Card>
