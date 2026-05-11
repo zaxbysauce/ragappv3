@@ -13,7 +13,6 @@ from app.services.document_processor import DocumentProcessor
 from app.services.embeddings import EmbeddingService
 from app.services.reranking import RerankingService
 
-
 # ---------------------------------------------------------------------------
 # EmbeddingService
 # ---------------------------------------------------------------------------
