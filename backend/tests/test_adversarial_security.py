@@ -211,7 +211,8 @@ class TestEmbeddingsAdversarial:
         """Attack: Empty URL should raise error."""
         mock_settings.ollama_embedding_url = ""
 
-        from app.services.embeddings import EmbeddingService as EmbeddingService_Fresh, EmbeddingError
+        from app.services.embeddings import EmbeddingError
+        from app.services.embeddings import EmbeddingService as EmbeddingService_Fresh
         emb_mod, original_settings = self._apply_mock_settings(mock_settings)
 
         try:
