@@ -394,7 +394,7 @@ function OrgsPageContent() {
                         {ROLE_OPTIONS.map((opt) => (<option key={opt.value} value={opt.value}>{opt.label}</option>))}
                       </select>
                     </div>
-                    <Button type="submit" disabled={addingMember && orgForMemberAction === org.id || !selectedUser}>
+                    <Button type="submit" disabled={(addingMember && orgForMemberAction === org.id) || !selectedUser}>
                       {addingMember && orgForMemberAction === org.id ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <UserPlus className="w-4 h-4 mr-2" />}
                       Add
                     </Button>
