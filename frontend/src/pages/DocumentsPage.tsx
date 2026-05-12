@@ -100,7 +100,20 @@ export default function DocumentsPage() {
 
   // Global upload store
   const { uploads, addUploads, cancelUpload, removeUpload, clearCompleted, retryUpload } = useUploadStore();
-  const { activeVaultId } = useVaultStore();
+  const { vaults, activeVaultId } = useVaultStore();
+  const activeVault = vaults.find((vault) => vault.id === activeVaultId);
+  const activeVaultPermission = activeVault?.current_user_permission ?? null;
+  const canWriteActiveVault =
+    activeVaultPermission === "write" || activeVaultPermission === "admin";
+  const canAdminActiveVault = activeVaultPermission === "admin";
+  const hasSelectedVault = activeVaultId != null && activeVault != null;
+  const canMutateDocuments = hasSelectedVault && canAdminActiveVault;
+
+  useEffect(() => {
+    if (!canMutateDocuments) {
+      setSelectedIds(new Set());
+    }
+  }, [canMutateDocuments]);
 
   const fetchDocuments = useCallback(async (search?: string) => {
     try {
@@ -241,15 +254,17 @@ export default function DocumentsPage() {
 
   // Bulk selection handlers
   const handleSelectAll = useCallback((checked: boolean | 'indeterminate') => {
+    if (!canMutateDocuments) return;
     if (checked) {
       const allIds = new Set(documents?.map((doc) => String(doc.id)) ?? []);
       setSelectedIds(allIds);
     } else {
       setSelectedIds(new Set());
     }
-  }, [documents]);
+  }, [canMutateDocuments, documents]);
 
   const handleSelectOne = useCallback((docId: string, checked: boolean) => {
+    if (!canMutateDocuments) return;
     setSelectedIds(prev => {
       const newSet = new Set(prev);
       if (checked) {
@@ -259,9 +274,13 @@ export default function DocumentsPage() {
       }
       return newSet;
     });
-  }, []);
+  }, [canMutateDocuments]);
 
   const executeBulkDelete = useCallback(async () => {
+    if (!canMutateDocuments) {
+      toast.error("Select a vault you administer before deleting documents");
+      return;
+    }
     setIsBulkDeleting(true);
     try {
       const result = await deleteDocuments(Array.from(selectedIds));
@@ -279,7 +298,7 @@ export default function DocumentsPage() {
     } finally {
       setIsBulkDeleting(false);
     }
-  }, [selectedIds]);
+  }, [canMutateDocuments, selectedIds]);
 
   const handleBulkDelete = useCallback(() => {
     if (selectedIds.size === 0) return;
@@ -293,7 +312,7 @@ export default function DocumentsPage() {
   }, [selectedIds, executeBulkDelete]);
 
   const executeDeleteAllInVault = useCallback(async () => {
-    if (!activeVaultId) return;
+    if (!activeVaultId || !canMutateDocuments) return;
     setIsBulkDeletingAll(true);
     try {
       const result = await deleteAllDocumentsInVault(activeVaultId);
@@ -307,12 +326,12 @@ export default function DocumentsPage() {
     } finally {
       setIsBulkDeletingAll(false);
     }
-  }, [activeVaultId]);
+  }, [activeVaultId, canMutateDocuments]);
 
   const handleDeleteAllInVault = useCallback(() => {
     if (!documents || documents.length === 0) return;
-    if (!activeVaultId) {
-      toast.error("No vault selected");
+    if (!canMutateDocuments) {
+      toast.error("Select a vault you administer before deleting documents");
       return;
     }
     setConfirmDialog({
@@ -323,15 +342,19 @@ export default function DocumentsPage() {
       variant: "destructive",
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [documents.length, activeVaultId, executeDeleteAllInVault]);
+  }, [documents.length, canMutateDocuments, executeDeleteAllInVault]);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles.length === 0) return;
+    if (!hasSelectedVault || !canWriteActiveVault) {
+      toast.error("Select a vault with write access before uploading");
+      return;
+    }
     
     addUploads(acceptedFiles, activeVaultId ?? undefined);
     setRejectedFiles([]);
     toast.success(`Added ${acceptedFiles.length} file(s) to upload queue`);
-  }, [addUploads, activeVaultId]);
+  }, [addUploads, activeVaultId, canWriteActiveVault, hasSelectedVault]);
 
   const onDropRejected = useCallback((rejected: FileRejection[]) => {
     const rejectedNames = rejected.map((r) => `${r.file.name} (${r.errors.map((e) => e.message).join(', ')})`);
@@ -345,9 +368,14 @@ export default function DocumentsPage() {
     onDrop,
     onDropRejected,
     maxSize: MAX_FILE_SIZE,
+    disabled: !hasSelectedVault || !canWriteActiveVault,
   });
 
   const handleScan = async () => {
+    if (!hasSelectedVault || !canWriteActiveVault) {
+      toast.error("Select a vault with write access before scanning");
+      return;
+    }
     setIsScanning(true);
     try {
       const result = await scanDocuments(activeVaultId ?? undefined);
@@ -361,6 +389,10 @@ export default function DocumentsPage() {
   };
 
   const handleDeleteDocument = (docId: string) => {
+    if (!canMutateDocuments) {
+      toast.error("Select a vault you administer before deleting documents");
+      return;
+    }
     setConfirmDialog({
       open: true,
       title: "Delete Document",
@@ -458,7 +490,17 @@ export default function DocumentsPage() {
         </div>
         <div className="flex items-center gap-2">
           <VaultSelector />
-          <Button onClick={handleScan} disabled={isScanning}>
+          <Button
+            onClick={handleScan}
+            disabled={isScanning || !hasSelectedVault || !canWriteActiveVault}
+            title={
+              !hasSelectedVault
+                ? "Select a vault to scan documents"
+                : !canWriteActiveVault
+                  ? "Write access is required to scan this vault"
+                  : "Scan directory"
+            }
+          >
             {isScanning ? (
               <Loader2 className="w-4 h-4 mr-2 animate-spin" />
             ) : (
@@ -466,7 +508,7 @@ export default function DocumentsPage() {
             )}
             Scan Directory
           </Button>
-          {filteredDocuments.length > 0 && (
+          {filteredDocuments.length > 0 && canMutateDocuments && (
             <Button 
               variant="destructive" 
               onClick={handleDeleteAllInVault} 
@@ -516,7 +558,7 @@ export default function DocumentsPage() {
         {...getRootProps()}
         className={`border-2 border-dashed cursor-pointer transition-colors ${
           isDragActive ? "border-primary bg-primary/5" : "border-border"
-        }`}
+        } ${!hasSelectedVault || !canWriteActiveVault ? "opacity-60 cursor-not-allowed" : ""}`}
       >
         <input {...getInputProps()} />
         <CardContent className="py-8">
@@ -527,7 +569,9 @@ export default function DocumentsPage() {
             </Badge>
             <Upload className="w-12 h-12 text-muted-foreground mb-4" />
             <p className="text-lg font-medium">
-              {isDragActive ? "Drop files here..." : "Drag & drop files here, or click to select"}
+              {!hasSelectedVault || !canWriteActiveVault
+                ? "Select a writable vault to upload"
+                : isDragActive ? "Drop files here..." : "Drag & drop files here, or click to select"}
             </p>
             <p className="text-sm text-muted-foreground mt-1">
               Supports PDF, DOCX, TXT, MD files (max 50MB each). Uploads continue in background.
@@ -811,7 +855,7 @@ export default function DocumentsPage() {
           )}
         </div>
         <div className="flex items-center gap-2">
-          {selectedIds.size > 0 && (
+          {selectedIds.size > 0 && canMutateDocuments && (
             <>
               <Badge variant="outline">{selectedIds.size} selected</Badge>
               <Button 
@@ -940,6 +984,7 @@ export default function DocumentsPage() {
                         <Checkbox
                           checked={selectedIds.size > 0 && selectedIds.size === filteredDocuments.length}
                           onCheckedChange={handleSelectAll}
+                          disabled={!canMutateDocuments}
                           aria-label="Select all documents"
                         />
                       </th>
@@ -989,6 +1034,7 @@ export default function DocumentsPage() {
                             <Checkbox
                               checked={isSelected}
                               onCheckedChange={(checked) => handleSelectOne(String(doc.id), !!checked)}
+                              disabled={!canMutateDocuments}
                               aria-label={`Select ${doc.filename}`}
                             />
                           </td>
@@ -1063,6 +1109,7 @@ export default function DocumentsPage() {
                           <td className="p-4 flex-none w-[100px]">{formatFileSize(doc.size)}</td>
                           <td className="p-4 flex-none w-[140px] text-muted-foreground">{formatDate(doc.created_at)}</td>
                           <td className="p-4 flex-none w-[60px] text-right">
+                            {canMutateDocuments && (
                             <Button
                               variant="ghost"
                               size="icon"
@@ -1072,6 +1119,7 @@ export default function DocumentsPage() {
                             >
                               <Trash2 className="w-4 h-4 text-destructive" aria-hidden="true" />
                             </Button>
+                            )}
                           </td>
                         </tr>
                       );
@@ -1104,8 +1152,9 @@ export default function DocumentsPage() {
                      <DocumentCard
                        document={doc}
                        onDelete={(id) => handleDeleteDocument(String(id))}
+                       canDelete={canMutateDocuments}
                        isSelected={selectedIds.has(doc.id)}
-                       onSelectionChange={handleSelectOne}
+                       onSelectionChange={canMutateDocuments ? handleSelectOne : undefined}
                      />
                    </div>
                  );

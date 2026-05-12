@@ -27,6 +27,8 @@ interface DocumentCardProps {
   onDelete: (id: string) => void;
   /** Loading state for delete action */
   isDeleting?: boolean;
+  /** Whether delete actions should be available for this document */
+  canDelete?: boolean;
   /** Selection state for bulk operations */
   isSelected?: boolean;
   /** Callback when selection changes */
@@ -46,6 +48,7 @@ export function DocumentCard({
   document,
   onDelete,
   isDeleting = false,
+  canDelete = true,
   isSelected = false,
   onSelectionChange,
 }: DocumentCardProps) {
@@ -93,31 +96,32 @@ export function DocumentCard({
           </div>
 
           {/* Actions dropdown (≥44×44px touch target) */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-11 w-11 flex-shrink-0"
-                aria-label={`Actions for ${document.filename}`}
-                aria-haspopup="menu"
-              >
-                <MoreVertical className="w-5 h-5" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuItem
-                onClick={() => onDelete(document.id)}
-                disabled={isDeleting}
-                className="text-destructive focus:text-destructive"
-                aria-label={`Delete ${document.filename}`}
-              >
-                <Trash2 className="w-4 h-4 mr-2" />
-                Delete
-              </DropdownMenuItem>
-
-            </DropdownMenuContent>
-          </DropdownMenu>
+          {canDelete && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-11 w-11 flex-shrink-0"
+                  aria-label={`Actions for ${document.filename}`}
+                  aria-haspopup="menu"
+                >
+                  <MoreVertical className="w-5 h-5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuItem
+                  onClick={() => onDelete(document.id)}
+                  disabled={isDeleting}
+                  className="text-destructive focus:text-destructive"
+                  aria-label={`Delete ${document.filename}`}
+                >
+                  <Trash2 className="w-4 h-4 mr-2" />
+                  Delete
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
 
         {/* Metadata row: status, size, date, chunks */}
@@ -149,20 +153,22 @@ export function DocumentCard({
         </div>
 
         {/* Standalone delete button (visible on larger mobile screens) */}
-        <div className="mt-4 flex sm:hidden">
-          <Button
-            variant="destructive"
-            size="sm"
-            className="h-11 w-full"
-            onClick={() => onDelete(document.id)}
-            disabled={isDeleting}
-            aria-label={`Delete ${document.filename}`}
-            aria-busy={isDeleting}
-          >
-            <Trash2 className="w-4 h-4 mr-2" />
+        {canDelete && (
+          <div className="mt-4 flex sm:hidden">
+            <Button
+              variant="destructive"
+              size="sm"
+              className="h-11 w-full"
+              onClick={() => onDelete(document.id)}
+              disabled={isDeleting}
+              aria-label={`Delete ${document.filename}`}
+              aria-busy={isDeleting}
+            >
+              <Trash2 className="w-4 h-4 mr-2" />
             {isDeleting ? "Deleting…" : "Delete Document"}
-          </Button>
-        </div>
+            </Button>
+          </div>
+        )}
       </CardContent>
     </Card>
   );

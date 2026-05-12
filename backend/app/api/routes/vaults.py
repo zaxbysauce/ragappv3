@@ -17,8 +17,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.api.deps import (
     get_current_active_user,
     get_db,
+    get_effective_vault_permission,
     get_evaluate_policy,
-    get_user_accessible_vault_ids,
     get_vector_store,
     require_vault_permission,
 )
@@ -77,6 +77,7 @@ class VaultResponse(BaseModel):
     org_id: Optional[int] = None
     is_default: bool = False
     """True when this vault is the system default and cannot be renamed or deleted."""
+    current_user_permission: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -87,7 +88,7 @@ class VaultListResponse(BaseModel):
     vaults: List[VaultResponse]
 
 
-def _row_to_vault_response(row) -> VaultResponse:
+def _row_to_vault_response(row, current_user_permission: Optional[str] = None) -> VaultResponse:
     """Map a database row to VaultResponse."""
     vault_id = row[0]
     return VaultResponse(
@@ -101,6 +102,7 @@ def _row_to_vault_response(row) -> VaultResponse:
         session_count=row[7] or 0,
         org_id=row[8],
         is_default=(vault_id == 1),
+        current_user_permission=current_user_permission,
     )
 
 
@@ -118,7 +120,7 @@ _VAULT_WITH_COUNTS_SQL = """
 
 
 async def _fetch_vault_with_counts(
-    conn: sqlite3.Connection, vault_id: int
+    conn: sqlite3.Connection, vault_id: int, user: Optional[dict] = None
 ) -> Optional[VaultResponse]:
     """Fetch a single vault with file/memory/session counts."""
     cursor = await asyncio.to_thread(
@@ -127,17 +129,28 @@ async def _fetch_vault_with_counts(
         (vault_id,),
     )
     row = await asyncio.to_thread(cursor.fetchone)
-    return _row_to_vault_response(row) if row else None
+    if not row:
+        return None
+    permission = get_effective_vault_permission(conn, user, vault_id) if user else None
+    return _row_to_vault_response(row, permission)
 
 
-async def _fetch_all_vaults(conn: sqlite3.Connection) -> List[VaultResponse]:
+async def _fetch_all_vaults(
+    conn: sqlite3.Connection, user: Optional[dict] = None
+) -> List[VaultResponse]:
     """Fetch all vaults with counts, ordered by creation date."""
     cursor = await asyncio.to_thread(
         conn.execute,
         _VAULT_WITH_COUNTS_SQL + " GROUP BY v.id ORDER BY v.created_at ASC",
     )
     rows = await asyncio.to_thread(cursor.fetchall)
-    return [_row_to_vault_response(row) for row in rows]
+    vaults = []
+    for row in rows:
+        permission = (
+            get_effective_vault_permission(conn, user, row[0]) if user else None
+        )
+        vaults.append(_row_to_vault_response(row, permission))
+    return vaults
 
 
 @router.get("/vaults", response_model=VaultListResponse)
@@ -146,14 +159,8 @@ async def list_vaults(
     conn: sqlite3.Connection = Depends(get_db),
 ):
     """List all vaults with document/memory/session counts."""
-    vaults = await _fetch_all_vaults(conn)
-
-    if user.get("role") not in ("superadmin", "admin"):
-        accessible_ids = get_user_accessible_vault_ids(user, conn)
-        if accessible_ids:
-            vaults = [v for v in vaults if v.id in accessible_ids]
-        else:
-            vaults = []
+    vaults = await _fetch_all_vaults(conn, user)
+    vaults = [v for v in vaults if v.current_user_permission is not None]
 
     return VaultListResponse(vaults=vaults)
 
@@ -164,15 +171,10 @@ async def list_accessible_vaults(
     conn: sqlite3.Connection = Depends(get_db),
 ):
     """Return vaults the current user has access to."""
-    if user.get("role") in ("superadmin", "admin"):
-        return VaultListResponse(vaults=await _fetch_all_vaults(conn))
-
-    accessible_ids = get_user_accessible_vault_ids(user, conn)
-    if not accessible_ids:
-        return VaultListResponse(vaults=[])
-
-    vaults = await _fetch_all_vaults(conn)
-    return VaultListResponse(vaults=[v for v in vaults if v.id in accessible_ids])
+    vaults = await _fetch_all_vaults(conn, user)
+    return VaultListResponse(
+        vaults=[v for v in vaults if v.current_user_permission is not None]
+    )
 
 
 @router.get("/vaults/{vault_id}", response_model=VaultResponse)
@@ -183,7 +185,7 @@ async def get_vault(
     evaluate: Callable = Depends(get_evaluate_policy),
 ):
     """Get a single vault with counts."""
-    vault = await _fetch_vault_with_counts(conn, vault_id)
+    vault = await _fetch_vault_with_counts(conn, vault_id, user)
     if vault is None:
         raise HTTPException(
             status_code=404, detail=f"Vault with id {vault_id} not found"
@@ -286,7 +288,7 @@ async def create_vault(
         )
         raise HTTPException(status_code=500, detail="Failed to assign vault membership")
 
-    vault = await _fetch_vault_with_counts(conn, vault_id)
+    vault = await _fetch_vault_with_counts(conn, vault_id, user)
     return vault
 
 
@@ -335,7 +337,7 @@ async def update_vault(
 
     if not update_fields:
         # No fields to update, just fetch and return current record
-        vault = await _fetch_vault_with_counts(conn, vault_id)
+        vault = await _fetch_vault_with_counts(conn, vault_id, user)
         if vault is None:
             raise HTTPException(
                 status_code=404, detail=f"Vault with id {vault_id} not found"
@@ -373,7 +375,7 @@ async def update_vault(
             logging.getLogger(__name__).warning(f"Failed to rename vault folder: {e}")
 
     # Fetch updated record
-    vault = await _fetch_vault_with_counts(conn, vault_id)
+    vault = await _fetch_vault_with_counts(conn, vault_id, user)
 
     # Race condition fix: check if vault is None after fetch
     if vault is None:

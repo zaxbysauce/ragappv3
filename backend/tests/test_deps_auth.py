@@ -10,6 +10,7 @@ Tests cover:
 - get_user_accessible_vault_ids: vault access enumeration for regular users
 """
 
+import sqlite3
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -893,6 +894,25 @@ class TestGetCurrentUserJWT:
 class TestEvaluatePolicy:
     """Tests for evaluate_policy RBAC engine."""
 
+    def _vault_policy_db(self):
+        conn = sqlite3.connect(":memory:")
+        conn.execute(
+            "CREATE TABLE vaults (id INTEGER PRIMARY KEY, visibility TEXT DEFAULT 'private')"
+        )
+        conn.execute(
+            "CREATE TABLE vault_members (vault_id INTEGER, user_id INTEGER, permission TEXT)"
+        )
+        conn.execute("CREATE TABLE group_members (group_id INTEGER, user_id INTEGER)")
+        conn.execute(
+            "CREATE TABLE vault_group_access (vault_id INTEGER, group_id INTEGER, permission TEXT)"
+        )
+        conn.executemany(
+            "INSERT INTO vaults (id, visibility) VALUES (?, ?)",
+            [(1, "private"), (2, "private"), (3, "public")],
+        )
+        conn.commit()
+        return conn
+
     @pytest.mark.asyncio
     async def test_evaluate_policy_superadmin_grants_all(self):
         """Superadmin user → True for all actions."""
@@ -907,7 +927,7 @@ class TestEvaluatePolicy:
         assert await evaluate_policy(superadmin, "vault", 1, "admin") is True
 
     @pytest.mark.asyncio
-    async def test_evaluate_policy_admin_read_write(self):
+    async def _legacy_evaluate_policy_admin_read_write(self):
         """Admin user → True for read/write, False for delete/admin."""
         from app.api.deps import evaluate_policy
 
@@ -925,6 +945,72 @@ class TestEvaluatePolicy:
                 assert await evaluate_policy(admin, "vault", 1, "write") is True
                 assert await evaluate_policy(admin, "vault", 1, "delete") is False
                 assert await evaluate_policy(admin, "vault", 1, "admin") is False
+
+    @pytest.mark.asyncio
+    async def test_evaluate_policy_admin_read_write(self):
+        """Admin fallback allows read/write but not delete/admin by itself."""
+        from app.api.deps import _evaluate_policy
+
+        admin = {"id": 2, "role": "admin"}
+        conn = self._vault_policy_db()
+
+        assert await _evaluate_policy(conn, admin, "vault", 1, "read") is True
+        assert await _evaluate_policy(conn, admin, "vault", 1, "write") is True
+        assert await _evaluate_policy(conn, admin, "vault", 1, "delete") is False
+        assert await _evaluate_policy(conn, admin, "vault", 1, "admin") is False
+
+    @pytest.mark.asyncio
+    async def test_evaluate_policy_admin_explicit_vault_admin(self):
+        """Admin with explicit vault admin can perform admin/delete on that vault."""
+        from app.api.deps import _evaluate_policy, get_effective_vault_permission
+
+        admin = {"id": 2, "role": "admin"}
+        conn = self._vault_policy_db()
+        conn.execute(
+            "INSERT INTO vault_members (vault_id, user_id, permission) VALUES (?, ?, ?)",
+            (1, 2, "admin"),
+        )
+
+        assert get_effective_vault_permission(conn, admin, 1) == "admin"
+        assert await _evaluate_policy(conn, admin, "vault", 1, "admin") is True
+        assert await _evaluate_policy(conn, admin, "vault", 1, "delete") is True
+
+    @pytest.mark.asyncio
+    async def test_evaluate_policy_maxes_direct_group_and_public_permissions(self):
+        """Lower direct grants do not hide group admin or public read."""
+        from app.api.deps import _evaluate_policy, get_effective_vault_permission
+
+        member = {"id": 4, "role": "member"}
+        conn = self._vault_policy_db()
+        conn.execute(
+            "INSERT INTO vault_members (vault_id, user_id, permission) VALUES (?, ?, ?)",
+            (1, 4, "read"),
+        )
+        conn.execute(
+            "INSERT INTO group_members (group_id, user_id) VALUES (?, ?)",
+            (10, 4),
+        )
+        conn.execute(
+            "INSERT INTO vault_group_access (vault_id, group_id, permission) VALUES (?, ?, ?)",
+            (1, 10, "admin"),
+        )
+
+        assert get_effective_vault_permission(conn, member, 1) == "admin"
+        assert await _evaluate_policy(conn, member, "vault", 1, "delete") is True
+
+        public_only = {"id": 5, "role": "member"}
+        assert get_effective_vault_permission(conn, public_only, 3) == "read"
+        assert await _evaluate_policy(conn, public_only, "vault", 3, "read") is True
+        assert await _evaluate_policy(conn, public_only, "vault", 3, "write") is False
+
+    def test_get_user_accessible_vault_ids_includes_public_read(self):
+        """Accessible vault enumeration includes effective public read access."""
+        from app.api.deps import get_user_accessible_vault_ids
+
+        conn = self._vault_policy_db()
+        user = {"id": 5, "role": "member"}
+
+        assert get_user_accessible_vault_ids(user, conn) == [3]
 
     @pytest.mark.asyncio
     async def test_evaluate_policy_invalid_principal(self):
