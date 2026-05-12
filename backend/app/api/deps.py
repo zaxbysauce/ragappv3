@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import secrets
 import sqlite3
 from collections.abc import Callable
@@ -272,40 +273,69 @@ def get_effective_vault_permission(
     vault_id: int | None,
 ) -> str | None:
     """Return the user's strongest effective permission on a vault."""
+    if vault_id is None:
+        return None
+    return get_effective_vault_permissions(db, principal, [vault_id]).get(vault_id)
+
+
+def get_effective_vault_permissions(
+    db: sqlite3.Connection,
+    principal: dict,
+    vault_ids: list[int],
+) -> dict[int, str | None]:
+    """Return each vault's strongest effective permission for the user."""
     user_id = principal.get("id")
     user_role = principal.get("role", "")
+    normalized_ids = list(dict.fromkeys(vault_ids))
 
-    if user_id is None or vault_id is None:
-        return None
+    if user_id is None or not normalized_ids:
+        return {}
 
     if user_role == "superadmin":
-        return "admin"
+        return {vault_id: "admin" for vault_id in normalized_ids}
 
-    effective_level = VAULT_PERMISSION_LEVELS["write"] if user_role == "admin" else 0
+    baseline_level = VAULT_PERMISSION_LEVELS["write"] if user_role == "admin" else 0
+    effective_levels = {vault_id: baseline_level for vault_id in normalized_ids}
+    placeholders = ",".join("?" for _ in normalized_ids)
 
     cursor = db.execute(
-        "SELECT permission FROM vault_members WHERE vault_id = ? AND user_id = ?",
-        (vault_id, user_id),
+        f"""SELECT vault_id, permission FROM vault_members
+            WHERE user_id = ? AND vault_id IN ({placeholders})""",
+        (user_id, *normalized_ids),
     )
-    row = cursor.fetchone()
-    if row:
-        effective_level = max(effective_level, VAULT_PERMISSION_LEVELS.get(row[0], 0))
+    for vault_id, permission in cursor.fetchall():
+        effective_levels[vault_id] = max(
+            effective_levels[vault_id],
+            VAULT_PERMISSION_LEVELS.get(permission, 0),
+        )
 
     cursor = db.execute(
-        """SELECT vga.permission FROM vault_group_access vga
+        f"""SELECT vga.vault_id, vga.permission FROM vault_group_access vga
            JOIN group_members gm ON vga.group_id = gm.group_id
-           WHERE vga.vault_id = ? AND gm.user_id = ?""",
-        (vault_id, user_id),
+           WHERE gm.user_id = ? AND vga.vault_id IN ({placeholders})""",
+        (user_id, *normalized_ids),
     )
-    for row in cursor.fetchall():
-        effective_level = max(effective_level, VAULT_PERMISSION_LEVELS.get(row[0], 0))
+    for vault_id, permission in cursor.fetchall():
+        effective_levels[vault_id] = max(
+            effective_levels[vault_id],
+            VAULT_PERMISSION_LEVELS.get(permission, 0),
+        )
 
-    cursor = db.execute("SELECT visibility FROM vaults WHERE id = ?", (vault_id,))
-    row = cursor.fetchone()
-    if row and row[0] == "public":
-        effective_level = max(effective_level, VAULT_PERMISSION_LEVELS["read"])
+    cursor = db.execute(
+        f"""SELECT id FROM vaults
+            WHERE visibility = 'public' AND id IN ({placeholders})""",
+        tuple(normalized_ids),
+    )
+    for (vault_id,) in cursor.fetchall():
+        effective_levels[vault_id] = max(
+            effective_levels[vault_id],
+            VAULT_PERMISSION_LEVELS["read"],
+        )
 
-    return VAULT_PERMISSION_NAMES.get(effective_level)
+    return {
+        vault_id: VAULT_PERMISSION_NAMES.get(effective_levels[vault_id])
+        for vault_id in normalized_ids
+    }
 
 
 async def _evaluate_policy(
@@ -335,7 +365,9 @@ async def _evaluate_policy(
     if user_role == "superadmin":
         return True
 
-    effective_permission = get_effective_vault_permission(db, principal, resource_id)
+    effective_permission = await asyncio.to_thread(
+        get_effective_vault_permission, db, principal, resource_id
+    )
     effective_level = VAULT_PERMISSION_LEVELS.get(effective_permission or "", 0)
     required_level = VAULT_ACTION_LEVELS.get(action, VAULT_ACTION_LEVELS["read"])
     return effective_level >= required_level
@@ -465,10 +497,12 @@ def get_user_accessible_vault_ids(user: dict, db) -> list:
         return []  # Empty list means "all vaults"
 
     cursor = db.execute("SELECT id FROM vaults")
+    vault_ids = [row[0] for row in cursor.fetchall()]
+    permissions = get_effective_vault_permissions(db, user, vault_ids)
     return [
-        row[0]
-        for row in cursor.fetchall()
-        if get_effective_vault_permission(db, user, row[0]) is not None
+        vault_id
+        for vault_id, permission in permissions.items()
+        if permission is not None
     ]
 
 

@@ -895,7 +895,7 @@ class TestEvaluatePolicy:
     """Tests for evaluate_policy RBAC engine."""
 
     def _vault_policy_db(self):
-        conn = sqlite3.connect(":memory:")
+        conn = sqlite3.connect(":memory:", check_same_thread=False)
         conn.execute(
             "CREATE TABLE vaults (id INTEGER PRIMARY KEY, visibility TEXT DEFAULT 'private')"
         )
@@ -925,26 +925,6 @@ class TestEvaluatePolicy:
         assert await evaluate_policy(superadmin, "vault", 1, "write") is True
         assert await evaluate_policy(superadmin, "vault", 1, "delete") is True
         assert await evaluate_policy(superadmin, "vault", 1, "admin") is True
-
-    @pytest.mark.asyncio
-    async def _legacy_evaluate_policy_admin_read_write(self):
-        """Admin user → True for read/write, False for delete/admin."""
-        from app.api.deps import evaluate_policy
-
-        admin = {"id": 2, "role": "admin"}
-
-        mock = MagicMock()
-        mock.sqlite_path = "./test.db"
-        pool = MagicMock()
-        pool.get_connection.return_value.__enter__ = MagicMock(return_value=MagicMock())
-        pool.get_connection.return_value.__exit__ = MagicMock(return_value=False)
-
-        with patch("app.api.deps.settings", mock, create=True):
-            with patch("app.api.deps.get_pool", return_value=pool):
-                assert await evaluate_policy(admin, "vault", 1, "read") is True
-                assert await evaluate_policy(admin, "vault", 1, "write") is True
-                assert await evaluate_policy(admin, "vault", 1, "delete") is False
-                assert await evaluate_policy(admin, "vault", 1, "admin") is False
 
     @pytest.mark.asyncio
     async def test_evaluate_policy_admin_read_write(self):
@@ -1002,6 +982,42 @@ class TestEvaluatePolicy:
         assert get_effective_vault_permission(conn, public_only, 3) == "read"
         assert await _evaluate_policy(conn, public_only, "vault", 3, "read") is True
         assert await _evaluate_policy(conn, public_only, "vault", 3, "write") is False
+
+    def test_get_effective_vault_permissions_batches_permission_queries(self):
+        """Multiple vault permissions are resolved with constant-query batching."""
+        from app.api.deps import get_effective_vault_permissions
+
+        member = {"id": 4, "role": "member"}
+        conn = self._vault_policy_db()
+        conn.execute(
+            "INSERT INTO vault_members (vault_id, user_id, permission) VALUES (?, ?, ?)",
+            (1, 4, "read"),
+        )
+        conn.execute(
+            "INSERT INTO group_members (group_id, user_id) VALUES (?, ?)",
+            (10, 4),
+        )
+        conn.execute(
+            "INSERT INTO vault_group_access (vault_id, group_id, permission) VALUES (?, ?, ?)",
+            (2, 10, "admin"),
+        )
+        conn.commit()
+
+        statements = []
+        conn.set_trace_callback(statements.append)
+
+        assert get_effective_vault_permissions(conn, member, [1, 2, 3]) == {
+            1: "read",
+            2: "admin",
+            3: "read",
+        }
+
+        select_count = sum(
+            1
+            for statement in statements
+            if statement.lstrip().upper().startswith("SELECT")
+        )
+        assert select_count == 3
 
     def test_get_user_accessible_vault_ids_includes_public_read(self):
         """Accessible vault enumeration includes effective public read access."""

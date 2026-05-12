@@ -18,6 +18,7 @@ from app.api.deps import (
     get_current_active_user,
     get_db,
     get_effective_vault_permission,
+    get_effective_vault_permissions,
     get_evaluate_policy,
     get_vector_store,
     require_vault_permission,
@@ -131,7 +132,11 @@ async def _fetch_vault_with_counts(
     row = await asyncio.to_thread(cursor.fetchone)
     if not row:
         return None
-    permission = get_effective_vault_permission(conn, user, vault_id) if user else None
+    permission = (
+        await asyncio.to_thread(get_effective_vault_permission, conn, user, vault_id)
+        if user
+        else None
+    )
     return _row_to_vault_response(row, permission)
 
 
@@ -144,12 +149,19 @@ async def _fetch_all_vaults(
         _VAULT_WITH_COUNTS_SQL + " GROUP BY v.id ORDER BY v.created_at ASC",
     )
     rows = await asyncio.to_thread(cursor.fetchall)
+    permissions = (
+        await asyncio.to_thread(
+            get_effective_vault_permissions,
+            conn,
+            user,
+            [row[0] for row in rows],
+        )
+        if user
+        else {}
+    )
     vaults = []
     for row in rows:
-        permission = (
-            get_effective_vault_permission(conn, user, row[0]) if user else None
-        )
-        vaults.append(_row_to_vault_response(row, permission))
+        vaults.append(_row_to_vault_response(row, permissions.get(row[0])))
     return vaults
 
 
