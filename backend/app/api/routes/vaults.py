@@ -37,12 +37,20 @@ class VaultCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=255, description="Vault name")
     description: str = Field("", max_length=1000, description="Vault description")
     org_id: Optional[int] = Field(None, description="Organization to assign this vault to")
+    visibility: str = Field("private", description="Vault visibility: private, org, or public")
 
     @field_validator("name", mode="before")
     @classmethod
     def strip_name(cls, v):
         if isinstance(v, str):
             return v.strip()
+        return v
+
+    @field_validator("visibility")
+    @classmethod
+    def validate_visibility(cls, v):
+        if v not in ("private", "org", "public"):
+            raise ValueError("visibility must be 'private', 'org', or 'public'")
         return v
 
 
@@ -55,12 +63,22 @@ class VaultUpdateRequest(BaseModel):
     description: Optional[str] = Field(
         None, max_length=1000, description="New description"
     )
+    visibility: Optional[str] = Field(
+        None, description="Vault visibility: private, org, or public"
+    )
 
     @field_validator("name", mode="before")
     @classmethod
     def strip_name(cls, v):
         if isinstance(v, str):
             return v.strip()
+        return v
+
+    @field_validator("visibility")
+    @classmethod
+    def validate_visibility(cls, v):
+        if v is not None and v not in ("private", "org", "public"):
+            raise ValueError("visibility must be 'private', 'org', or 'public'")
         return v
 
 
@@ -79,6 +97,7 @@ class VaultResponse(BaseModel):
     is_default: bool = False
     """True when this vault is the system default and cannot be renamed or deleted."""
     current_user_permission: Optional[str] = None
+    visibility: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -271,8 +290,8 @@ async def create_vault(
     try:
         cursor = await asyncio.to_thread(
             conn.execute,
-            "INSERT INTO vaults (name, description, org_id) VALUES (?, ?, ?)",
-            (request.name, request.description, target_org_id),
+            "INSERT INTO vaults (name, description, org_id, visibility) VALUES (?, ?, ?, ?)",
+            (request.name, request.description, target_org_id, request.visibility),
         )
     except sqlite3.IntegrityError:
         raise HTTPException(
@@ -346,6 +365,9 @@ async def update_vault(
     if request.description is not None:
         update_fields.append("description = ?")
         params.append(request.description)
+    if request.visibility is not None:
+        update_fields.append("visibility = ?")
+        params.append(request.visibility)
 
     if not update_fields:
         # No fields to update, just fetch and return current record

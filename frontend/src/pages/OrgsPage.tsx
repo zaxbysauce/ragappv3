@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { AdminGuard } from "@/components/auth/RoleGuard";
+import { RoleGuard } from "@/components/auth/RoleGuard";
 import { Building2, Plus, Trash2, Users, Vault, ChevronDown, ChevronUp, Loader2, UserPlus, UserX, Search } from "lucide-react";
 
 type OrgRole = "owner" | "admin" | "member";
@@ -126,15 +126,16 @@ function OrgsPageContent() {
     setShowUserDropdown(false);
   };
   const isSuperAdmin = currentUser?.role === "superadmin";
+  const isMember = currentUser?.role === "member";
 
   const fetchOrgs = useCallback(async () => {
     setLoading(true);
     try {
       const response = await apiClient.get<{ organizations: Organization[]; total: number }>("/organizations/");
       setOrgs(Array.isArray(response.data) ? response.data : response.data.organizations ?? []);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to fetch organizations:", err);
-      toast.error("Failed to load organizations");
+      toast.error(err?.response?.data?.detail || "Failed to load organizations");
     } finally {
       setLoading(false);
     }
@@ -146,9 +147,9 @@ function OrgsPageContent() {
     try {
       const response = await apiClient.get<{ members: OrgMember[] }>(`/organizations/${orgId}/members`);
       setOrgs((prev) => prev.map((o) => o.id === orgId ? { ...o, members: response.data.members } : o));
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to fetch members:", err);
-      toast.error("Failed to load members");
+      toast.error(err?.response?.data?.detail || "Failed to load members");
     }
   }, []);
 
@@ -178,8 +179,8 @@ function OrgsPageContent() {
       setCreateDialogOpen(false);
       setNewOrgName("");
       setNewOrgDescription("");
-    } catch (err) {
-      toast.error("Failed to create organization");
+    } catch (err: any) {
+      toast.error(err?.response?.data?.detail || "Failed to create organization");
     } finally {
       setCreatingOrg(false);
     }
@@ -193,8 +194,8 @@ function OrgsPageContent() {
       toast.success("Organization deleted successfully");
       setDeleteDialogOpen(false);
       setOrgToDelete(null);
-    } catch (err) {
-      toast.error("Failed to delete organization");
+    } catch (err: any) {
+      toast.error(err?.response?.data?.detail || "Failed to delete organization");
     }
   };
 
@@ -233,8 +234,8 @@ function OrgsPageContent() {
         };
       }));
       toast.success("Role updated successfully");
-    } catch (err) {
-      toast.error("Failed to update role");
+    } catch (err: any) {
+      toast.error(err?.response?.data?.detail || "Failed to update role");
     } finally {
       setUpdatingMemberId(null);
     }
@@ -256,8 +257,8 @@ function OrgsPageContent() {
       setRemoveMemberDialogOpen(false);
       setMemberToRemove(null);
       setOrgForMemberAction(null);
-    } catch (err) {
-      toast.error("Failed to remove member");
+    } catch (err: any) {
+      toast.error(err?.response?.data?.detail || "Failed to remove member");
     }
   };
 
@@ -287,9 +288,11 @@ function OrgsPageContent() {
           <h1 className="text-3xl font-bold tracking-tight">Organizations</h1>
           <p className="text-muted-foreground mt-1">Manage organizations and their members</p>
         </div>
-        <Button onClick={() => setCreateDialogOpen(true)}>
-          <Plus className="w-4 h-4 mr-2" />Create Organization
-        </Button>
+        {!isMember && (
+          <Button onClick={() => setCreateDialogOpen(true)}>
+            <Plus className="w-4 h-4 mr-2" />Create Organization
+          </Button>
+        )}
       </div>
 
       {loading ? (
@@ -328,7 +331,7 @@ function OrgsPageContent() {
                     <Button variant="ghost" size="icon" onClick={() => toggleExpand(org.id)} aria-label={expandedOrgId === org.id ? "Collapse" : "Expand"}>
                       {expandedOrgId === org.id ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                     </Button>
-                    {isSuperAdmin && (
+                    {!isMember && (
                       <Button variant="ghost" size="icon" onClick={() => { setOrgToDelete(org); setDeleteDialogOpen(true); }} aria-label={`Delete organization ${org.name}`} className="text-destructive hover:text-destructive hover:bg-destructive/10">
                         <Trash2 className="w-4 h-4" />
                       </Button>
@@ -338,6 +341,7 @@ function OrgsPageContent() {
               </CardHeader>
               {expandedOrgId === org.id && (
                 <CardContent className="border-t pt-4">
+                  {!isMember && (
                   <form onSubmit={(e) => handleAddMember(e, org.id)} className="flex gap-2 items-end mb-4">
                     <div className="flex-1 space-y-2 relative" ref={userSearchRef}>
                       <label htmlFor={`org-member-search-${org.id}`} className="text-sm font-medium">Search User</label>
@@ -395,6 +399,7 @@ function OrgsPageContent() {
                       Add
                     </Button>
                   </form>
+                  )}
 
                   <div className="overflow-x-auto">
                     <table className="w-full">
@@ -421,26 +426,30 @@ function OrgsPageContent() {
                                   <div className="text-sm text-muted-foreground">@{member.username}</div>
                                 </div>
                               </td>
-                              <td className="py-3">
-                                {member.role === "owner" ? (
-                                  <Badge variant="default" className="text-xs">Owner</Badge>
-                                ) : (
-                                  <select value={member.role} onChange={(e) => handleRoleChange(org.id, member.user_id, e.target.value as OrgRole)} disabled={updatingMemberId === member.user_id} aria-label={`Change role for ${member.username}`} className="h-8 rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50">
-                                    {CHANGEABLE_ROLE_OPTIONS.map((opt) => (<option key={opt.value} value={opt.value}>{opt.label}</option>))}
-                                  </select>
-                                )}
-                              </td>
+                               <td className="py-3">
+                                 {member.role === "owner" ? (
+                                   <Badge variant="default" className="text-xs">Owner</Badge>
+                                 ) : (
+                                   !isMember && (
+                                     <select value={member.role} onChange={(e) => handleRoleChange(org.id, member.user_id, e.target.value as OrgRole)} disabled={updatingMemberId === member.user_id} aria-label={`Change role for ${member.username}`} className="h-8 rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50">
+                                       {CHANGEABLE_ROLE_OPTIONS.map((opt) => (<option key={opt.value} value={opt.value}>{opt.label}</option>))}
+                                     </select>
+                                   )
+                                 )}
+                               </td>
                               <td className="py-3 text-muted-foreground text-sm">{formatDate(member.joined_at)}</td>
-                              <td className="py-3 text-right flex items-center justify-end gap-1">
-                                {member.role !== "owner" && (isSuperAdmin || org.members?.some((m) => m.user_id === currentUser?.id && m.role === "owner")) && (
-                                  <Button variant="ghost" size="sm" className="text-xs h-7 px-2" onClick={() => { setTransferOrgId(org.id); setTransferTargetId(member.user_id); setTransferDialogOpen(true); }} aria-label={`Transfer ownership to ${member.username}`} title="Transfer Ownership">
-                                    Transfer
-                                  </Button>
-                                )}
-                                <Button variant="ghost" size="icon" onClick={() => { setMemberToRemove(member); setOrgForMemberAction(org.id); setRemoveMemberDialogOpen(true); }} aria-label={`Remove ${member.username} from organization`} className="text-destructive hover:text-destructive hover:bg-destructive/10" disabled={member.role === "owner"} title={member.role === "owner" ? "Cannot remove owner — transfer ownership first" : "Remove member"}>
-                                  <UserX className="w-4 h-4" />
-                                </Button>
-                              </td>
+                               <td className="py-3 text-right flex items-center justify-end gap-1">
+                                 {member.role !== "owner" && (isSuperAdmin || org.members?.some((m) => m.user_id === currentUser?.id && m.role === "owner")) && (
+                                   <Button variant="ghost" size="sm" className="text-xs h-7 px-2" onClick={() => { setTransferOrgId(org.id); setTransferTargetId(member.user_id); setTransferDialogOpen(true); }} aria-label={`Transfer ownership to ${member.username}`} title="Transfer Ownership">
+                                     Transfer
+                                   </Button>
+                                 )}
+                                 {!isMember && (
+                                   <Button variant="ghost" size="icon" onClick={() => { setMemberToRemove(member); setOrgForMemberAction(org.id); setRemoveMemberDialogOpen(true); }} aria-label={`Remove ${member.username} from organization`} className="text-destructive hover:text-destructive hover:bg-destructive/10" disabled={member.role === "owner"} title={member.role === "owner" ? "Cannot remove owner — transfer ownership first" : "Remove member"}>
+                                     <UserX className="w-4 h-4" />
+                                   </Button>
+                                 )}
+                               </td>
                             </tr>
                           ))
                         )}
@@ -536,5 +545,5 @@ function OrgsPageContent() {
 }
 
 export default function OrgsPage() {
-  return (<AdminGuard><OrgsPageContent /></AdminGuard>);
+  return (<RoleGuard allowedRoles={["member", "admin", "superadmin"]}><OrgsPageContent /></RoleGuard>);
 }

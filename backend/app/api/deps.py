@@ -147,6 +147,7 @@ def get_email_service(request: Request) -> EmailIngestionService:
 
 
 async def get_current_active_user(
+    request: Request,
     authorization: str | None = Header(None),
     access_token: str | None = Cookie(None),
     db: sqlite3.Connection = Depends(get_db),
@@ -264,6 +265,17 @@ async def get_current_active_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    # Enforce must_change_password: flagged users can only access exempt routes
+    if user.get("must_change_password"):
+        exempt_paths = {"/auth/change-password", "/auth/login"}
+        # Normalize path to prevent bypass via trailing slash variants
+        normalized_path = request.url.path.rstrip("/") or "/"
+        if normalized_path not in exempt_paths:
+            raise HTTPException(
+                status_code=403,
+                detail="must_change_password",
+            )
+
     return user
 
 
@@ -322,9 +334,12 @@ def get_effective_vault_permissions(
         )
 
     cursor = db.execute(
-        f"""SELECT id FROM vaults
-            WHERE visibility = 'public' AND id IN ({placeholders})""",
-        tuple(normalized_ids),
+        f"""SELECT v.id FROM vaults v
+            WHERE v.visibility = 'public' AND v.id IN ({placeholders})
+            AND (v.org_id IS NULL OR EXISTS (
+                SELECT 1 FROM org_members WHERE org_id = v.org_id AND user_id = ?
+            ))""",
+        (*normalized_ids, user_id),
     )
     for (vault_id,) in cursor.fetchall():
         effective_levels[vault_id] = max(
@@ -409,7 +424,7 @@ async def evaluate_policy(
     2. admin -> True for read/write, False for vault delete
     3. vault_members row -> use permission column
     4. vault_group_access (user in group) -> highest permission wins
-    5. vault.visibility == 'public' AND action == 'read' -> True
+    5. vault.visibility == 'public' AND action == 'read' -> True (org-scoped for non-null org_id)
     6. Otherwise -> False
     """
     pool = get_pool(str(settings.sqlite_path))

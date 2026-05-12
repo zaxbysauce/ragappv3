@@ -16,6 +16,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
+# Mock request for tests that call get_current_active_user directly
+mock_request = MagicMock()
+mock_request.url.path = "/api/auth/me"
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Fixtures
 # ─────────────────────────────────────────────────────────────────────────────
@@ -77,7 +81,7 @@ class TestGetCurrentUserAdminToken:
 
         mock_conn, mock_cursor = mock_db
 
-        result = await get_current_active_user(
+        result = await get_current_active_user(request=mock_request,
             authorization="Bearer test-token",
             access_token=None,
             db=mock_conn,
@@ -106,7 +110,7 @@ class TestGetCurrentUserAdminToken:
 
         with patch("app.api.deps.settings", mock, create=True):
             with pytest.raises(HTTPException) as exc_info:
-                await get_current_active_user(
+                await get_current_active_user(request=mock_request,
                     authorization="Bearer admin-secret-token",
                     access_token=None,
                     db=mock_conn,
@@ -128,7 +132,7 @@ class TestGetCurrentUserAdminToken:
         mock_conn, mock_cursor = mock_db
 
         with patch("app.api.deps.settings", mock, create=True):
-            result = await get_current_active_user(
+            result = await get_current_active_user(request=mock_request,
                 authorization="Bearer admin-secret-token",
                 access_token=None,
                 db=mock_conn,
@@ -149,7 +153,7 @@ class TestGetCurrentUserAdminToken:
         from app.api.deps import get_current_active_user
 
         with pytest.raises(HTTPException) as exc_info:
-            await get_current_active_user(
+            await get_current_active_user(request=mock_request,
                 authorization=None,
                 access_token=None,
                 db=MagicMock(),
@@ -164,7 +168,7 @@ class TestGetCurrentUserAdminToken:
         from app.api.deps import get_current_active_user
 
         with pytest.raises(HTTPException) as exc_info:
-            await get_current_active_user(
+            await get_current_active_user(request=mock_request,
                 authorization="Bearer wrong-token",
                 access_token=None,
                 db=MagicMock(),
@@ -213,7 +217,7 @@ class TestGetCurrentUserCookieFallback:
             0,
         )
 
-        result = await get_current_active_user(
+        result = await get_current_active_user(request=mock_request,
             authorization=f"Bearer {token}",
             access_token=None,
             db=mock_conn,
@@ -252,7 +256,7 @@ class TestGetCurrentUserCookieFallback:
             0,
         )
 
-        result = await get_current_active_user(
+        result = await get_current_active_user(request=mock_request,
             authorization=None,
             access_token=token,
             db=mock_conn,
@@ -268,7 +272,7 @@ class TestGetCurrentUserCookieFallback:
         from app.api.deps import get_current_active_user
 
         with pytest.raises(HTTPException) as exc_info:
-            await get_current_active_user(
+            await get_current_active_user(request=mock_request,
                 authorization=None,
                 access_token=None,
                 db=MagicMock(),
@@ -283,7 +287,7 @@ class TestGetCurrentUserCookieFallback:
         from app.api.deps import get_current_active_user
 
         with pytest.raises(HTTPException) as exc_info:
-            await get_current_active_user(
+            await get_current_active_user(request=mock_request,
                 authorization="Bearer invalid-token",
                 access_token=None,
                 db=MagicMock(),
@@ -297,7 +301,7 @@ class TestGetCurrentUserCookieFallback:
         from app.api.deps import get_current_active_user
 
         with pytest.raises(HTTPException) as exc_info:
-            await get_current_active_user(
+            await get_current_active_user(request=mock_request,
                 authorization=None,
                 access_token="invalid-token",
                 db=MagicMock(),
@@ -345,7 +349,7 @@ class TestJWTTypeEnforcement:
             0,
         )
 
-        result = await get_current_active_user(
+        result = await get_current_active_user(request=mock_request,
             authorization=f"Bearer {token}",
             access_token=None,
             db=mock_conn,
@@ -377,7 +381,7 @@ class TestJWTTypeEnforcement:
         mock_conn, mock_cursor = mock_db
 
         with pytest.raises(HTTPException) as exc_info:
-            await get_current_active_user(
+            await get_current_active_user(request=mock_request,
                 authorization=f"Bearer {token}",
                 access_token=None,
                 db=mock_conn,
@@ -410,7 +414,7 @@ class TestJWTTypeEnforcement:
         mock_conn, mock_cursor = mock_db
 
         with pytest.raises(HTTPException) as exc_info:
-            await get_current_active_user(
+            await get_current_active_user(request=mock_request,
                 authorization=f"Bearer {token}",
                 access_token=None,
                 db=mock_conn,
@@ -455,7 +459,11 @@ class TestMustChangePassword:
             1,
         )
 
-        result = await get_current_active_user(
+        # Use exempt path to bypass must_change_password enforcement
+        exempt_request = MagicMock()
+        exempt_request.url.path = "/auth/change-password"
+
+        result = await get_current_active_user(request=exempt_request,
             authorization=f"Bearer {token}",
             access_token=None,
             db=mock_conn,
@@ -495,7 +503,7 @@ class TestMustChangePassword:
             0,
         )
 
-        result = await get_current_active_user(
+        result = await get_current_active_user(request=mock_request,
             authorization=f"Bearer {token}",
             access_token=None,
             db=mock_conn,
@@ -535,7 +543,7 @@ class TestMustChangePassword:
             None,
         )
 
-        result = await get_current_active_user(
+        result = await get_current_active_user(request=mock_request,
             authorization=f"Bearer {token}",
             access_token=None,
             db=mock_conn,
@@ -552,7 +560,7 @@ class TestMustChangePassword:
 
         mock_conn, mock_cursor = mock_db
 
-        result = await get_current_active_user(
+        result = await get_current_active_user(request=mock_request,
             authorization="Bearer test-token",
             access_token=None,
             db=mock_conn,
@@ -621,7 +629,7 @@ class TestRequireAdminRole:
         from app.api.deps import get_current_active_user
 
         with pytest.raises(HTTPException) as exc_info:
-            await get_current_active_user(
+            await get_current_active_user(request=mock_request,
                 authorization=None,
                 access_token=None,
                 db=MagicMock(),
@@ -670,11 +678,18 @@ class TestGetUserAccessibleVaultIds:
         user = {"id": 3, "role": "member"}
         mock_conn, mock_cursor = mock_db
 
-        # Direct membership query returns vault IDs 10, 20
+        # get_user_accessible_vault_ids now:
+        # 1. SELECT id FROM vaults → all vault IDs
+        # 2. get_effective_vault_permissions:
+        #    a. vault_members query → permission rows
+        #    b. vault_group_access query → group permission rows
+        #    c. vaults visibility + org_members → public vault IDs
         mock_cursor.fetchall.side_effect = [
-            [(10,), (20,)],
-            [],
-        ]  # First for members, second for groups
+            [(10,), (20,)],   # vault IDs from SELECT id FROM vaults
+            [(10, 'read'), (20, 'write')],  # vault_members permissions
+            [],                # vault_group_access
+            [],                # vaults visibility
+        ]
 
         result = get_user_accessible_vault_ids(user, mock_conn)
 
@@ -688,8 +703,12 @@ class TestGetUserAccessibleVaultIds:
         user = {"id": 3, "role": "member"}
         mock_conn, mock_cursor = mock_db
 
-        # Direct membership returns empty, group access returns vault IDs 30, 40
-        mock_cursor.fetchall.side_effect = [[], [(30,), (40,)]]
+        mock_cursor.fetchall.side_effect = [
+            [(30,), (40,)],   # vault IDs from SELECT id FROM vaults
+            [],                # vault_members
+            [(30, 'read'), (40, 'write')],  # vault_group_access
+            [],                # vaults visibility
+        ]
 
         result = get_user_accessible_vault_ids(user, mock_conn)
 
@@ -705,8 +724,12 @@ class TestGetUserAccessibleVaultIds:
         user = {"id": 3, "role": "member"}
         mock_conn, mock_cursor = mock_db
 
-        # Direct membership returns 10, 20; group access returns 20, 30 (overlap: 20)
-        mock_cursor.fetchall.side_effect = [[(10,), (20,)], [(20,), (30,)]]
+        mock_cursor.fetchall.side_effect = [
+            [(10,), (20,), (30,)],  # vault IDs from SELECT id FROM vaults
+            [(10, 'read'), (20, 'read')],  # vault_members
+            [(20, 'read'), (30, 'read')],  # vault_group_access
+            [],                # vaults visibility
+        ]
 
         result = get_user_accessible_vault_ids(user, mock_conn)
 
@@ -768,7 +791,7 @@ class TestGetCurrentUserJWT:
             0,
         )
 
-        result = await get_current_active_user(
+        result = await get_current_active_user(request=mock_request,
             authorization=f"Bearer {token}",
             access_token=None,
             db=mock_conn,
@@ -816,7 +839,7 @@ class TestGetCurrentUserJWT:
         )
 
         with pytest.raises(HTTPException) as exc_info:
-            await get_current_active_user(
+            await get_current_active_user(request=mock_request,
                 authorization=f"Bearer {token}",
                 access_token=None,
                 db=mock_conn,
@@ -848,7 +871,7 @@ class TestGetCurrentUserJWT:
         mock_cursor.fetchone.return_value = None  # User not found
 
         with pytest.raises(HTTPException) as exc_info:
-            await get_current_active_user(
+            await get_current_active_user(request=mock_request,
                 authorization=f"Bearer {token}",
                 access_token=None,
                 db=mock_conn,
@@ -877,7 +900,7 @@ class TestGetCurrentUserJWT:
         expired_token = jwt.encode(expired_payload, secret, algorithm=algorithm)
 
         with pytest.raises(HTTPException) as exc_info:
-            await get_current_active_user(
+            await get_current_active_user(request=mock_request,
                 authorization=f"Bearer {expired_token}",
                 access_token=None,
                 db=MagicMock(),
@@ -897,7 +920,7 @@ class TestEvaluatePolicy:
     def _vault_policy_db(self):
         conn = sqlite3.connect(":memory:", check_same_thread=False)
         conn.execute(
-            "CREATE TABLE vaults (id INTEGER PRIMARY KEY, visibility TEXT DEFAULT 'private')"
+            "CREATE TABLE vaults (id INTEGER PRIMARY KEY, visibility TEXT DEFAULT 'private', org_id INTEGER)"
         )
         conn.execute(
             "CREATE TABLE vault_members (vault_id INTEGER, user_id INTEGER, permission TEXT)"
@@ -906,10 +929,12 @@ class TestEvaluatePolicy:
         conn.execute(
             "CREATE TABLE vault_group_access (vault_id INTEGER, group_id INTEGER, permission TEXT)"
         )
+        conn.execute("CREATE TABLE IF NOT EXISTS org_members (org_id INTEGER NOT NULL, user_id INTEGER NOT NULL)")
         conn.executemany(
-            "INSERT INTO vaults (id, visibility) VALUES (?, ?)",
-            [(1, "private"), (2, "private"), (3, "public")],
+            "INSERT INTO vaults (id, visibility, org_id) VALUES (?, ?, ?)",
+            [(1, "private", None), (2, "private", None), (3, "public", None), (4, "public", 10)],
         )
+        conn.execute("INSERT INTO org_members (org_id, user_id) VALUES (10, 5)")
         conn.commit()
         return conn
 
@@ -983,6 +1008,28 @@ class TestEvaluatePolicy:
         assert await _evaluate_policy(conn, public_only, "vault", 3, "read") is True
         assert await _evaluate_policy(conn, public_only, "vault", 3, "write") is False
 
+    @pytest.mark.asyncio
+    async def test_evaluate_policy_denies_org_scoped_public_read_to_non_member(self):
+        """Non-org-member cannot read public vault with non-null org_id (FR-016/SC-009)."""
+        from app.api.deps import _evaluate_policy, get_effective_vault_permission
+
+        conn = self._vault_policy_db()
+        # user 6 has no org_membership in org 10 (only user 5 does)
+        non_member = {"id": 6, "role": "member"}
+
+        # vault 4 is public but scoped to org 10 — non-member cannot access
+        assert get_effective_vault_permission(conn, non_member, 4) is None
+        assert await _evaluate_policy(conn, non_member, "vault", 4, "read") is False
+
+        # vault 3 is public with no org_id — still globally accessible regardless of membership
+        assert get_effective_vault_permission(conn, non_member, 3) == "read"
+        assert await _evaluate_policy(conn, non_member, "vault", 3, "read") is True
+
+        # Org member (user 5, member of org 10) can access vault 4
+        org_member = {"id": 5, "role": "member"}
+        assert get_effective_vault_permission(conn, org_member, 4) == "read"
+        assert await _evaluate_policy(conn, org_member, "vault", 4, "read") is True
+
     def test_get_effective_vault_permissions_batches_permission_queries(self):
         """Multiple vault permissions are resolved with constant-query batching."""
         from app.api.deps import get_effective_vault_permissions
@@ -1026,7 +1073,23 @@ class TestEvaluatePolicy:
         conn = self._vault_policy_db()
         user = {"id": 5, "role": "member"}
 
-        assert get_user_accessible_vault_ids(user, conn) == [3]
+        # user 5 is now an org_member of org 10, so they also see vault 4 (org-scoped public)
+        assert sorted(get_user_accessible_vault_ids(user, conn)) == [3, 4]
+
+    def test_get_user_accessible_vault_ids_excludes_org_scoped_public_for_non_member(self):
+        """Non-org-member cannot access public vault with non-null org_id."""
+        from app.api.deps import get_user_accessible_vault_ids
+
+        conn = self._vault_policy_db()
+        # user 6 has no org_membership in org 10 (only user 5 does)
+        non_member = {"id": 6, "role": "member"}
+
+        result = get_user_accessible_vault_ids(non_member, conn)
+
+        # vault 4 is public but org-scoped (org_id=10) — non-member must not see it
+        assert 4 not in result
+        # But public vault 3 (no org_id) is still globally accessible
+        assert 3 in result
 
     @pytest.mark.asyncio
     async def test_evaluate_policy_invalid_principal(self):
