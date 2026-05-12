@@ -86,6 +86,7 @@ class WikiCompileProcessor:
                     result = await asyncio.to_thread(self._dispatch, job)
                     await asyncio.to_thread(self._complete_job, job.id, result)
                     logger.info("WikiCompileProcessor: completed job id=%d", job.id)
+                    self._publish_event(job, "job_completed", result=result)
                 except Exception as exc:
                     logger.exception(
                         "WikiCompileProcessor: job id=%d failed: %s", job.id, exc
@@ -107,6 +108,7 @@ class WikiCompileProcessor:
                                 "WikiCompileProcessor: job id=%d permanently failed after %d retries",
                                 job.id, new_retry_count,
                             )
+                            self._publish_event(job, "job_failed", error=str(exc))
                     except Exception as e2:
                         logger.error(
                             "WikiCompileProcessor: could not mark job id=%d failed: %s", job.id, e2
@@ -146,6 +148,35 @@ class WikiCompileProcessor:
 
         with self._pool.connection() as conn:
             WikiStore(conn).reset_job_to_pending(job_id)
+
+    def _publish_event(self, job, event_type: str, *, result: Optional[dict] = None, error: Optional[str] = None) -> None:
+        """Fan out a terminal-state event to SSE subscribers for the vault.
+
+        Best-effort: never raise out of the poll loop. The event payload is
+        intentionally small — clients refetch the canonical state via the
+        existing REST endpoints on receipt.
+        """
+        try:
+            from app.services.wiki_events import get_wiki_event_bus
+
+            payload: dict = {
+                "type": event_type,
+                "job_id": job.id,
+                "vault_id": job.vault_id,
+                "trigger_type": job.trigger_type,
+            }
+            if result is not None:
+                payload["result"] = {
+                    "page": result.get("page"),
+                    "claims_count": len(result.get("claims") or []),
+                    "entities_count": len(result.get("entities") or []),
+                    "skipped": bool(result.get("skipped")),
+                }
+            if error is not None:
+                payload["error"] = error
+            get_wiki_event_bus().publish(job.vault_id, payload)
+        except Exception as exc:  # noqa: BLE001 — fan-out must never fail the loop
+            logger.debug("WikiCompileProcessor: event publish failed: %s", exc)
 
     def _dispatch(self, job) -> dict:
         """Dispatch a job to the appropriate handler. Runs in a thread."""

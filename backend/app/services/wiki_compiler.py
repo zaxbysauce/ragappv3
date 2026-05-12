@@ -813,8 +813,13 @@ class WikiCompiler:
             return {"page": None, "claims": [], "entities": [], "relations_count": 0, "skipped": True}
 
         extraction = extract_entities_from_text(text)
-        if not extraction.acronyms and not extraction.role_claims:
-            return {"page": None, "claims": [], "entities": [], "relations_count": 0, "skipped": True}
+        # Always materialize a page for the document so the wiki reflects every
+        # ingested file. Deterministic claim/entity/relation passes below are
+        # no-ops when extraction is empty; the optional LLM curator can still
+        # populate claims later. Prior behavior short-circuited here and left
+        # the wiki blank for any document whose prose did not match the narrow
+        # acronym / ALL-CAPS-org role patterns.
+        extraction_empty = not extraction.acronyms and not extraction.role_claims
 
         file_name = file_data.get("file_name") or f"file:{file_id}"
         slug = normalize_slug(f"document/{file_name[:60]}")

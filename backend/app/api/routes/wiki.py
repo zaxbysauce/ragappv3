@@ -4,6 +4,7 @@ Wiki / Knowledge Compiler API routes.
 All endpoints are vault-scoped. Access follows vault access permissions.
 """
 
+import asyncio
 import json
 import logging
 import sqlite3
@@ -11,10 +12,12 @@ from dataclasses import asdict
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.api.deps import evaluate_policy, get_current_active_user, get_db
 from app.services.wiki_compiler import WikiCompiler
+from app.services.wiki_events import get_wiki_event_bus
 from app.services.wiki_linter import WikiLinter
 from app.services.wiki_store import WikiStore
 
@@ -466,6 +469,46 @@ async def list_wiki_jobs(
     store = WikiStore(db)
     jobs = store.list_jobs(vault_id, status=status)
     return {"jobs": [_as_dict(j) for j in jobs]}
+
+
+@router.get("/wiki/events")
+async def wiki_events_stream(
+    vault_id: int = Query(...),
+    user: dict = Depends(get_current_active_user),
+):
+    """SSE stream of terminal-state wiki compile job events for a vault.
+
+    Emits ``data: {json}\\n\\n`` lines whenever a wiki compile job finishes
+    (completed / permanently failed). Clients refetch the canonical state via
+    the existing REST endpoints on each event. A 15-second keepalive comment
+    keeps proxies and load balancers from idling the connection out.
+    """
+    await _require_vault_read(user, vault_id)
+
+    bus = get_wiki_event_bus()
+    queue = bus.subscribe(vault_id)
+
+    async def event_generator():
+        try:
+            # Hello event so the client has positive proof of subscription.
+            yield f"data: {json.dumps({'type': 'subscribed', 'vault_id': vault_id})}\n\n"
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    yield f"data: {json.dumps(event)}\n\n"
+                except asyncio.TimeoutError:
+                    # Comment-line keepalive (ignored by EventSource clients).
+                    yield ": keepalive\n\n"
+        except asyncio.CancelledError:
+            raise
+        finally:
+            bus.unsubscribe(vault_id, queue)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ---------------------------------------------------------------------------
