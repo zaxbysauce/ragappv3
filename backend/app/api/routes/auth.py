@@ -138,7 +138,6 @@ async def register(
         "role": role,
         "is_active": True,
         "access_token": access_token,
-        "refresh_token": refresh_token_raw,
         "token_type": "bearer",
         "message": "User registered successfully",
     }
@@ -566,7 +565,6 @@ async def change_password(
 
     return {
         "access_token": access_token,
-        "refresh_token": refresh_token_raw,
         "token_type": "bearer",
     }
 

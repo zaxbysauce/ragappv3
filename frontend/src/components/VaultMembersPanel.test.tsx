@@ -89,7 +89,7 @@ describe('VaultMembersPanel', () => {
     });
 
     await waitFor(() => {
-      const userIdInput = screen.getByPlaceholderText('Enter user ID...');
+      const userIdInput = screen.getByPlaceholderText('Search users...');
       expect(userIdInput).toBeInTheDocument();
     });
   });

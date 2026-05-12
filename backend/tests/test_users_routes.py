@@ -44,7 +44,8 @@ def setup_test_db(db_path: str) -> sqlite3.Connection:
             role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('superadmin','admin','member','viewer')),
             is_active INTEGER NOT NULL DEFAULT 1,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            last_login_at TIMESTAMP
+            last_login_at TIMESTAMP,
+            must_change_password INTEGER NOT NULL DEFAULT 0
         )
     """)
 
@@ -398,7 +399,7 @@ class TestUpdateUserActive(TestUserRoutes):
         assert data["is_active"] is True
 
     def test_update_user_active_last_superadmin_guard(self):
-        """Cannot deactivate the last superadmin."""
+        """Cannot deactivate the last superadmin (self-deactivation caught first)."""
         token = get_token(self.superadmin_id, "superadmin", "superadmin")
         response = self.client.patch(
             f"/users/{self.superadmin_id}/active",
@@ -407,7 +408,8 @@ class TestUpdateUserActive(TestUserRoutes):
         )
 
         assert response.status_code == 400
-        assert "last superadmin" in response.json()["detail"]
+        # Self-deactivation guard fires before last-superadmin guard
+        assert "Cannot deactivate your own account" in response.json()["detail"]
 
     def test_update_user_active_admin_cannot_deactivate(self):
         """Admin cannot be deactivated by regular admin (only superadmin)."""
@@ -637,3 +639,159 @@ class TestRoleHierarchy(TestUserRoutes):
         )
 
         assert response.status_code == 403
+
+
+class TestUpdateUserActiveSelfDeactivation(TestUserRoutes):
+    """Tests for self-deactivation guard in PATCH /users/{user_id}/active."""
+
+    def test_update_user_active_self_deactivate_returns_400(self):
+        """Admin cannot deactivate their own account - returns 400."""
+        token = get_token(self.admin_id, "admin", "admin")
+        response = self.client.patch(
+            f"/users/{self.admin_id}/active",
+            json={"is_active": False},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert response.status_code == 400
+        assert "own account" in response.json()["detail"]
+
+        # Verify DB was NOT updated
+        cursor = self.conn.execute(
+            "SELECT is_active FROM users WHERE id = ?", (self.admin_id,)
+        )
+        assert cursor.fetchone()[0] == 1  # Still active
+
+    def test_update_user_active_self_reactivate_returns_200(self):
+        """Admin calling activate on themselves (already active) returns 200."""
+        # Admin is already active by default. Calling activate on self should succeed.
+        token = get_token(self.admin_id, "admin", "admin")
+        response = self.client.patch(
+            f"/users/{self.admin_id}/active",
+            json={"is_active": True},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["is_active"] is True
+
+    def test_update_user_active_superadmin_self_deactivate_returns_400(self):
+        """Superadmin cannot deactivate their own account - returns 400."""
+        token = get_token(self.superadmin_id, "superadmin", "superadmin")
+        response = self.client.patch(
+            f"/users/{self.superadmin_id}/active",
+            json={"is_active": False},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert response.status_code == 400
+        assert "own account" in response.json()["detail"]
+
+    def test_update_user_active_other_user_returns_200(self):
+        """Admin can deactivate another user - returns 200."""
+        token = get_token(self.admin_id, "admin", "admin")
+        response = self.client.patch(
+            f"/users/{self.member_id}/active",
+            json={"is_active": False},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["is_active"] is False
+
+        # Verify DB was updated
+        cursor = self.conn.execute(
+            "SELECT is_active FROM users WHERE id = ?", (self.member_id,)
+        )
+        assert cursor.fetchone()[0] == 0
+
+
+class TestUpdateUser(TestUserRoutes):
+    """Tests for PATCH /users/{user_id} endpoint - username uniqueness."""
+
+    def test_update_user_duplicate_username_returns_409(self):
+        """Updating username to an existing username returns 409."""
+        # Create another member with a known username
+        other_member_id = create_user(
+            self.conn, "existinguser", "pass123", "member", "Existing User"
+        )
+
+        token = get_token(self.admin_id, "admin", "admin")
+        response = self.client.patch(
+            f"/users/{self.member_id}",
+            json={"username": "existinguser"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert response.status_code == 409
+        assert "already taken" in response.json()["detail"]
+
+        # Verify DB was NOT updated
+        cursor = self.conn.execute(
+            "SELECT username FROM users WHERE id = ?", (self.member_id,)
+        )
+        assert cursor.fetchone()[0] == "member"  # Still original
+
+    def test_update_user_duplicate_username_case_insensitive_returns_409(self):
+        """Updating username to existing username (different case) returns 409."""
+        # Create another member with a known username
+        create_user(
+            self.conn, "testuser", "pass123", "member", "Test User"
+        )
+
+        token = get_token(self.admin_id, "admin", "admin")
+        response = self.client.patch(
+            f"/users/{self.member_id}",
+            json={"username": "TESTUSER"},  # Different case
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert response.status_code == 409
+        assert "already taken" in response.json()["detail"]
+
+    def test_update_user_unique_username_returns_200(self):
+        """Updating username to a unique username returns 200."""
+        token = get_token(self.admin_id, "admin", "admin")
+        response = self.client.patch(
+            f"/users/{self.member_id}",
+            json={"username": "newuniqueusername"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["username"] == "newuniqueusername"
+
+        # Verify DB was updated
+        cursor = self.conn.execute(
+            "SELECT username FROM users WHERE id = ?", (self.member_id,)
+        )
+        assert cursor.fetchone()[0] == "newuniqueusername"
+
+    def test_update_user_username_same_as_before_returns_200(self):
+        """Updating username to its current value returns 200."""
+        token = get_token(self.admin_id, "admin", "admin")
+        response = self.client.patch(
+            f"/users/{self.member_id}",
+            json={"username": "member"},  # Same as current
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["username"] == "member"
+
+    def test_update_user_without_username_returns_200(self):
+        """Updating other fields without username returns 200."""
+        token = get_token(self.admin_id, "admin", "admin")
+        response = self.client.patch(
+            f"/users/{self.member_id}",
+            json={"full_name": "Updated Name"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["full_name"] == "Updated Name"

@@ -331,6 +331,15 @@ async def update_user(
     update_values = []
 
     if body.username is not None:
+        # Check username uniqueness (case-insensitive)
+        dup_cursor = db.execute(
+            "SELECT id FROM users WHERE username = ? COLLATE NOCASE AND id != ?",
+            (body.username, user_id),
+        )
+        if dup_cursor.fetchone():
+            raise HTTPException(
+                status_code=409, detail="Username already taken"
+            )
         update_fields.append("username = ?")
         update_values.append(body.username)
 
@@ -427,66 +436,6 @@ async def admin_reset_password(
     }
 
 
-@router.patch("/{user_id}/active-status")
-async def update_user_active_status(
-    user_id: int,
-    body: UpdateActiveRequest,
-    user: dict = Depends(require_admin_role),
-    db: sqlite3.Connection = Depends(get_db),
-):
-    """Toggle user active status (admin/superadmin only).
-
-    Cannot deactivate yourself.
-    Cannot deactivate the last admin user.
-    """
-    # Cannot deactivate yourself
-    if user_id == user.get("id") and not body.is_active:
-        raise HTTPException(
-            status_code=400, detail="Cannot deactivate your own account"
-        )
-
-    # Verify target user exists
-    cursor = db.execute("SELECT role, is_active FROM users WHERE id = ?", (user_id,))
-    target_row = cursor.fetchone()
-
-    if not target_row:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    target_role = target_row[0]
-    currently_active = bool(target_row[1])
-
-    # Check if trying to deactivate an admin/superadmin
-    if (
-        target_role in ("admin", "superadmin")
-        and not body.is_active
-        and currently_active
-    ):
-        # Count active admins/superadmins
-        cursor.execute(
-            "SELECT COUNT(*) FROM users WHERE role IN ('admin', 'superadmin') AND is_active = 1"
-        )
-        admin_count = cursor.fetchone()[0]
-
-        if admin_count <= 1:
-            raise HTTPException(
-                status_code=400, detail="Cannot deactivate the last admin user"
-            )
-
-    # Update active status
-    db.execute(
-        "UPDATE users SET is_active = ? WHERE id = ?",
-        (1 if body.is_active else 0, user_id),
-    )
-    db.commit()
-
-    status_str = "activated" if body.is_active else "deactivated"
-    return {
-        "id": user_id,
-        "is_active": body.is_active,
-        "message": f"User {status_str}",
-    }
-
-
 @router.patch("/{user_id}/role")
 async def update_user_role(
     user_id: int,
@@ -548,12 +497,19 @@ async def update_user_active(
     """Activate/deactivate user (admin/superadmin only). Cannot deactivate last superadmin.
 
     Note: admins can deactivate other admins and members. The last-superadmin guard
-    prevents operational lockout. Self-deactivation is prevented by the superadmin check.
+    prevents operational lockout. Self-deactivation is prevented by an explicit guard
+    before the database operation.
     """
     pool = get_pool(str(settings.sqlite_path))
     conn = pool.get_connection()
 
     try:
+        # Cannot deactivate your own account
+        if user_id == user.get("id") and not body.is_active:
+            raise HTTPException(
+                status_code=400, detail="Cannot deactivate your own account"
+            )
+
         cursor = conn.execute(
             "SELECT role, is_active FROM users WHERE id = ?", (user_id,)
         )

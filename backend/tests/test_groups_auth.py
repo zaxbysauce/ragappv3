@@ -390,6 +390,80 @@ class TestListGroups:
         assert "organization_name" in group
         assert group["organization_name"] == "Org With Groups"
 
+    def test_list_groups_admin_only_sees_own_org(self, client):
+        """Admin in Org A does not see groups from Org B."""
+        # Create two orgs
+        org_a_id = _create_org("Org A", 2)  # admin1 (user 2) is owner
+        org_b_id = _create_org("Org B", 1)  # superadmin (user 1) is owner
+
+        # Create groups in both orgs
+        _create_group(org_a_id, "Group in Org A")
+        _create_group(org_a_id, "Another Group in Org A")
+        _create_group(org_b_id, "Group in Org B")
+        _create_group(org_b_id, "Secret Group in Org B")
+
+        # admin1 should only see Org A's groups
+        response = client.get("/api/groups", headers=auth_headers(admin_token))
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 2
+        group_names = {g["name"] for g in data["groups"]}
+        assert group_names == {"Group in Org A", "Another Group in Org A"}
+
+        # Verify all groups belong to Org A
+        for group in data["groups"]:
+            assert group["org_id"] == org_a_id
+
+    def test_list_groups_superadmin_sees_all_orgs(self, client):
+        """Superadmin sees groups from all organizations."""
+        # Create two orgs with groups
+        org_a_id = _create_org("Super Org A", 2)
+        org_b_id = _create_org("Super Org B", 1)
+        _create_group(org_a_id, "Super Admin Group A")
+        _create_group(org_b_id, "Super Admin Group B")
+
+        response = client.get("/api/groups", headers=auth_headers(superadmin_token))
+        assert response.status_code == 200
+        data = response.json()
+        # Should see at least these 2 groups plus any from other tests
+        group_names = {g["name"] for g in data["groups"]}
+        assert "Super Admin Group A" in group_names
+        assert "Super Admin Group B" in group_names
+
+    def test_list_groups_user_no_org_memberships_sees_zero(self, client):
+        """User with no org memberships sees 0 groups."""
+        # member1 (user 3) is never added to any org
+        # Verify they have no org memberships
+        conn = _get_db_conn()
+        cursor = conn.execute(
+            "SELECT COUNT(*) FROM org_members WHERE user_id = 3"
+        )
+        count = cursor.fetchone()[0]
+        conn.close()
+        assert count == 0, "member1 should have no org memberships for this test"
+
+        # member1 is a 'member' role, but requires admin role to list groups
+        # So we need an admin user with no org memberships - create one
+        conn = _get_db_conn()
+        conn.execute("PRAGMA foreign_keys = ON")
+        pw = hash_password("testpass")
+        # Create a new admin user (id=5) with no org memberships
+        conn.execute(
+            "INSERT INTO users (id, username, hashed_password, full_name, role, is_active) VALUES (?, ?, ?, ?, ?, 1)",
+            (5, "orphan_admin", pw, "Orphan Admin", "admin"),
+        )
+        conn.commit()
+        conn.close()
+
+        def orphan_admin_token():
+            return create_access_token(5, "orphan_admin", "admin")
+
+        response = client.get("/api/groups", headers=auth_headers(orphan_admin_token))
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 0
+        assert len(data["groups"]) == 0
+
 
 # =============================================================================
 # Test create_group

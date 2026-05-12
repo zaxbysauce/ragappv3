@@ -486,6 +486,94 @@ class TestAuthRoutes(unittest.TestCase):
         self.assertEqual(data["username"], "profileuser")
         self.assertEqual(data["full_name"], "Test User")
 
+    def test_register_response_body_does_not_contain_refresh_token(self):
+        """POST /api/auth/register JSON body should NOT contain refresh_token."""
+        response = self.client.post(
+            "/api/auth/register",
+            json={"username": "nocookieuser", "password": "password123"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertNotIn("refresh_token", data)
+        # Verify access_token IS present (sanity check)
+        self.assertIn("access_token", data)
+        self.assertEqual(data["token_type"], "bearer")
+
+    def test_register_sets_refresh_token_http_only_cookie(self):
+        """POST /api/auth/register should set refresh_token httpOnly cookie."""
+        response = self.client.post(
+            "/api/auth/register",
+            json={"username": "cookieuser", "password": "password123"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        # Verify cookie is set
+        self.assertIn("refresh_token", response.cookies)
+        # Verify it's httpOnly by checking the Set-Cookie header
+        set_cookie = response.headers.get("set-cookie", "")
+        self.assertIn("refresh_token", set_cookie)
+        self.assertIn("HttpOnly", set_cookie)
+        self.assertIn("Path=/api/auth/refresh", set_cookie)
+
+    def test_change_password_response_body_does_not_contain_refresh_token(self):
+        """POST /api/auth/change-password JSON body should NOT contain refresh_token."""
+        # First register and login to get access token
+        self.client.post(
+            "/api/auth/register",
+            json={"username": "pwchangeuser", "password": "password123"},
+        )
+
+        login_response = self.client.post(
+            "/api/auth/login",
+            json={"username": "pwchangeuser", "password": "password123"},
+        )
+        access_token = login_response.json()["access_token"]
+
+        # Call change-password
+        response = self.client.post(
+            "/api/auth/change-password",
+            json={"current_password": "password123", "new_password": "newpassword456"},
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertNotIn("refresh_token", data)
+        # Verify access_token IS present (sanity check)
+        self.assertIn("access_token", data)
+        self.assertEqual(data["token_type"], "bearer")
+
+    def test_change_password_sets_refresh_token_http_only_cookie(self):
+        """POST /api/auth/change-password should set refresh_token httpOnly cookie."""
+        # First register and login to get access token
+        self.client.post(
+            "/api/auth/register",
+            json={"username": "pwcookieuser", "password": "password123"},
+        )
+
+        login_response = self.client.post(
+            "/api/auth/login",
+            json={"username": "pwcookieuser", "password": "password123"},
+        )
+        access_token = login_response.json()["access_token"]
+
+        # Call change-password
+        response = self.client.post(
+            "/api/auth/change-password",
+            json={"current_password": "password123", "new_password": "newpassword789"},
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        # Verify cookie is set
+        self.assertIn("refresh_token", response.cookies)
+        # Verify it's httpOnly by checking the Set-Cookie header
+        set_cookie = response.headers.get("set-cookie", "")
+        self.assertIn("refresh_token", set_cookie)
+        self.assertIn("HttpOnly", set_cookie)
+        self.assertIn("Path=/api/auth/refresh", set_cookie)
+
 
 if __name__ == "__main__":
     unittest.main()

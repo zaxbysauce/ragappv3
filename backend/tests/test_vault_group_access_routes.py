@@ -40,7 +40,8 @@ CREATE TABLE IF NOT EXISTS users (
     role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('superadmin','admin','member','viewer')),
     is_active INTEGER NOT NULL DEFAULT 1,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    last_login_at TIMESTAMP
+    last_login_at TIMESTAMP,
+    must_change_password INTEGER DEFAULT 0
 );
 
 -- Vaults table
@@ -64,6 +65,18 @@ CREATE TABLE IF NOT EXISTS groups (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
     UNIQUE(org_id, name)
+);
+
+-- Organization members table
+CREATE TABLE IF NOT EXISTS org_members (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    role TEXT NOT NULL DEFAULT 'member',
+    joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE(org_id, user_id)
 );
 
 -- Group members table
@@ -304,6 +317,89 @@ class TestListVaultGroupAccess:
             "/api/vaults/1/group-access", headers=auth_headers(member_token)
         )
         assert response.status_code == 403
+
+
+class TestGrantVaultGroupAccessCrossOrg:
+    """Tests for cross-org validation in grant_vault_group_access."""
+
+    def test_rejects_cross_org_vault_group_access(self, client):
+        """Cross-org vault group access attempt returns 400."""
+        # Create second org
+        conn = _get_db_conn()
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("INSERT INTO organizations (id, name, slug) VALUES (2, 'Other Org', 'other-org')")
+        # Create group in org 2
+        conn.execute("INSERT INTO groups (id, org_id, name) VALUES (4, 2, 'OtherAdmins')")
+        # Create vault in org 1 (vault 1 is in org 1 via group setup)
+        conn.execute("INSERT INTO vaults (id, name, org_id) VALUES (2, 'Org1Vault', 1)")
+        conn.commit()
+        conn.close()
+
+        # Attempt to grant org 2 group access to org 1 vault -> should fail
+        response = client.post(
+            "/api/vaults/2/group-access",
+            json={"group_id": 4, "permission": "read"},
+            headers=auth_headers(superadmin_token),
+        )
+        assert response.status_code == 400
+        assert "different organization" in response.json()["detail"]
+
+    def test_allows_same_org_vault_group_access(self, client):
+        """Same-org vault group access succeeds."""
+        # Vault 1 has no org_id (NULL) but groups 1-3 are all in org 1
+        # Add group 2 (Developers, org 1) to vault 1 -> should succeed
+        response = client.post(
+            "/api/vaults/1/group-access",
+            json={"group_id": 2, "permission": "read"},
+            headers=auth_headers(superadmin_token),
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["group_id"] == 2
+        assert data["group_name"] == "Developers"
+        assert data["permission"] == "read"
+
+    def test_allows_null_org_id_vault_accepts_any_org_group(self, client):
+        """NULL org_id vault accepts any org group."""
+        # Vault 1 has NULL org_id
+        # Group 1 is in org 1 -> should succeed
+        response = client.post(
+            "/api/vaults/1/group-access",
+            json={"group_id": 1, "permission": "read"},
+            headers=auth_headers(superadmin_token),
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["group_id"] == 1
+
+    def test_allows_null_org_id_group_assigned_to_any_vault(self, client):
+        """NULL org_id group can be assigned to any vault."""
+        # Create a vault with org_id = 1
+        conn = _get_db_conn()
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("INSERT INTO vaults (id, name, org_id) VALUES (3, 'OrgVault', 1)")
+        conn.commit()
+        conn.close()
+
+        # Create a group with NULL org_id
+        # Note: groups table has NOT NULL constraint, so we need to test the schema allows this
+        # If the schema is enforced strictly, we test via direct DB insertion bypassing constraints
+        conn = _get_db_conn()
+        conn.execute("PRAGMA foreign_keys = ON")
+        # Insert directly to bypass potential app-level validation
+        conn.execute("INSERT INTO groups (id, org_id, name) VALUES (5, NULL, 'GlobalGroup')")
+        conn.commit()
+        conn.close()
+
+        # Grant NULL org_id group access to org vault -> should succeed per NULL-safe logic
+        response = client.post(
+            "/api/vaults/3/group-access",
+            json={"group_id": 5, "permission": "read"},
+            headers=auth_headers(superadmin_token),
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["group_id"] == 5
 
 
 class TestGrantVaultGroupAccess:

@@ -114,6 +114,7 @@ vi.mock('@/components/ui/dialog', () => ({
 
 vi.mock('@/components/auth/RoleGuard', () => ({
   AdminGuard: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  RoleGuard: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
 describe('OrgsPage', () => {
