@@ -159,7 +159,7 @@ export default function ChatShell() {
           memoriesUsed: m.memories ?? undefined,
           wikiRefs: m.wiki_refs ?? undefined,
           created_at: m.created_at,
-          feedback: m.feedback ?? undefined,
+          feedback: m.feedback ?? null,
         }));
         useChatStore.getState().loadChat(sessionId, loadedMessages);
       } catch (err) {

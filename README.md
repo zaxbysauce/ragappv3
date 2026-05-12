@@ -481,8 +481,11 @@ curl http://localhost:9090/api/health?deep=true | jq .vector_store
 | GET | `/api/chat/sessions/{id}` | Get session with messages |
 | POST | `/api/chat/sessions` | Create new session |
 | POST | `/api/chat/sessions/{id}/messages` | Add message to session |
+| PATCH | `/api/chat/sessions/{id}/messages/{message_id}/feedback` | Set or clear message feedback (`"up"`, `"down"`, or `null`) |
 | PUT | `/api/chat/sessions/{id}` | Update session title |
 | DELETE | `/api/chat/sessions/{id}` | Delete session (CASCADE deletes messages) |
+
+Feedback is stored as the current user's signal on owned chat sessions. Non-admin users need vault write access and may only change feedback for sessions they own; admins and superadmins may moderate feedback on any session they can write. Legacy ownerless sessions keep the vault-write policy.
 
 ### Documents
 

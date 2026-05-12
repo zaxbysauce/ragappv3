@@ -1,8 +1,10 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { MemoryRouter, BrowserRouter } from "react-router-dom";
 import { NavigationRail } from "./NavigationRail";
 import type { NavItemId } from "./navigationTypes";
+
+const mockLogout = vi.hoisted(() => vi.fn());
 
 // Mock useThemeStore before importing NavigationRail (NavigationRail imports useThemeStore)
 vi.mock("@/stores/useThemeStore", () => ({
@@ -15,8 +17,8 @@ vi.mock("@/stores/useThemeStore", () => ({
 
 // Mock useAuthStore — default to admin so all nav items are visible
 vi.mock("@/stores/useAuthStore", () => ({
-  useAuthStore: vi.fn((selector: (s: { user: { role: string } | null }) => unknown) =>
-    selector({ user: { role: "admin" } })
+  useAuthStore: vi.fn((selector: (s: { user: { role: string } | null; logout: () => Promise<void> }) => unknown) =>
+    selector({ user: { role: "admin" }, logout: mockLogout })
   ),
 }));
 
@@ -29,6 +31,11 @@ const mockHealthStatus = {
 };
 
 describe("NavigationRail", () => {
+  beforeEach(() => {
+    mockLogout.mockResolvedValue(undefined);
+    mockLogout.mockClear();
+  });
+
   describe("Navigation Items", () => {
     it("renders all navigation items", () => {
       render(
@@ -120,6 +127,20 @@ describe("NavigationRail", () => {
 
       const usersButton = screen.getByLabelText("Users");
       expect(usersButton).toHaveAttribute("href", "/admin/users");
+    });
+
+    it("logs out from the rail action", async () => {
+      render(
+        <MemoryRouter>
+          <NavigationRail
+            healthStatus={mockHealthStatus}
+          />
+        </MemoryRouter>
+      );
+
+      fireEvent.click(screen.getByLabelText("Log out"));
+
+      await waitFor(() => expect(mockLogout).toHaveBeenCalledTimes(1));
     });
   });
 

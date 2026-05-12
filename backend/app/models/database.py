@@ -508,6 +508,7 @@ def init_db(sqlite_path: str) -> None:
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA busy_timeout=30000;")
         conn.execute("PRAGMA foreign_keys = ON;")
+        migrate_add_user_id_to_chat_sessions(sqlite_path, conn=conn)
         conn.executescript(SCHEMA)
         # Ensure default vault exists
         conn.execute(
@@ -582,6 +583,7 @@ def run_migrations(sqlite_path: str) -> None:
     migrate_add_vault_permission_columns(sqlite_path)
     migrate_vault_paths(sqlite_path)
     migrate_add_org_slug_column(sqlite_path)
+    migrate_add_user_id_to_chat_sessions(sqlite_path)
     migrate_add_fork_columns(sqlite_path)
     migrate_add_feedback_column(sqlite_path)
     migrate_add_chat_memories_column(sqlite_path)
@@ -906,6 +908,36 @@ def migrate_vault_paths(sqlite_path: str) -> None:
                 # Continue with other vaults, don't raise
     finally:
         conn.close()
+
+
+def migrate_add_user_id_to_chat_sessions(
+    sqlite_path: str,
+    conn: sqlite3.Connection | None = None,
+) -> None:
+    """Migration: Add owner user_id to chat_sessions for per-user policy checks."""
+    owns_connection = conn is None
+    conn = conn or sqlite3.connect(sqlite_path)
+    try:
+        table_cursor = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='chat_sessions'"
+        )
+        if table_cursor.fetchone() is None:
+            return
+
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(chat_sessions)").fetchall()
+        }
+        if "user_id" not in columns:
+            conn.execute("ALTER TABLE chat_sessions ADD COLUMN user_id INTEGER")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_chat_sessions_user_id "
+            "ON chat_sessions(user_id)"
+        )
+        conn.commit()
+    finally:
+        if owns_connection:
+            conn.close()
 
 
 def migrate_add_fork_columns(sqlite_path: str) -> None:

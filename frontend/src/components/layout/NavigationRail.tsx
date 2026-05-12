@@ -1,8 +1,8 @@
-import { MessageSquare, FileText, Brain, Settings, Database, Users, UserCog, Building2, UserCircle, Sun, Moon, BookOpen } from "lucide-react";
+import { MessageSquare, FileText, Brain, Settings, Database, Users, UserCog, Building2, UserCircle, Sun, Moon, BookOpen, LogOut } from "lucide-react";
 import { useThemeStore } from "@/stores/useThemeStore";
 import { useAuthStore } from "@/stores/useAuthStore";
 import { cn } from "@/lib/utils";
-import { NavLink, useLocation } from "react-router-dom";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import type { NavItemId, NavigationProps } from "./navigationTypes";
 
 // Re-export types for backward compatibility
@@ -52,9 +52,11 @@ interface NavigationRailProps {
 
 export function NavigationRail({ healthStatus }: NavigationRailProps) {
   const location = useLocation();
+  const navigate = useNavigate();
   const pathname = location.pathname;
   const { theme, setTheme } = useThemeStore();
   const userRole = useAuthStore((state) => state.user?.role);
+  const logout = useAuthStore((state) => state.logout);
   const isAdmin = userRole === "admin" || userRole === "superadmin";
 
   // Determine active item based on current pathname
@@ -75,6 +77,10 @@ export function NavigationRail({ healthStatus }: NavigationRailProps) {
   };
 
   const activeItem = getActiveItem();
+  const handleLogout = async () => {
+    await logout();
+    navigate("/login", { replace: true });
+  };
 
   return (
     <nav className="w-20 min-h-screen bg-card border-r border-border flex flex-col items-center py-6 gap-2" aria-label="Main navigation">
@@ -134,6 +140,16 @@ export function NavigationRail({ healthStatus }: NavigationRailProps) {
 
       {/* Bottom Spacer */}
       <div className="mt-auto" />
+
+      {/* Logout */}
+      <button
+        type="button"
+        onClick={handleLogout}
+        className="p-2 rounded-lg hover:bg-secondary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        aria-label="Log out"
+      >
+        <LogOut className="w-4 h-4 text-muted-foreground" />
+      </button>
 
       {/* Theme Toggle (H-30) */}
       <button

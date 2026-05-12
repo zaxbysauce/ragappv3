@@ -240,6 +240,7 @@ export const useAuthStore = create<AuthState>()(
             isAuthenticated: false,
           });
           setJwtAccessToken(null);
+          resetCsrfToken();
           get()._setLoading(false);
           // Reset init guard so re-login works after logout
           _initAttempted = false;

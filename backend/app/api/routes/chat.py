@@ -725,9 +725,9 @@ async def create_session(
     if not await evaluate_policy(user, "vault", request.vault_id, "write"):
         raise HTTPException(status_code=403, detail="No write access to this vault")
 
-    query = "INSERT INTO chat_sessions (vault_id, title, created_at, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+    query = "INSERT INTO chat_sessions (vault_id, user_id, title, created_at, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
     cursor = await asyncio.to_thread(
-        conn.execute, query, (request.vault_id, request.title)
+        conn.execute, query, (request.vault_id, user["id"], request.title)
     )
     await asyncio.to_thread(conn.commit)
 
@@ -819,8 +819,8 @@ async def fork_session(
     fork_title = f"Branch of {session_row[2] or 'conversation'}"
     cursor = await asyncio.to_thread(
         conn.execute,
-        "INSERT INTO chat_sessions (vault_id, title, forked_from_session_id, fork_message_index, created_at, updated_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-        (vault_id, fork_title, session_id, request.message_index),
+        "INSERT INTO chat_sessions (vault_id, user_id, title, forked_from_session_id, fork_message_index, created_at, updated_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+        (vault_id, user["id"], fork_title, session_id, request.message_index),
     )
     await asyncio.to_thread(conn.commit)
     new_session_id = cursor.lastrowid
@@ -1218,10 +1218,12 @@ async def set_message_feedback(
             detail="rating must be 'up', 'down', or null",
         )
 
-    # Verify session exists and get vault_id for authorization
+    # Verify session exists and get vault_id/owner for authorization.
+    # Feedback is treated as a per-user signal on owned sessions; admin roles can
+    # moderate any session, while legacy ownerless sessions keep vault-write access.
     session_result = await asyncio.to_thread(
         conn.execute,
-        "SELECT id, vault_id FROM chat_sessions WHERE id = ?",
+        "SELECT id, vault_id, user_id FROM chat_sessions WHERE id = ?",
         (session_id,),
     )
     session_row = await asyncio.to_thread(session_result.fetchone)
@@ -1230,6 +1232,14 @@ async def set_message_feedback(
 
     if not await evaluate_policy(user, "vault", session_row[1], "write"):
         raise HTTPException(status_code=403, detail="No write access to this vault")
+
+    session_owner_id = session_row[2]
+    if (
+        session_owner_id is not None
+        and session_owner_id != user["id"]
+        and user.get("role") not in ("superadmin", "admin")
+    ):
+        raise HTTPException(status_code=403, detail="Cannot update feedback for another user's session")
 
     # Verify message belongs to session
     check_result = await asyncio.to_thread(

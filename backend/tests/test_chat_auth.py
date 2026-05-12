@@ -72,7 +72,7 @@ from fastapi.testclient import TestClient
 from app.api.deps import get_db, get_rag_engine, get_vector_store
 from app.config import settings
 from app.main import app
-from app.services.auth_service import create_access_token, hash_password
+from app.services.auth_service import create_access_token
 
 
 class SimpleConnectionPool:
@@ -183,7 +183,9 @@ class TestChatAuthBase(unittest.TestCase):
             conn.execute("DELETE FROM chat_sessions")
             conn.execute("DELETE FROM users WHERE id != 0")  # Keep admin user if exists
 
-            pw = hash_password("testpass")
+            # These tests authenticate with generated JWTs, so the password hash
+            # only needs to satisfy the users table shape.
+            pw = "unused-test-password-hash"
 
             # User 1: superadmin
             conn.execute(
@@ -324,6 +326,13 @@ class TestChatAuthentication(TestChatAuthBase):
         response = self.client.delete("/api/chat/sessions/1")
         self.assertEqual(response.status_code, 401)
 
+    def test_patch_message_feedback_unauthenticated(self):
+        """PATCH message feedback without auth returns 401."""
+        response = self.client.patch(
+            "/api/chat/sessions/1/messages/1/feedback", json={"rating": "up"}
+        )
+        self.assertEqual(response.status_code, 401)
+
 
 class TestChatAuthorization(TestChatAuthBase):
     """Tests for chat endpoint authorization."""
@@ -350,6 +359,139 @@ class TestChatAuthorization(TestChatAuthBase):
         )
         # Should succeed since we mocked rag_engine
         self.assertEqual(response.status_code, 200)
+
+
+class TestMessageFeedbackRoute(TestChatAuthBase):
+    """Tests for message feedback persistence, validation, and ownership policy."""
+
+    def _seed_feedback_message(self, vault_id=3, owner_id=3, role="assistant"):
+        conn = self._get_db_conn()
+        try:
+            cursor = conn.execute(
+                "INSERT INTO chat_sessions (vault_id, user_id, title, created_at, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+                (vault_id, owner_id, "Feedback Session"),
+            )
+            session_id = cursor.lastrowid
+            cursor = conn.execute(
+                "INSERT INTO chat_messages (session_id, role, content, sources, created_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)",
+                (session_id, role, "Feedback target", "[]"),
+            )
+            message_id = cursor.lastrowid
+            conn.commit()
+            return session_id, message_id
+        finally:
+            self._connection_pool.release_connection(conn)
+
+    def _grant_member2_write_to_vault3(self):
+        conn = self._get_db_conn()
+        try:
+            conn.execute(
+                "INSERT OR IGNORE INTO vault_members (vault_id, user_id, permission, granted_by) VALUES (?, ?, ?, ?)",
+                (3, 4, "write", 1),
+            )
+            conn.commit()
+        finally:
+            self._connection_pool.release_connection(conn)
+
+    def test_set_update_and_clear_feedback(self):
+        """Owner with vault write can set, change, and clear feedback."""
+        session_id, message_id = self._seed_feedback_message()
+
+        for rating in ("up", "down", None):
+            response = self.client.patch(
+                f"/api/chat/sessions/{session_id}/messages/{message_id}/feedback",
+                json={"rating": rating},
+                headers=self._auth_headers(self._member_token()),
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["feedback"], rating)
+
+    def test_invalid_rating_returns_422(self):
+        """Only up, down, and null are accepted as feedback ratings."""
+        session_id, message_id = self._seed_feedback_message()
+
+        response = self.client.patch(
+            f"/api/chat/sessions/{session_id}/messages/{message_id}/feedback",
+            json={"rating": "sideways"},
+            headers=self._auth_headers(self._member_token()),
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("rating must be", response.json()["detail"])
+
+    def test_user_without_vault_write_gets_403(self):
+        """Feedback mutation requires vault write access before ownership checks."""
+        session_id, message_id = self._seed_feedback_message()
+
+        response = self.client.patch(
+            f"/api/chat/sessions/{session_id}/messages/{message_id}/feedback",
+            json={"rating": "up"},
+            headers=self._auth_headers(self._member_no_access_token()),
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("No write access", response.json()["detail"])
+
+    def test_non_owner_with_vault_write_cannot_update_feedback(self):
+        """Non-admin users cannot overwrite another user's owned feedback signal."""
+        self._grant_member2_write_to_vault3()
+        session_id, message_id = self._seed_feedback_message(owner_id=3)
+
+        response = self.client.patch(
+            f"/api/chat/sessions/{session_id}/messages/{message_id}/feedback",
+            json={"rating": "down"},
+            headers=self._auth_headers(self._member_no_access_token()),
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("another user's session", response.json()["detail"])
+
+    def test_legacy_ownerless_session_allows_any_vault_writer(self):
+        """Legacy sessions with NULL owner keep the vault-write feedback policy."""
+        self._grant_member2_write_to_vault3()
+        session_id, message_id = self._seed_feedback_message(owner_id=None)
+
+        response = self.client.patch(
+            f"/api/chat/sessions/{session_id}/messages/{message_id}/feedback",
+            json={"rating": "up"},
+            headers=self._auth_headers(self._member_no_access_token()),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["feedback"], "up")
+
+    def test_admin_can_update_owned_session_feedback(self):
+        """Admins can moderate feedback across owned sessions."""
+        session_id, message_id = self._seed_feedback_message(owner_id=3)
+
+        response = self.client.patch(
+            f"/api/chat/sessions/{session_id}/messages/{message_id}/feedback",
+            json={"rating": "down"},
+            headers=self._auth_headers(self._admin_token()),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["feedback"], "down")
+
+    def test_missing_session_or_message_returns_404(self):
+        """Missing sessions and messages return distinct 404 responses."""
+        session_id, message_id = self._seed_feedback_message()
+
+        missing_session = self.client.patch(
+            f"/api/chat/sessions/99999/messages/{message_id}/feedback",
+            json={"rating": "up"},
+            headers=self._auth_headers(self._member_token()),
+        )
+        self.assertEqual(missing_session.status_code, 404)
+        self.assertIn("Session not found", missing_session.json()["detail"])
+
+        missing_message = self.client.patch(
+            f"/api/chat/sessions/{session_id}/messages/99999/feedback",
+            json={"rating": "up"},
+            headers=self._auth_headers(self._member_token()),
+        )
+        self.assertEqual(missing_message.status_code, 404)
+        self.assertIn("Message not found", missing_message.json()["detail"])
 
 
 if __name__ == "__main__":
