@@ -110,10 +110,10 @@ export const FIELD_TAB: Record<keyof SettingsFormData, SettingsTab> = {
   instant_chat_url: "models",
   instant_chat_model: "models",
   default_chat_mode: "models",
-  instant_initial_retrieval_top_k: "retrieval",
-  instant_reranker_top_n: "retrieval",
-  instant_memory_context_top_k: "retrieval",
-  instant_max_tokens: "retrieval",
+  instant_initial_retrieval_top_k: "models",
+  instant_reranker_top_n: "models",
+  instant_memory_context_top_k: "models",
+  instant_max_tokens: "models",
   wiki_enabled: "wiki",
   wiki_compile_on_ingest: "wiki",
   wiki_compile_on_query: "wiki",
@@ -460,6 +460,50 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       !/^https?:\/\//.test(formData.ollama_chat_url)
     ) {
       newErrors.ollama_chat_url = "URL must start with http:// or https://";
+    }
+    if (
+      formData.instant_chat_url &&
+      !/^https?:\/\//.test(formData.instant_chat_url)
+    ) {
+      newErrors.instant_chat_url = "URL must start with http:// or https://";
+    }
+    if (
+      formData.default_chat_mode === "instant" &&
+      !formData.instant_chat_model.trim()
+    ) {
+      newErrors.instant_chat_model = "Instant chat model is required";
+    }
+    if (!["instant", "thinking"].includes(formData.default_chat_mode)) {
+      newErrors.default_chat_mode =
+        "Default chat mode must be instant or thinking";
+    }
+    if (
+      formData.instant_initial_retrieval_top_k <= 0 ||
+      !Number.isInteger(formData.instant_initial_retrieval_top_k)
+    ) {
+      newErrors.instant_initial_retrieval_top_k =
+        "Instant initial retrieval top-k must be a positive integer";
+    }
+    if (
+      formData.instant_reranker_top_n <= 0 ||
+      !Number.isInteger(formData.instant_reranker_top_n)
+    ) {
+      newErrors.instant_reranker_top_n =
+        "Instant reranker top-n must be a positive integer";
+    }
+    if (
+      formData.instant_memory_context_top_k <= 0 ||
+      !Number.isInteger(formData.instant_memory_context_top_k)
+    ) {
+      newErrors.instant_memory_context_top_k =
+        "Instant memory context top-k must be a positive integer";
+    }
+    if (
+      formData.instant_max_tokens <= 0 ||
+      !Number.isInteger(formData.instant_max_tokens)
+    ) {
+      newErrors.instant_max_tokens =
+        "Instant max tokens must be a positive integer";
     }
 
     // Curator: required-when-enabled (frontend mirror of backend invariant).

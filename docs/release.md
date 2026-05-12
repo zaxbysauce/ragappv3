@@ -78,8 +78,15 @@ Before deploying KnowledgeVault to production, ensure the following:
   DATA_DIR=/data/knowledgevault
   OLLAMA_EMBEDDING_URL=http://harrier-embed:8080/v1/embeddings
   OLLAMA_CHAT_URL=http://host.docker.internal:11434
+  INSTANT_CHAT_URL=http://host.docker.internal:1234
   EMBEDDING_MODEL=microsoft/harrier-oss-v1-0.6b
   CHAT_MODEL=gemma-4-26b-a4b-it-apex
+  INSTANT_CHAT_MODEL=nvidia/nemotron-3-nano-4b
+  DEFAULT_CHAT_MODE=thinking
+  INSTANT_INITIAL_RETRIEVAL_TOP_K=10
+  INSTANT_RERANKER_TOP_N=4
+  INSTANT_MEMORY_CONTEXT_TOP_K=2
+  INSTANT_MAX_TOKENS=4096
   
   # Security settings
   ADMIN_SECRET_TOKEN=<secure-random-token>

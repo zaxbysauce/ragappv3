@@ -191,9 +191,16 @@ On first launch, you'll be redirected to the **Setup Wizard** (`/setup`) to crea
 | `HOST_DATA_DIR` | ./data | Host path for data persistence |
 | `DATA_DIR` | /app/data | Container data path |
 | `OLLAMA_EMBEDDING_URL` | http://harrier-embed:8080/v1/embeddings | Embedding service endpoint (TEI) |
-| `OLLAMA_CHAT_URL` | http://host.docker.internal:11434 | Ollama chat endpoint |
+| `OLLAMA_CHAT_URL` | http://host.docker.internal:11434 | Thinking chat endpoint |
+| `INSTANT_CHAT_URL` | http://host.docker.internal:1234 | Instant chat endpoint |
 | `EMBEDDING_MODEL` | microsoft/harrier-oss-v1-0.6b | Embedding model name |
-| `CHAT_MODEL` | gemma-4-26b-a4b-it-apex | Chat model name |
+| `CHAT_MODEL` | gemma-4-26b-a4b-it-apex | Thinking chat model name |
+| `INSTANT_CHAT_MODEL` | nvidia/nemotron-3-nano-4b | Instant chat model name |
+| `DEFAULT_CHAT_MODE` | thinking | Default mode for new chats (`thinking` or `instant`) |
+| `INSTANT_INITIAL_RETRIEVAL_TOP_K` | 10 | Instant-mode initial retrieval candidate count |
+| `INSTANT_RERANKER_TOP_N` | 4 | Instant-mode reranked document count |
+| `INSTANT_MEMORY_CONTEXT_TOP_K` | 2 | Instant-mode memory context count |
+| `INSTANT_MAX_TOKENS` | 4096 | Instant-mode completion token budget |
 | `CHUNK_SIZE_CHARS` | 2000 | Document chunk size in characters (~500 tokens) |
 | `CHUNK_OVERLAP_CHARS` | 200 | Chunk overlap in characters (~50 tokens) |
 | `RETRIEVAL_TOP_K` | 12 | Number of chunks to retrieve for RAG context |

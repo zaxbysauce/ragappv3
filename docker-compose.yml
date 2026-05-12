@@ -82,9 +82,16 @@ services:
       - UVICORN_RELOAD=false
       - OLLAMA_EMBEDDING_URL=http://harrier-embed:8080/v1/embeddings
       - OLLAMA_CHAT_URL=${OLLAMA_CHAT_URL:-http://host.docker.internal:11434}
+      - INSTANT_CHAT_URL=${INSTANT_CHAT_URL:-http://host.docker.internal:1234}
       - EMBEDDING_MODEL=${EMBEDDING_MODEL:-microsoft/harrier-oss-v1-0.6b}
       - EMBEDDING_DIM=${EMBEDDING_DIM:-1024}
       - CHAT_MODEL=${CHAT_MODEL:-gemma-4-26b-a4b-it-apex}
+      - INSTANT_CHAT_MODEL=${INSTANT_CHAT_MODEL:-nvidia/nemotron-3-nano-4b}
+      - DEFAULT_CHAT_MODE=${DEFAULT_CHAT_MODE:-thinking}
+      - INSTANT_INITIAL_RETRIEVAL_TOP_K=${INSTANT_INITIAL_RETRIEVAL_TOP_K:-10}
+      - INSTANT_RERANKER_TOP_N=${INSTANT_RERANKER_TOP_N:-4}
+      - INSTANT_MEMORY_CONTEXT_TOP_K=${INSTANT_MEMORY_CONTEXT_TOP_K:-2}
+      - INSTANT_MAX_TOKENS=${INSTANT_MAX_TOKENS:-4096}
       - RERANKER_URL=http://reranker:8081
       - RERANKER_MODEL=${RERANKER_MODEL:-BAAI/bge-reranker-v2-m3}
       - RERANKING_ENABLED=${RERANKING_ENABLED:-true}

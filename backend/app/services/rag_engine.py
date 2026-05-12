@@ -194,8 +194,8 @@ class RAGEngine:
         # Query transformer instance (lazy-loaded)
         self._query_transformer: Optional[QueryTransformer] = None
 
-        # Retrieval evaluator instance (lazy-loaded)
-        self._retrieval_evaluator: Optional[RetrievalEvaluator] = None
+        # Retrieval evaluator instances (lazy-loaded per active LLM client).
+        self._retrieval_evaluators: Dict[int, RetrievalEvaluator] = {}
 
         # Wiki retrieval service (optional — injected at startup)
         self._wiki_retrieval = wiki_retrieval
@@ -561,6 +561,7 @@ class RAGEngine:
                     variants_dropped=variants_dropped,
                     override_initial_top_k=effective_initial_top_k,
                     override_reranker_top_n=effective_reranker_top_n,
+                    active_client=active_client,
                 )
                 logger.info(
                     "[query] _execute_retrieval returned: result_count=%d, first_3_distances=%s",
@@ -811,6 +812,7 @@ class RAGEngine:
         variants_dropped: List[str] = None,
         override_initial_top_k: Optional[int] = None,
         override_reranker_top_n: Optional[int] = None,
+        active_client: Optional[LLMClient] = None,
     ) -> tuple[List[Dict[str, Any]], Optional[str], str, Optional[bool], str, str, int, str, List[str], bool, Dict[str, int]]:
         """Execute vector search and retrieval evaluation.
 
@@ -1145,11 +1147,15 @@ class RAGEngine:
 
                 # Retrieval evaluation (CRAG-style self-evaluation)
                 relevance_hint_eval: Optional[str] = None
-                if settings.retrieval_evaluation_enabled and self.llm_client is not None:
+                if settings.retrieval_evaluation_enabled and active_client is not None:
                     try:
-                        if self._retrieval_evaluator is None:
-                            self._retrieval_evaluator = RetrievalEvaluator(self.llm_client)
-                        eval_result = await self._retrieval_evaluator.evaluate(
+                        evaluator_key = id(active_client)
+                        if evaluator_key not in self._retrieval_evaluators:
+                            self._retrieval_evaluators[evaluator_key] = RetrievalEvaluator(
+                                active_client
+                            )
+                        retrieval_evaluator = self._retrieval_evaluators[evaluator_key]
+                        eval_result = await retrieval_evaluator.evaluate(
                             user_input, vector_results
                         )
                         if eval_result == "NO_MATCH":

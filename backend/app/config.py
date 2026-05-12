@@ -624,6 +624,28 @@ class Settings(BaseSettings):
             raise ValueError("RRF k must be >= 1")
         return v
 
+    @field_validator("default_chat_mode", mode="after")
+    @classmethod
+    def validate_default_chat_mode(cls, v: str) -> str:
+        """Validate default chat mode from env/defaults before startup."""
+        if v not in ("instant", "thinking"):
+            raise ValueError("default_chat_mode must be 'instant' or 'thinking'")
+        return v
+
+    @field_validator(
+        "instant_initial_retrieval_top_k",
+        "instant_reranker_top_n",
+        "instant_memory_context_top_k",
+        "instant_max_tokens",
+        mode="after",
+    )
+    @classmethod
+    def validate_instant_positive_ints(cls, v: int) -> int:
+        """Validate instant-mode budgets from env/defaults before startup."""
+        if v < 1:
+            raise ValueError("instant-mode numeric settings must be >= 1")
+        return v
+
     @model_validator(mode="after")
     def validate_rrf_weight_sanity(self) -> "Settings":
         """Validate at least one RRF arm weight is > 0.0 to prevent silent retrieval outage."""
