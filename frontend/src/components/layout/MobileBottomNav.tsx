@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { MessageSquare, FileText, Brain, MoreHorizontal, Database, Settings, Users, X, User, Building2, UserCog, BookOpen } from "lucide-react";
+import { MessageSquare, FileText, Brain, MoreHorizontal, Database, Settings, Users, X, User, Building2, UserCog, BookOpen, LogOut } from "lucide-react";
 import {
   Sheet,
   SheetContent,
@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/useAuthStore";
+import { useNavigate } from "react-router-dom";
 import type { NavItemId } from "./navigationTypes";
 
 interface MobileBottomNavProps {
@@ -37,8 +38,16 @@ const moreNavItems: { id: NavItemId; label: string; icon: React.ComponentType<{ 
 
 export function MobileBottomNav({ activeItem, onItemSelect }: MobileBottomNavProps) {
   const [moreOpen, setMoreOpen] = useState(false);
+  const navigate = useNavigate();
   const userRole = useAuthStore((state) => state.user?.role);
+  const logout = useAuthStore((state) => state.logout);
   const isAdmin = userRole === "admin" || userRole === "superadmin";
+
+  const handleLogout = async () => {
+    setMoreOpen(false);
+    await logout();
+    navigate("/login", { replace: true });
+  };
 
   return (
     <nav className="fixed bottom-0 left-0 right-0 bg-card border-t border-border z-50 md:hidden" aria-label="Mobile navigation">
@@ -158,6 +167,18 @@ export function MobileBottomNav({ activeItem, onItemSelect }: MobileBottomNavPro
                   </button>
                 );
               })}
+              <button
+                type="button"
+                onClick={handleLogout}
+                className={cn(
+                  "flex flex-col items-center gap-3 p-4 rounded-xl border border-border transition-all duration-200",
+                  "hover:bg-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                )}
+                aria-label="Log out"
+              >
+                <LogOut className="w-6 h-6 text-muted-foreground" />
+                <span className="text-sm font-medium text-foreground">Log out</span>
+              </button>
             </div>
           </SheetContent>
         </Sheet>

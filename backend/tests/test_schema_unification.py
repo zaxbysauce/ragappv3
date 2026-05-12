@@ -209,6 +209,47 @@ class TestDatabaseCreation:
         finally:
             conn.close()
 
+    def test_run_migrations_adds_user_id_to_legacy_chat_sessions(self, tmp_path):
+        """Older databases missing chat_sessions.user_id must migrate before schema indexes run."""
+        db_path = tmp_path / "legacy.db"
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute("""
+                CREATE TABLE chat_sessions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    vault_id INTEGER NOT NULL DEFAULT 1,
+                    title TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.execute(
+                "INSERT INTO chat_sessions (vault_id, title) VALUES (?, ?)",
+                (1, "legacy"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        run_migrations(str(db_path))
+
+        conn = sqlite3.connect(db_path)
+        try:
+            cursor = conn.execute("PRAGMA table_info(chat_sessions)")
+            columns = {row[1] for row in cursor.fetchall()}
+            assert "user_id" in columns
+
+            cursor = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index'"
+            )
+            indexes = {row[0] for row in cursor.fetchall()}
+            assert "idx_chat_sessions_user_id" in indexes
+
+            cursor = conn.execute("SELECT user_id FROM chat_sessions WHERE title = ?", ("legacy",))
+            assert cursor.fetchone()[0] is None
+        finally:
+            conn.close()
+
     def test_init_db_creates_users_table_with_security_columns(self):
         """Fresh database users table must have security columns."""
         conn = sqlite3.connect(":memory:")

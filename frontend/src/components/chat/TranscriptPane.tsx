@@ -406,7 +406,7 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
         sources: m.sources ?? undefined,
         memoriesUsed: m.memories ?? undefined,
         created_at: m.created_at,
-        feedback: m.feedback ?? undefined,
+        feedback: m.feedback ?? null,
       }));
       loadChat(String(forked.id), forkMessages);
       await refreshHistory();
