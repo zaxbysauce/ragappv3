@@ -80,8 +80,8 @@ vi.mock("@/hooks/useDebounce", () => ({
 // Mock useVaultStore
 vi.mock("@/stores/useVaultStore", () => ({
   useVaultStore: vi.fn(() => ({
-    activeVaultId: null,
-    vaults: [],
+    activeVaultId: 1,
+    vaults: [{ id: 1, current_user_permission: "admin" }],
   })),
 }));
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import secrets
 import sqlite3
 from collections.abc import Callable
@@ -35,6 +36,11 @@ class UserRole(IntEnum):
             return cls[role_name.upper()].value
         except (KeyError, AttributeError):
             return 0
+
+
+VAULT_PERMISSION_LEVELS = {"read": 1, "write": 2, "admin": 3}
+VAULT_PERMISSION_NAMES = {0: None, 1: "read", 2: "write", 3: "admin"}
+VAULT_ACTION_LEVELS = {"read": 1, "write": 2, "delete": 3, "admin": 3}
 
 
 # Lazy imports — services are only loaded when their getter is actually called.
@@ -261,6 +267,77 @@ async def get_current_active_user(
     return user
 
 
+def get_effective_vault_permission(
+    db: sqlite3.Connection,
+    principal: dict,
+    vault_id: int | None,
+) -> str | None:
+    """Return the user's strongest effective permission on a vault."""
+    if vault_id is None:
+        return None
+    return get_effective_vault_permissions(db, principal, [vault_id]).get(vault_id)
+
+
+def get_effective_vault_permissions(
+    db: sqlite3.Connection,
+    principal: dict,
+    vault_ids: list[int],
+) -> dict[int, str | None]:
+    """Return each vault's strongest effective permission for the user."""
+    user_id = principal.get("id")
+    user_role = principal.get("role", "")
+    normalized_ids = list(dict.fromkeys(vault_ids))
+
+    if user_id is None or not normalized_ids:
+        return {}
+
+    if user_role == "superadmin":
+        return {vault_id: "admin" for vault_id in normalized_ids}
+
+    baseline_level = VAULT_PERMISSION_LEVELS["write"] if user_role == "admin" else 0
+    effective_levels = {vault_id: baseline_level for vault_id in normalized_ids}
+    placeholders = ",".join("?" for _ in normalized_ids)
+
+    cursor = db.execute(
+        f"""SELECT vault_id, permission FROM vault_members
+            WHERE user_id = ? AND vault_id IN ({placeholders})""",
+        (user_id, *normalized_ids),
+    )
+    for vault_id, permission in cursor.fetchall():
+        effective_levels[vault_id] = max(
+            effective_levels[vault_id],
+            VAULT_PERMISSION_LEVELS.get(permission, 0),
+        )
+
+    cursor = db.execute(
+        f"""SELECT vga.vault_id, vga.permission FROM vault_group_access vga
+           JOIN group_members gm ON vga.group_id = gm.group_id
+           WHERE gm.user_id = ? AND vga.vault_id IN ({placeholders})""",
+        (user_id, *normalized_ids),
+    )
+    for vault_id, permission in cursor.fetchall():
+        effective_levels[vault_id] = max(
+            effective_levels[vault_id],
+            VAULT_PERMISSION_LEVELS.get(permission, 0),
+        )
+
+    cursor = db.execute(
+        f"""SELECT id FROM vaults
+            WHERE visibility = 'public' AND id IN ({placeholders})""",
+        tuple(normalized_ids),
+    )
+    for (vault_id,) in cursor.fetchall():
+        effective_levels[vault_id] = max(
+            effective_levels[vault_id],
+            VAULT_PERMISSION_LEVELS["read"],
+        )
+
+    return {
+        vault_id: VAULT_PERMISSION_NAMES.get(effective_levels[vault_id])
+        for vault_id in normalized_ids
+    }
+
+
 async def _evaluate_policy(
     db: sqlite3.Connection,
     principal: dict,
@@ -288,58 +365,12 @@ async def _evaluate_policy(
     if user_role == "superadmin":
         return True
 
-    if user_role == "admin":
-        if action in ("read", "write"):
-            return True
-        return False
-
-    # Use injected db connection instead of creating new pool
-    cursor = db.execute(
-        "SELECT permission FROM vault_members WHERE vault_id = ? AND user_id = ?",
-        (resource_id, user_id),
+    effective_permission = await asyncio.to_thread(
+        get_effective_vault_permission, db, principal, resource_id
     )
-    row = cursor.fetchone()
-
-    if row:
-        permission_levels = {"read": 1, "write": 2, "admin": 3}
-        action_levels = {"read": 1, "write": 2, "delete": 3, "admin": 3}
-
-        required_level = action_levels.get(action, 1)
-        user_level = permission_levels.get(row[0], 0)
-
-        if user_level >= required_level:
-            return True
-
-    # Check vault_group_access for group-based permissions
-    cursor = db.execute(
-        """SELECT vga.permission FROM vault_group_access vga
-           JOIN group_members gm ON vga.group_id = gm.group_id
-           WHERE vga.vault_id = ? AND gm.user_id = ?""",
-        (resource_id, user_id),
-    )
-    group_permissions = cursor.fetchall()
-
-    if group_permissions:
-        permission_levels = {"read": 1, "write": 2, "admin": 3}
-        action_levels = {"read": 1, "write": 2, "delete": 3, "admin": 3}
-
-        highest_level = max(permission_levels.get(p[0], 0) for p in group_permissions)
-        required_level = action_levels.get(action, 1)
-
-        if highest_level >= required_level:
-            return True
-
-    # Check vault visibility for public read access
-    if action == "read":
-        cursor = db.execute(
-            "SELECT visibility FROM vaults WHERE id = ?", (resource_id,)
-        )
-        row = cursor.fetchone()
-
-        if row and row[0] == "public":
-            return True
-
-    return False
+    effective_level = VAULT_PERMISSION_LEVELS.get(effective_permission or "", 0)
+    required_level = VAULT_ACTION_LEVELS.get(action, VAULT_ACTION_LEVELS["read"])
+    return effective_level >= required_level
 
 
 def get_evaluate_policy(
@@ -459,33 +490,20 @@ def get_user_accessible_vault_ids(user: dict, db) -> list:
     - vault_group_access via group membership
     - For superadmin/admin: returns empty list (means "all vaults")
     """
-    user_id = user["id"]
     user_role = user.get("role", "")
 
     # superadmin/admin can access all vaults
     if user_role in ("superadmin", "admin"):
         return []  # Empty list means "all vaults"
 
-    vault_ids = set()
-
-    # Direct vault_members access
-    cursor = db.execute(
-        "SELECT vault_id FROM vault_members WHERE user_id = ?", (user_id,)
-    )
-    for row in cursor.fetchall():
-        vault_ids.add(row[0])
-
-    # Group-based access
-    cursor = db.execute(
-        """SELECT DISTINCT vga.vault_id FROM vault_group_access vga
-           JOIN group_members gm ON vga.group_id = gm.group_id
-           WHERE gm.user_id = ?""",
-        (user_id,),
-    )
-    for row in cursor.fetchall():
-        vault_ids.add(row[0])
-
-    return list(vault_ids)
+    cursor = db.execute("SELECT id FROM vaults")
+    vault_ids = [row[0] for row in cursor.fetchall()]
+    permissions = get_effective_vault_permissions(db, user, vault_ids)
+    return [
+        vault_id
+        for vault_id, permission in permissions.items()
+        if permission is not None
+    ]
 
 
 class MultipleOrgError(Exception):

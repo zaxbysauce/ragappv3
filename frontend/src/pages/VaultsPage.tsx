@@ -151,6 +151,7 @@ export default function VaultsPage() {
   }
 
   const isDefaultVault = (vault: Vault) => vault.is_default === true;
+  const canAdminVault = (vault: Vault) => vault.current_user_permission === "admin";
 
   return (
     <div className="space-y-6">
@@ -174,7 +175,13 @@ export default function VaultsPage() {
         </div>
       )}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {vaults.map(vault => (
+        {vaults.map(vault => {
+          const canEditVault = canAdminVault(vault) && !isDefaultVault(vault);
+          const unavailableReason = isDefaultVault(vault)
+            ? "Default vault cannot be modified"
+            : "Vault admin permission is required";
+
+          return (
           <Card key={vault.id}>
             <CardHeader>
               <div className="flex items-start justify-between">
@@ -232,8 +239,8 @@ export default function VaultsPage() {
                     variant="ghost"
                     size="sm"
                     onClick={() => openEditDialog(vault)}
-                    disabled={isDefaultVault(vault)}
-                    title={isDefaultVault(vault) ? "Default vault cannot be modified" : "Edit vault"}
+                    disabled={!canEditVault}
+                    title={canEditVault ? "Edit vault" : unavailableReason}
                   >
                     <Pencil className="h-4 w-4" />
                   </Button>
@@ -241,8 +248,8 @@ export default function VaultsPage() {
                     variant="ghost"
                     size="sm"
                     onClick={() => openDeleteDialog(vault)}
-                    disabled={isDefaultVault(vault)}
-                    title={isDefaultVault(vault) ? "Default vault cannot be deleted" : "Delete vault"}
+                    disabled={!canEditVault}
+                    title={canEditVault ? "Delete vault" : unavailableReason}
                     className="text-destructive hover:text-destructive"
                   >
                     <Trash2 className="h-4 w-4" />
@@ -251,7 +258,8 @@ export default function VaultsPage() {
               </div>
             </CardContent>
           </Card>
-        ))}
+          );
+        })}
       </div>
 
       {/* Create Dialog */}

@@ -712,6 +712,7 @@ export interface Vault {
   org_id: number | null;
   /** Backend-provided flag: true when vault cannot be renamed or deleted. */
   is_default?: boolean;
+  current_user_permission?: "read" | "write" | "admin" | null;
 }
 
 export interface VaultListResponse {
