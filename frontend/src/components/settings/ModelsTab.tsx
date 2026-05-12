@@ -11,6 +11,7 @@
  * saving here will shadow any env var at runtime — that's documented in
  * the help text rather than enforced by disabling inputs.
  */
+import { useEffect, useState } from "react";
 import {
   Card,
   CardContent,
@@ -140,7 +141,13 @@ function NumberField({
 }: NumberFieldProps) {
   const value =
     (formData as unknown as Record<string, number>)[field as string] ?? "";
+  const [draftValue, setDraftValue] = useState(String(value));
   const err = (errors as Record<string, string | undefined>)[field as string];
+
+  useEffect(() => {
+    setDraftValue(String(value));
+  }, [value]);
+
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between gap-2">
@@ -155,10 +162,27 @@ function NumberField({
         min={min}
         max={max}
         step={1}
-        value={value}
-        onChange={(e) =>
-          onChange(field, Number(e.target.value) as SettingsFormData[typeof field])
-        }
+        value={draftValue}
+        onChange={(e) => {
+          const nextValue = e.target.value;
+          setDraftValue(nextValue);
+          if (nextValue === "") {
+            return;
+          }
+          const coercedValue = Number(nextValue);
+          if (Number.isFinite(coercedValue)) {
+            onChange(
+              field,
+              coercedValue as SettingsFormData[typeof field],
+            );
+          }
+        }}
+        onBlur={() => {
+          const coercedValue = Number(draftValue);
+          if (draftValue === "" || !Number.isFinite(coercedValue)) {
+            setDraftValue(String(value));
+          }
+        }}
         aria-invalid={err ? true : undefined}
         className={err ? "border-destructive" : undefined}
       />
@@ -191,7 +215,7 @@ function DefaultModeField({
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between gap-2">
-        <Label htmlFor="default_chat_mode" className="text-sm font-medium">
+        <Label id="default_chat_mode_label" className="text-sm font-medium">
           Default chat mode
         </Label>
         <SourceBadge source={source} />
@@ -199,6 +223,7 @@ function DefaultModeField({
       <div
         id="default_chat_mode"
         role="radiogroup"
+        aria-labelledby="default_chat_mode_label"
         aria-describedby="default_chat_mode-desc"
         className="inline-grid grid-cols-2 rounded-md border border-input bg-background p-1"
       >

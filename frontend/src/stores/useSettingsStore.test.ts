@@ -213,15 +213,32 @@ describe("useSettingsStore (PR B)", () => {
     useSettingsStore.getState().updateFormField("instant_chat_model", "");
     useSettingsStore
       .getState()
-      .updateFormField("default_chat_mode", "turbo" as never);
+      .updateFormField("default_chat_mode", "instant");
     useSettingsStore.getState().updateFormField("instant_max_tokens", 1.5);
     const ok = useSettingsStore.getState().validateForm();
     expect(ok).toBe(false);
     const errs = useSettingsStore.getState().errors;
     expect(errs.instant_chat_url).toBeTruthy();
     expect(errs.instant_chat_model).toBeTruthy();
-    expect(errs.default_chat_mode).toBeTruthy();
     expect(errs.instant_max_tokens).toBeTruthy();
+  });
+
+  it("validateForm allows thinking mode without an instant model", () => {
+    useSettingsStore.getState().initializeForm(baseSettings());
+    useSettingsStore.getState().updateFormField("instant_chat_model", "");
+    const ok = useSettingsStore.getState().validateForm();
+    expect(ok).toBe(true);
+    expect(useSettingsStore.getState().errors.instant_chat_model).toBeUndefined();
+  });
+
+  it("validateForm rejects unknown default chat mode", () => {
+    useSettingsStore.getState().initializeForm(baseSettings());
+    useSettingsStore
+      .getState()
+      .updateFormField("default_chat_mode", "turbo" as never);
+    const ok = useSettingsStore.getState().validateForm();
+    expect(ok).toBe(false);
+    expect(useSettingsStore.getState().errors.default_chat_mode).toBeTruthy();
   });
 
   it("save snapshot resync via initializeForm zeroes dirty after persist round-trip", () => {

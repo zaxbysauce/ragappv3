@@ -467,7 +467,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     ) {
       newErrors.instant_chat_url = "URL must start with http:// or https://";
     }
-    if (!formData.instant_chat_model.trim()) {
+    if (
+      formData.default_chat_mode === "instant" &&
+      !formData.instant_chat_model.trim()
+    ) {
       newErrors.instant_chat_model = "Instant chat model is required";
     }
     if (!["instant", "thinking"].includes(formData.default_chat_mode)) {

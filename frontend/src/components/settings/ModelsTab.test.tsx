@@ -88,6 +88,9 @@ describe("ModelsTab", () => {
       "aria-checked",
       "true",
     );
+    expect(
+      screen.getByRole("radiogroup", { name: /Default chat mode/i }),
+    ).toBeInTheDocument();
     expect(screen.getByText(/Instant mode tuning/i)).toBeInTheDocument();
   });
 
@@ -109,5 +112,29 @@ describe("ModelsTab", () => {
 
     expect(onChange).toHaveBeenCalledWith("instant_chat_model", "nano");
     expect(onChange).toHaveBeenCalledWith("default_chat_mode", "instant");
+  });
+
+  it("keeps the previous numeric value while a number field is cleared", () => {
+    const onChange = vi.fn();
+    render(
+      <ModelsTab
+        formData={formData()}
+        errors={{}}
+        onChange={onChange}
+        effectiveSources={{}}
+      />,
+    );
+
+    const input = screen.getByLabelText(/Max output tokens/i);
+
+    fireEvent.change(input, {
+      target: { value: "" },
+    });
+
+    expect(input).toHaveValue(null);
+    expect(onChange).not.toHaveBeenCalled();
+
+    fireEvent.blur(input);
+    expect(input).toHaveValue(4096);
   });
 });
