@@ -931,9 +931,10 @@ class TestEvaluatePolicy:
         )
         conn.execute("CREATE TABLE IF NOT EXISTS org_members (org_id INTEGER NOT NULL, user_id INTEGER NOT NULL)")
         conn.executemany(
-            "INSERT INTO vaults (id, visibility) VALUES (?, ?)",
-            [(1, "private"), (2, "private"), (3, "public")],
+            "INSERT INTO vaults (id, visibility, org_id) VALUES (?, ?, ?)",
+            [(1, "private", None), (2, "private", None), (3, "public", None), (4, "public", 10)],
         )
+        conn.execute("INSERT INTO org_members (org_id, user_id) VALUES (10, 5)")
         conn.commit()
         return conn
 
@@ -1007,6 +1008,28 @@ class TestEvaluatePolicy:
         assert await _evaluate_policy(conn, public_only, "vault", 3, "read") is True
         assert await _evaluate_policy(conn, public_only, "vault", 3, "write") is False
 
+    @pytest.mark.asyncio
+    async def test_evaluate_policy_denies_org_scoped_public_read_to_non_member(self):
+        """Non-org-member cannot read public vault with non-null org_id (FR-016/SC-009)."""
+        from app.api.deps import _evaluate_policy, get_effective_vault_permission
+
+        conn = self._vault_policy_db()
+        # user 6 has no org_membership in org 10 (only user 5 does)
+        non_member = {"id": 6, "role": "member"}
+
+        # vault 4 is public but scoped to org 10 — non-member cannot access
+        assert get_effective_vault_permission(conn, non_member, 4) is None
+        assert await _evaluate_policy(conn, non_member, "vault", 4, "read") is False
+
+        # vault 3 is public with no org_id — still globally accessible regardless of membership
+        assert get_effective_vault_permission(conn, non_member, 3) == "read"
+        assert await _evaluate_policy(conn, non_member, "vault", 3, "read") is True
+
+        # Org member (user 5, member of org 10) can access vault 4
+        org_member = {"id": 5, "role": "member"}
+        assert get_effective_vault_permission(conn, org_member, 4) == "read"
+        assert await _evaluate_policy(conn, org_member, "vault", 4, "read") is True
+
     def test_get_effective_vault_permissions_batches_permission_queries(self):
         """Multiple vault permissions are resolved with constant-query batching."""
         from app.api.deps import get_effective_vault_permissions
@@ -1050,7 +1073,23 @@ class TestEvaluatePolicy:
         conn = self._vault_policy_db()
         user = {"id": 5, "role": "member"}
 
-        assert get_user_accessible_vault_ids(user, conn) == [3]
+        # user 5 is now an org_member of org 10, so they also see vault 4 (org-scoped public)
+        assert sorted(get_user_accessible_vault_ids(user, conn)) == [3, 4]
+
+    def test_get_user_accessible_vault_ids_excludes_org_scoped_public_for_non_member(self):
+        """Non-org-member cannot access public vault with non-null org_id."""
+        from app.api.deps import get_user_accessible_vault_ids
+
+        conn = self._vault_policy_db()
+        # user 6 has no org_membership in org 10 (only user 5 does)
+        non_member = {"id": 6, "role": "member"}
+
+        result = get_user_accessible_vault_ids(non_member, conn)
+
+        # vault 4 is public but org-scoped (org_id=10) — non-member must not see it
+        assert 4 not in result
+        # But public vault 3 (no org_id) is still globally accessible
+        assert 3 in result
 
     @pytest.mark.asyncio
     async def test_evaluate_policy_invalid_principal(self):

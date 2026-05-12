@@ -267,8 +267,10 @@ async def get_current_active_user(
 
     # Enforce must_change_password: flagged users can only access exempt routes
     if user.get("must_change_password"):
-        exempt_paths = ["/auth/change-password", "/auth/login"]
-        if not any(request.url.path.endswith(path) for path in exempt_paths):
+        exempt_paths = {"/auth/change-password", "/auth/login"}
+        # Normalize path to prevent bypass via trailing slash variants
+        normalized_path = request.url.path.rstrip("/") or "/"
+        if normalized_path not in exempt_paths:
             raise HTTPException(
                 status_code=403,
                 detail="must_change_password",
@@ -378,9 +380,6 @@ async def _evaluate_policy(
     if user_role == "superadmin":
         return True
 
-    effective_permission = await asyncio.to_thread(
-        get_effective_vault_permission, db, principal, resource_id
-    )
     effective_permission = await asyncio.to_thread(
         get_effective_vault_permission, db, principal, resource_id
     )

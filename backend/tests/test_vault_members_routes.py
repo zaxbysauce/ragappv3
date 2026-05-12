@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS users (
     full_name TEXT DEFAULT '',
     role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('superadmin','admin','member','viewer')),
     is_active INTEGER NOT NULL DEFAULT 1,
+    must_change_password INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_login_at TIMESTAMP
 );
@@ -86,6 +87,13 @@ CREATE TABLE IF NOT EXISTS vault_group_access (
     FOREIGN KEY (group_id) REFERENCES groups(id) ON DELETE CASCADE,
     FOREIGN KEY (granted_by) REFERENCES users(id) ON DELETE SET NULL,
     UNIQUE(vault_id, group_id)
+);
+
+-- Org members table (used by org-scoped public vault visibility)
+CREATE TABLE IF NOT EXISTS org_members (
+    org_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    UNIQUE(org_id, user_id)
 );
 
 -- Indexes
