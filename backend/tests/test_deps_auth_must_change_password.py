@@ -11,11 +11,10 @@ The must_change_password check (lines 262-269 in deps.py):
 
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
+
 import jwt
 import pytest
-
 from fastapi import HTTPException
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fixtures

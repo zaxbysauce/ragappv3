@@ -16,7 +16,6 @@ from app.api.routes.auth import router as auth_router
 from app.api.routes.organizations import router as organizations_router
 from app.services.auth_service import create_access_token, hash_password
 
-
 # Valid SQLite schema (same as test_organizations_routes.py)
 TEST_SCHEMA = """
 -- Users table

@@ -714,7 +714,7 @@ class TestUpdateUser(TestUserRoutes):
     def test_update_user_duplicate_username_returns_409(self):
         """Updating username to an existing username returns 409."""
         # Create another member with a known username
-        other_member_id = create_user(
+        _ = create_user(
             self.conn, "existinguser", "pass123", "member", "Existing User"
         )
 
