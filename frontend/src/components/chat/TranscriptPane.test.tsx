@@ -37,6 +37,7 @@ const mockChatState = vi.hoisted(() => ({
   loadChat: vi.fn(),
   newChat: vi.fn(),
 }));
+const mockNavigate = vi.hoisted(() => vi.fn());
 
 // Mock the hooks and dependencies
 vi.mock("@/stores/useChatStore", () => ({
@@ -83,20 +84,25 @@ vi.mock("@/stores/useChatShellStore", () => ({
 }));
 vi.mock("@/hooks/useSendMessage");
 vi.mock("@/hooks/useChatHistory");
+vi.mock("@/lib/api", () => ({
+  forkChatSession: vi.fn(),
+}));
 vi.mock("react-router-dom", () => ({
-  useNavigate: () => vi.fn(),
+  useNavigate: () => mockNavigate,
 }));
 vi.mock("./MessageBubble", () => ({
-  MessageBubble: ({ message }: { message: { id: string; role: string; content: string } }) => (
+  MessageBubble: ({ message, onFork }: { message: { id: string; role: string; content: string }; onFork?: () => void }) => (
     <div data-testid="message-bubble" data-message-id={message.id}>
       {message.content}
+      {onFork && <button type="button" aria-label={`Fork ${message.id}`} onClick={onFork}>Fork</button>}
     </div>
   ),
 }));
 vi.mock("./AssistantMessage", () => ({
-  AssistantMessage: ({ message }: { message: { id: string; role: string; content: string } }) => (
+  AssistantMessage: ({ message, onFork }: { message: { id: string; role: string; content: string }; onFork?: () => void }) => (
     <div data-testid="message-bubble" data-message-id={message.id}>
       {message.content}
+      {onFork && <button type="button" aria-label={`Fork ${message.id}`} onClick={onFork}>Fork</button>}
     </div>
   ),
 }));
@@ -137,6 +143,7 @@ vi.mock("@tanstack/react-virtual", () => ({
 
 import { useSendMessage, MAX_INPUT_LENGTH } from "@/hooks/useSendMessage";
 import { useChatHistory } from "@/hooks/useChatHistory";
+import { forkChatSession } from "@/lib/api";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 // Helper to render Composer with required providers
@@ -160,10 +167,9 @@ describe("TranscriptPane", () => {
   const mockHandleStop = vi.fn();
   const mockRefreshHistory = vi.fn();
   const mockGetActiveVault = vi.fn();
-  const mockNavigate = vi.fn();
-
   beforeEach(() => {
     vi.clearAllMocks();
+    (useChatStore as unknown as { getState: ReturnType<typeof vi.fn> }).getState = vi.fn(() => mockChatState);
 
     // Reset shared mock state
     mockChatState.messageIds = [];
@@ -242,6 +248,68 @@ describe("TranscriptPane", () => {
 
       render(<TranscriptPane />);
       expect(screen.getByText("Test message")).toBeInTheDocument();
+    });
+
+    it("guards fork requests against duplicate clicks while pending", async () => {
+      let resolveFork!: (value: Awaited<ReturnType<typeof forkChatSession>>) => void;
+      const forkPromise = new Promise<Awaited<ReturnType<typeof forkChatSession>>>((resolve) => {
+        resolveFork = resolve;
+      });
+      vi.mocked(forkChatSession).mockReturnValue(forkPromise);
+      mockChatState.activeChatId = "10";
+      _mockMessageCount = 2;
+      setMockMessages([
+        { id: "m1", role: "user", content: "Question" },
+        { id: "m2", role: "assistant", content: "Answer" },
+      ]);
+
+      render(<TranscriptPane />);
+
+      await userEvent.dblClick(screen.getByLabelText("Fork m2"));
+
+      expect(forkChatSession).toHaveBeenCalledTimes(1);
+      expect(forkChatSession).toHaveBeenCalledWith(10, 1);
+      await waitFor(() => expect(screen.queryByLabelText("Fork m2")).not.toBeInTheDocument());
+
+      resolveFork({
+        id: 20,
+        vault_id: 1,
+        title: "Branch of Original",
+        created_at: "2026-05-12T00:00:00Z",
+        updated_at: "2026-05-12T00:00:00Z",
+        forked_from_session_id: 10,
+        fork_message_index: 1,
+        messages: [
+          {
+            id: 101,
+            role: "user",
+            content: "Question",
+            sources: null,
+            created_at: "2026-05-12T00:00:00Z",
+          },
+          {
+            id: 102,
+            role: "assistant",
+            content: "Answer",
+            sources: null,
+            wiki_refs: [{ wiki_label: "W1", title: "Runbook" }],
+            created_at: "2026-05-12T00:00:00Z",
+          },
+        ],
+      });
+
+      await waitFor(() => expect(mockChatState.loadChat).toHaveBeenCalledTimes(1));
+      expect(mockChatState.loadChat).toHaveBeenCalledWith(
+        "20",
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "102",
+            wikiRefs: [{ wiki_label: "W1", title: "Runbook" }],
+          }),
+        ])
+      );
+      expect(mockRefreshHistory).toHaveBeenCalledTimes(1);
+      expect(mockNavigate).toHaveBeenCalledWith("/chat/20");
     });
   });
 

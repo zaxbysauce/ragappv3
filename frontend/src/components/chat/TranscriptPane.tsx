@@ -142,7 +142,7 @@ interface MessageRowProps {
   highlightedId: string | null;
   onRetry: () => void;
   onEdit: (messageId: string, content: string) => void;
-  onFork: (messageId: string) => void;
+  onFork?: (messageId: string) => void;
   onFeedback: (messageId: string, feedback: "up" | "down" | null) => void;
 }
 
@@ -187,7 +187,7 @@ const MessageRow = memo(function MessageRow({
               isStreaming={isAssistantStreaming}
               showDebug={showDebug}
               onRetry={onRetry}
-              onFork={() => onFork(messageId)}
+              onFork={onFork ? () => onFork(messageId) : undefined}
               sessionId={String(activeSessionId ?? "")}
               messageFeedback={safeMessage.feedback}
               onFeedback={(fb) => onFeedback(messageId, fb)}
@@ -199,7 +199,7 @@ const MessageRow = memo(function MessageRow({
           message={safeMessage}
           isStreaming={isAssistantStreaming}
           isEditDisabled={isStreaming}
-          onFork={() => onFork(messageId)}
+          onFork={onFork ? () => onFork(messageId) : undefined}
           userInitial={userInitial}
           onEdit={onEdit}
         />
@@ -239,6 +239,8 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
   const [, setIsAtBottom] = useState(true);
   const showDebug = import.meta.env.DEV;
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+  const [isForking, setIsForking] = useState(false);
+  const isForkingRef = useRef(false);
 
   // Ref-backed pinned-bottom state — read inside scroll callbacks without
   // creating stale closures over isAtBottom (which is captured by useEffect).
@@ -395,10 +397,15 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
 
   // Fork
   const handleFork = useCallback(async (messageId: string) => {
+    if (isForkingRef.current) return;
     const { activeChatId } = useChatStore.getState();
     if (!activeChatId) return;
     const { messageIds: ids } = useChatStore.getState();
     const msgIndex = ids.indexOf(messageId);
+    if (msgIndex < 0) return;
+
+    isForkingRef.current = true;
+    setIsForking(true);
     try {
       const forked = await forkChatSession(parseInt(activeChatId), msgIndex);
       const forkMessages = forked.messages.map((m) => ({
@@ -407,6 +414,7 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
         content: m.content,
         sources: m.sources ?? undefined,
         memoriesUsed: m.memories ?? undefined,
+        wikiRefs: m.wiki_refs ?? undefined,
         created_at: m.created_at,
         feedback: m.feedback ?? null,
       }));
@@ -416,6 +424,9 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
     } catch (err) {
       console.error("Fork failed:", err);
       toast.error("Failed to branch conversation. Please try again.");
+    } finally {
+      isForkingRef.current = false;
+      setIsForking(false);
     }
   }, [loadChat, refreshHistory, navigate]);
 
@@ -461,7 +472,7 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
                       highlightedId={highlightedMessageId}
                       onRetry={handleRetry}
                       onEdit={handleEdit}
-                      onFork={handleFork}
+                      onFork={isForking ? undefined : handleFork}
                       onFeedback={handleFeedback}
                     />
                   </div>
