@@ -1,7 +1,6 @@
 """Atomic default-assignment coverage for user creation paths."""
 
 import sqlite3
-import tempfile
 from pathlib import Path
 
 import pytest

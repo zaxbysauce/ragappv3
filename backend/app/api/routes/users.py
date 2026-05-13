@@ -199,14 +199,18 @@ async def create_user(
 
         # Auto-assign user to Default org, All Users group, and vault 1 access
         _auto_assign_user_to_defaults(conn, user_id)
-        conn.commit()
 
-        # Fetch the created user
+        # Fetch the created user before commit so response construction remains
+        # part of the same rollback boundary as creation and default grants.
         cursor = conn.execute(
             "SELECT id, username, full_name, role, is_active, created_at FROM users WHERE id = ?",
             (user_id,),
         )
         row = cursor.fetchone()
+        if row is None:
+            raise RuntimeError("Failed to retrieve created user")
+
+        conn.commit()
 
         return {
             "id": row[0],
