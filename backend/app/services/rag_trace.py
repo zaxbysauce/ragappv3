@@ -57,6 +57,8 @@ class RAGTrace:
     wiki_cited: List[str] = field(default_factory=list)
     wiki_filtered: List[str] = field(default_factory=list)
     answer_source_mode: str = "documents"
+    # Set when a short/referential follow-up is rewritten before retrieval.
+    followup_rewrite: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -91,6 +93,7 @@ class RAGTrace:
             "wiki_cited": list(self.wiki_cited),
             "wiki_filtered": list(self.wiki_filtered),
             "answer_source_mode": self.answer_source_mode,
+            "followup_rewrite": self.followup_rewrite,
         }
 
     def log(self) -> None:

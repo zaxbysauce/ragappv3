@@ -86,6 +86,9 @@ export function useSendMessage(
         content,
       };
       const assistantMessageId = (Date.now() + 1).toString();
+      // Pre-populate mode from the requested effective mode so the badge shows
+      // immediately as the response streams. The backend's "mode" SSE event
+      // (handled below) overrides this if a fallback was applied server-side.
       const assistantMessage: Message = {
         id: assistantMessageId,
         role: "assistant",
@@ -121,6 +124,11 @@ export function useSendMessage(
         instantHealthy: health.instant,
       });
 
+      // Optimistically attribute the in-flight assistant message to the
+      // requested mode so the badge shows immediately. The "mode" SSE event
+      // below overwrites this if the server applied a fallback.
+      updateMessage(assistantMessageId, { mode: effectiveMode });
+
       const abort = chatStream(
         chatMessages,
         {
@@ -136,6 +144,9 @@ export function useSendMessage(
           onWiki: (wikiRefs: WikiReference[]) => {
             streamedWikiRefs = wikiRefs;
             updateMessage(assistantMessageId, { wikiRefs });
+          },
+          onMode: (mode) => {
+            updateMessage(assistantMessageId, { mode });
           },
           onError: (error) => {
             console.error("Chat stream error:", error);
@@ -180,6 +191,7 @@ export function useSendMessage(
                     sources: assistantMsg.sources ?? undefined,
                     memories: assistantMsg.memoriesUsed ?? undefined,
                     wiki_refs: streamedWikiRefs.length > 0 ? streamedWikiRefs : undefined,
+                    mode: assistantMsg.mode,
                   })
                 );
               }

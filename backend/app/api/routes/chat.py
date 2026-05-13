@@ -113,6 +113,7 @@ class AddMessageRequest(BaseModel):
     sources: Optional[List[dict]] = None
     memories: Optional[List[dict]] = None
     wiki_refs: Optional[List[dict]] = None
+    mode: Optional[Literal["instant", "thinking"]] = None
 
 
 class UpdateSessionRequest(BaseModel):
@@ -231,6 +232,16 @@ def stream_chat_response(
         # score polarity to interpret `score` values against, even if the
         # engine never emits a done event (e.g. early error).
         score_type = "distance"
+
+        # Resolve the effective mode the same way RAGEngine does and emit it
+        # as the first SSE event so the client can show a per-message badge
+        # reflecting the actual model used (including fallbacks).
+        try:
+            from app.config import settings as _settings
+            resolved_mode = mode if mode is not None else ChatMode(_settings.default_chat_mode)
+        except Exception:
+            resolved_mode = ChatMode.THINKING
+        yield f"data: {json.dumps({'type': 'mode', 'mode': resolved_mode.value})}\n\n"
 
         try:
             async for chunk in rag_engine.query(
@@ -612,6 +623,7 @@ async def get_session(
     col_names = {row[1] for row in table_info_rows}
     has_memories_col = "memories" in col_names
     has_wiki_refs_col = "wiki_refs" in col_names
+    has_mode_col = "mode" in col_names
 
     if has_memories_col and has_wiki_refs_col:
         messages_query = (
@@ -632,6 +644,18 @@ async def get_session(
         conn.execute, messages_query, (session_id,)
     )
     message_rows = await asyncio.to_thread(messages_result.fetchall)
+
+    # Side-fetch the persisted chat mode per message so we don't have to
+    # bifurcate the existing branched SELECTs above.
+    mode_by_id: Dict[int, Optional[str]] = {}
+    if has_mode_col:
+        mode_result = await asyncio.to_thread(
+            conn.execute,
+            "SELECT id, mode FROM chat_messages WHERE session_id = ?",
+            (session_id,),
+        )
+        for mid, mval in await asyncio.to_thread(mode_result.fetchall):
+            mode_by_id[mid] = mval
 
     # Parse messages with JSON sources, memories, and wiki_refs.
     messages = []
@@ -666,6 +690,7 @@ async def get_session(
                     "wiki_refs": wiki_refs_val,
                     "created_at": msg_row[6],
                     "feedback": msg_row[7],
+                    "mode": mode_by_id.get(msg_row[0]),
                 }
             )
         elif has_memories_col:
@@ -685,6 +710,7 @@ async def get_session(
                     "wiki_refs": None,
                     "created_at": msg_row[5],
                     "feedback": msg_row[6],
+                    "mode": mode_by_id.get(msg_row[0]),
                 }
             )
         else:
@@ -698,6 +724,7 @@ async def get_session(
                     "wiki_refs": None,
                     "created_at": msg_row[4],
                     "feedback": msg_row[5],
+                    "mode": mode_by_id.get(msg_row[0]),
                 }
             )
 
@@ -784,6 +811,7 @@ async def fork_session(
     fork_col_names = {row[1] for row in table_info_rows}
     has_memories_col = "memories" in fork_col_names
     has_wiki_refs_col = "wiki_refs" in fork_col_names
+    has_mode_col = "mode" in fork_col_names
 
     # Fetch messages up to message_index, including all available columns.
     if has_memories_col and has_wiki_refs_col:
@@ -814,6 +842,19 @@ async def fork_session(
             detail=f"message_index {request.message_index} is out of bounds for session with {len(all_rows)} messages",
         )
     forked_rows = all_rows[: request.message_index + 1]
+
+    # Side-fetch the original session's mode values in the same row order
+    # so they can be re-applied to the copied rows without bifurcating the
+    # existing INSERT branches below.
+    source_modes: List[Optional[str]] = []
+    if has_mode_col:
+        source_mode_result = await asyncio.to_thread(
+            conn.execute,
+            "SELECT mode FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC, id ASC",
+            (session_id,),
+        )
+        source_mode_rows = await asyncio.to_thread(source_mode_result.fetchall)
+        source_modes = [r[0] for r in source_mode_rows[: request.message_index + 1]]
 
     # Create new forked session and copy messages atomically.
     fork_title = f"Branch of {session_row[2] or 'conversation'}"
@@ -851,6 +892,23 @@ async def fork_session(
                     "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)",
                     (new_session_id, row[0], row[1], row[2]),
                 )
+
+        # Apply mode values positionally to the newly-inserted rows so that
+        # forked assistant rows keep their original instant/thinking label.
+        if has_mode_col and source_modes:
+            new_id_result = await asyncio.to_thread(
+                conn.execute,
+                "SELECT id FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC, id ASC",
+                (new_session_id,),
+            )
+            new_id_rows = await asyncio.to_thread(new_id_result.fetchall)
+            for (new_id,), mode_val in zip(new_id_rows, source_modes):
+                if mode_val is not None:
+                    await asyncio.to_thread(
+                        conn.execute,
+                        "UPDATE chat_messages SET mode = ? WHERE id = ?",
+                        (mode_val, new_id),
+                    )
         await asyncio.to_thread(conn.commit)
     except Exception:
         await asyncio.to_thread(conn.rollback)
@@ -879,6 +937,16 @@ async def fork_session(
             (new_session_id,),
         )
     copied_rows = await asyncio.to_thread(copied_result.fetchall)
+
+    fork_mode_by_id: Dict[int, Optional[str]] = {}
+    if has_mode_col:
+        fork_mode_result = await asyncio.to_thread(
+            conn.execute,
+            "SELECT id, mode FROM chat_messages WHERE session_id = ?",
+            (new_session_id,),
+        )
+        for mid, mval in await asyncio.to_thread(fork_mode_result.fetchall):
+            fork_mode_by_id[mid] = mval
 
     messages = []
     for row in copied_rows:
@@ -911,6 +979,7 @@ async def fork_session(
                     "wiki_refs": wiki_val,
                     "created_at": row[6],
                     "feedback": None,
+                    "mode": fork_mode_by_id.get(row[0]),
                 }
             )
         elif has_memories_col:
@@ -930,6 +999,7 @@ async def fork_session(
                     "wiki_refs": None,
                     "created_at": row[5],
                     "feedback": None,
+                    "mode": fork_mode_by_id.get(row[0]),
                 }
             )
         else:
@@ -943,6 +1013,7 @@ async def fork_session(
                     "wiki_refs": None,
                     "created_at": row[4],
                     "feedback": None,
+                    "mode": fork_mode_by_id.get(row[0]),
                 }
             )
 
@@ -1147,6 +1218,7 @@ async def add_message(
     col_names_add = {row[1] for row in table_info_rows}
     has_memories_col = "memories" in col_names_add
     has_wiki_refs_col = "wiki_refs" in col_names_add
+    has_mode_col = "mode" in col_names_add
 
     if has_memories_col and has_wiki_refs_col:
         insert_query = """
@@ -1184,10 +1256,21 @@ async def add_message(
         "UPDATE chat_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?"
     )
     await asyncio.to_thread(conn.execute, update_query, (session_id,))
-    await asyncio.to_thread(conn.commit)
 
     # Get the created message
     message_id = cursor.lastrowid
+
+    # Persist chat mode for assistant rows when the column is available.
+    # Side-write keeps the main INSERT branching unchanged.
+    persisted_mode: Optional[str] = None
+    if has_mode_col and request.mode and request.role == "assistant":
+        persisted_mode = request.mode
+        await asyncio.to_thread(
+            conn.execute,
+            "UPDATE chat_messages SET mode = ? WHERE id = ?",
+            (persisted_mode, message_id),
+        )
+    await asyncio.to_thread(conn.commit)
     if has_memories_col and has_wiki_refs_col:
         select_query = (
             "SELECT id, role, content, sources, memories, wiki_refs, created_at "
@@ -1248,6 +1331,7 @@ async def add_message(
         "memories": memories,
         "wiki_refs": wiki_refs_out,
         "created_at": created_at,
+        "mode": persisted_mode,
     }
 
 

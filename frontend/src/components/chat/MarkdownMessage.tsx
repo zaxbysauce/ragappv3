@@ -1,7 +1,8 @@
 import { memo, useMemo, useEffect, useState } from "react";
+import type { ReactNode, HTMLAttributes } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import rehypeSanitize from "rehype-sanitize";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import { CopyButton } from "@/components/shared/CopyButton";
 import { SourceCitation } from "./SourceCitation";
 import type { Source, UsedMemory, WikiReference } from "@/lib/api";
@@ -220,9 +221,104 @@ export function parseCitationSegments(
   return { segments, citedSources, citedMemories, citedWikis };
 }
 
+// =============================================================================
+// Remark plugin: convert [S#] / [M#] / [W#] / [Source: file] markers in text
+// nodes into inline span elements with data-citation attributes. This runs
+// AFTER the markdown structure is parsed, so tables, lists, code blocks, and
+// other block constructs remain intact. The component override for ``span``
+// below renders each marker as an interactive citation chip.
+// =============================================================================
+
+const CITATION_REGEX = /\[(S|M|W)(\d+)\]|\[Source:\s*([^\]]+)\]/g;
+
+interface MdastNode {
+  type: string;
+  value?: string;
+  children?: MdastNode[];
+  data?: Record<string, unknown>;
+}
+
+function remarkCitations() {
+  return (tree: MdastNode) => {
+    const transformNode = (node: MdastNode | undefined, parent: MdastNode | null): void => {
+      if (!node) return;
+      // Do not transform inside code spans / code blocks — citation markers
+      // there must render as literal text.
+      if (node.type === "code" || node.type === "inlineCode") return;
+      if (Array.isArray(node.children)) {
+        for (let i = node.children.length - 1; i >= 0; i--) {
+          transformNode(node.children[i], node);
+        }
+      }
+      if (node.type === "text" && parent && Array.isArray(parent.children)) {
+        const text = node.value ?? "";
+        if (!text) return;
+        CITATION_REGEX.lastIndex = 0;
+        let match: RegExpExecArray | null;
+        let lastIndex = 0;
+        const replacements: MdastNode[] = [];
+        while ((match = CITATION_REGEX.exec(text)) !== null) {
+          if (match.index > lastIndex) {
+            replacements.push({ type: "text", value: text.slice(lastIndex, match.index) });
+          }
+          let citeType = "";
+          let label = "";
+          if (match[1]) {
+            citeType = match[1];
+            label = `${match[1]}${match[2]}`;
+          } else if (match[3]) {
+            citeType = "F";
+            label = match[3].trim();
+          }
+          replacements.push({
+            // mdast HTML/element bridge: emit a custom node that remark-rehype
+            // will lower into a <span data-citation-type="..." data-citation-label="...">.
+            type: "citationMarker",
+            data: {
+              hName: "span",
+              hProperties: {
+                "data-citation-type": citeType,
+                "data-citation-label": label,
+              },
+            },
+          });
+          lastIndex = CITATION_REGEX.lastIndex;
+        }
+        if (lastIndex === 0) return;
+        if (lastIndex < text.length) {
+          replacements.push({ type: "text", value: text.slice(lastIndex) });
+        }
+        const idx = parent.children.indexOf(node);
+        if (idx >= 0) {
+          parent.children.splice(idx, 1, ...replacements);
+        }
+      }
+    };
+    transformNode(tree, null);
+  };
+}
+
+// Extend rehype-sanitize's default schema so our citation spans (with
+// data-citation-* attributes) survive sanitization. All other span attrs
+// remain restricted to the defaults. Bare attribute names ("attr") mean
+// "any value allowed" in hast-util-sanitize's PropertyDefinition format.
+const CITATION_SANITIZE_SCHEMA = {
+  ...defaultSchema,
+  attributes: {
+    ...(defaultSchema.attributes ?? {}),
+    span: [
+      ...((defaultSchema.attributes?.span as unknown[]) ?? []),
+      "data-citation-type",
+      "data-citation-label",
+    ],
+  },
+};
+
 // Stable plugin arrays — prevent re-creating on every render
-const REMARK_PLUGINS = [remarkGfm];
-const REHYPE_PLUGINS = [rehypeSanitize];
+const REMARK_PLUGINS = [remarkGfm, remarkCitations];
+const REHYPE_PLUGINS: import("react-markdown").Options["rehypePlugins"] = [
+  [rehypeSanitize, CITATION_SANITIZE_SCHEMA],
+];
 
 interface MarkdownMessageProps {
   content: string;
@@ -261,133 +357,148 @@ export const MarkdownMessage = memo(function MarkdownMessage({
   );
 
   const citedSources = externalCitedSources ?? internalCitedSources;
+  // ``segments`` is still used by the aggregation path above; it does not
+  // drive rendering anymore. Avoid an unused-variable lint without changing
+  // ``parseCitationSegments``' exported shape.
+  void segments;
 
-  const nodes = useMemo(() => {
-    return segments.map((segment, i) => {
-      if (segment.type === "wiki_citation") {
-        const label = segment.wikiLabel ?? "";
-        const wiki =
-          wikiRefs?.find((w) => w.wiki_label === label) ??
-          (() => {
-            const m = label.match(/^W(\d+)$/);
-            if (m && wikiRefs) {
-              const idx = parseInt(m[1], 10) - 1;
-              return idx >= 0 && idx < wikiRefs.length ? wikiRefs[idx] : undefined;
-            }
-            return undefined;
-          })();
-        const titleText = wiki
-          ? `Wiki ${label}: ${wiki.title}${wiki.claim_text ? ` — ${wiki.claim_text.slice(0, 100)}` : ""}`
-          : `Wiki ${label}`;
-        return (
-          <button
-            key={`wiki-${i}`}
-            type="button"
-            className="inline-flex items-center align-baseline px-1.5 py-0.5 mx-0.5 rounded-md border border-indigo-500/40 bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 text-[10px] font-semibold tracking-wide hover:bg-indigo-500/20 hover:border-indigo-500/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            onClick={() => wiki && onWikiCitationClick?.(wiki)}
-            disabled={!wiki}
-            title={titleText}
-            aria-label={titleText}
-            data-citation-type="wiki"
-            data-citation-label={label}
-          >
-            {label}
-          </button>
-        );
-      }
-      if (segment.type === "memory_citation") {
-        const label = segment.memoryLabel ?? "";
-        const memory =
-          memories?.find((m) => m.memory_label === label) ||
-          (() => {
-            const m = label.match(/^M(\d+)$/);
-            if (m && memories) {
-              const idx = parseInt(m[1], 10) - 1;
-              return idx >= 0 && idx < memories.length ? memories[idx] : undefined;
-            }
-            return undefined;
-          })();
-        const titleText = memory?.content
-          ? `Memory ${label}: ${memory.content.slice(0, 200)}${memory.content.length > 200 ? "…" : ""}`
-          : `Memory ${label}`;
-        return (
-          <button
-            key={`mem-${i}`}
-            type="button"
-            className="inline-flex items-center align-baseline px-1.5 py-0.5 mx-0.5 rounded-md border border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300 text-[10px] font-semibold tracking-wide hover:bg-amber-500/20 hover:border-amber-500/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            onClick={() => memory && onMemoryCitationClick?.(memory)}
-            disabled={!memory}
-            title={titleText}
-            aria-label={titleText}
-            data-citation-type="memory"
-            data-citation-label={label}
-          >
-            {label}
-          </button>
-        );
-      }
-      if (segment.type === "citation") {
-        const name = segment.sourceName ?? "";
-        // Resolve the source
-        const source =
-          sources?.find((s) => s.source_label === name) ||
-          sources?.find((s) => s.filename === name) ||
-          (() => {
-            const m = name.match(/^S(\d+)$/);
-            if (m && sources) {
-              const idx = parseInt(m[1], 10) - 1;
-              return idx >= 0 && idx < sources.length ? sources[idx] : undefined;
-            }
-            return undefined;
-          })();
-
-        if (source) {
-          const dispIdx = citedSources.findIndex((s) => s.id === source.id);
-          return (
-            <SourceCitation
-              key={`cit-${i}`}
-              source={source}
-              index={dispIdx >= 0 ? dispIdx : i}
-              onClick={() => onCitationClick?.(source)}
-              variant="inline"
-            />
-          );
-        }
-        return <span key={`cit-${i}`}>[{name}]</span>;
-      }
-
+  // Renderer for citation chips produced by the remarkCitations plugin.
+  // The plugin emits ``<span data-citation-type data-citation-label>`` and
+  // this component picks them up to render the existing interactive chip.
+  // No explicit key is needed: ReactMarkdown assigns positional keys for
+  // each rendered span via its own children-array reconciliation.
+  const renderCitationSpan = (type: string, label: string): ReactNode => {
+    if (type === "W") {
+      const wiki =
+        wikiRefs?.find((w) => w.wiki_label === label) ??
+        (() => {
+          const m = label.match(/^W(\d+)$/);
+          if (m && wikiRefs) {
+            const idx = parseInt(m[1], 10) - 1;
+            return idx >= 0 && idx < wikiRefs.length ? wikiRefs[idx] : undefined;
+          }
+          return undefined;
+        })();
+      const titleText = wiki
+        ? `Wiki ${label}: ${wiki.title}${wiki.claim_text ? ` — ${wiki.claim_text.slice(0, 100)}` : ""}`
+        : `Wiki ${label}`;
       return (
-        <ReactMarkdown
-          key={`text-${i}`}
-          remarkPlugins={REMARK_PLUGINS}
-          rehypePlugins={REHYPE_PLUGINS}
-          components={{
-            p: ({ children }) => <>{children}</>,
-            pre: ({ children }) => <>{children}</>,
-            code: ({ className, children }) => {
-              const isBlock = Boolean(className?.startsWith("language-"));
-              if (!isBlock) {
-                return (
-                  <code className="bg-muted px-1 py-0.5 rounded text-[0.85em] font-mono">
-                    {children}
-                  </code>
-                );
-              }
-              const lang = className?.replace("language-", "") ?? "";
-              const codeText = String(children).replace(/\n$/, "");
-              return <CodeBlock language={lang} code={codeText} />;
-            },
-          }}
+        <button
+          type="button"
+          className="inline-flex items-center align-baseline px-1.5 py-0.5 mx-0.5 rounded-md border border-indigo-500/40 bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 text-[10px] font-semibold tracking-wide hover:bg-indigo-500/20 hover:border-indigo-500/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={() => wiki && onWikiCitationClick?.(wiki)}
+          disabled={!wiki}
+          title={titleText}
+          aria-label={titleText}
+          data-citation-type="wiki"
+          data-citation-label={label}
         >
-          {segment.content ?? ""}
-        </ReactMarkdown>
+          {label}
+        </button>
       );
-    });
-  }, [segments, citedSources, sources, memories, wikiRefs, onCitationClick, onMemoryCitationClick, onWikiCitationClick]);
+    }
+    if (type === "M") {
+      const memory =
+        memories?.find((m) => m.memory_label === label) ||
+        (() => {
+          const m = label.match(/^M(\d+)$/);
+          if (m && memories) {
+            const idx = parseInt(m[1], 10) - 1;
+            return idx >= 0 && idx < memories.length ? memories[idx] : undefined;
+          }
+          return undefined;
+        })();
+      const titleText = memory?.content
+        ? `Memory ${label}: ${memory.content.slice(0, 200)}${memory.content.length > 200 ? "…" : ""}`
+        : `Memory ${label}`;
+      return (
+        <button
+          type="button"
+          className="inline-flex items-center align-baseline px-1.5 py-0.5 mx-0.5 rounded-md border border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300 text-[10px] font-semibold tracking-wide hover:bg-amber-500/20 hover:border-amber-500/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={() => memory && onMemoryCitationClick?.(memory)}
+          disabled={!memory}
+          title={titleText}
+          aria-label={titleText}
+          data-citation-type="memory"
+          data-citation-label={label}
+        >
+          {label}
+        </button>
+      );
+    }
+    // Document citations: type "S" (label like "S1") or legacy filename "F".
+    const lookupName = label;
+    const source =
+      sources?.find((s) => s.source_label === lookupName) ||
+      sources?.find((s) => s.filename === lookupName) ||
+      (() => {
+        const m = lookupName.match(/^S(\d+)$/);
+        if (m && sources) {
+          const idx = parseInt(m[1], 10) - 1;
+          return idx >= 0 && idx < sources.length ? sources[idx] : undefined;
+        }
+        return undefined;
+      })();
+    if (source) {
+      const dispIdx = citedSources.findIndex((s) => s.id === source.id);
+      return (
+        <SourceCitation
+          source={source}
+          index={dispIdx >= 0 ? dispIdx : 0}
+          onClick={() => onCitationClick?.(source)}
+          variant="inline"
+        />
+      );
+    }
+    return <span>[{lookupName}]</span>;
+  };
 
   return (
-    <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:font-semibold prose-headings:font-sans prose-headings:mt-4 prose-headings:mb-1 prose-strong:font-semibold prose-p:leading-relaxed prose-p:mb-3 prose-p:mt-0 prose-li:my-0.5 prose-ul:my-2 prose-ol:my-2 prose-blockquote:border-l-2 prose-blockquote:border-primary/40 prose-blockquote:pl-3 prose-blockquote:italic prose-code:font-mono">
-      {nodes}
+    <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:font-semibold prose-headings:font-sans prose-headings:mt-4 prose-headings:mb-1 prose-strong:font-semibold prose-p:leading-relaxed prose-p:mb-3 prose-p:mt-0 prose-li:my-0.5 prose-ul:my-2 prose-ol:my-2 prose-blockquote:border-l-2 prose-blockquote:border-primary/40 prose-blockquote:pl-3 prose-blockquote:italic prose-code:font-mono prose-table:my-3 prose-th:px-3 prose-th:py-1.5 prose-td:px-3 prose-td:py-1.5 prose-th:bg-muted/50">
+      <ReactMarkdown
+        remarkPlugins={REMARK_PLUGINS}
+        rehypePlugins={REHYPE_PLUGINS}
+        components={{
+          span: (props: HTMLAttributes<HTMLSpanElement> & {
+            "data-citation-type"?: string;
+            "data-citation-label"?: string;
+          }) => {
+            const citeType = props["data-citation-type"];
+            const citeLabel = props["data-citation-label"];
+            if (citeType && citeLabel) {
+              return renderCitationSpan(citeType, citeLabel);
+            }
+            return <span {...props} />;
+          },
+          code: ({ className, children }) => {
+            const isBlock = Boolean(className?.startsWith("language-"));
+            if (!isBlock) {
+              return (
+                <code className="bg-muted px-1 py-0.5 rounded text-[0.85em] font-mono">
+                  {children}
+                </code>
+              );
+            }
+            const lang = className?.replace("language-", "") ?? "";
+            const codeText = String(children).replace(/\n$/, "");
+            return <CodeBlock language={lang} code={codeText} />;
+          },
+          pre: ({ children }) => <>{children}</>,
+          table: ({ children }) => (
+            <div className="overflow-x-auto my-3">
+              <table className="border-collapse border border-border text-sm w-full">{children}</table>
+            </div>
+          ),
+          th: ({ children }) => (
+            <th className="border border-border bg-muted/50 px-3 py-1.5 text-left font-semibold">{children}</th>
+          ),
+          td: ({ children }) => (
+            <td className="border border-border px-3 py-1.5 align-top">{children}</td>
+          ),
+        }}
+      >
+        {content}
+      </ReactMarkdown>
       {isStreaming && (
         <span
           className="streaming-caret"

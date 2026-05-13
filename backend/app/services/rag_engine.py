@@ -418,15 +418,44 @@ class RAGEngine:
         except Exception as exc:
             logger.error("Memory intent detection/add failed (%s): %s", type(exc).__name__, exc)
 
+        # Follow-up rewriting: when the latest user message is a short or
+        # referential follow-up ("try again", "continue", "expand on that"),
+        # retrieve against a self-contained rewrite of the question so the
+        # retrieval signal isn't lost. The ORIGINAL ``user_input`` is still
+        # threaded into ``build_messages`` below so the conversation flow stays
+        # natural in the prompt.
+        retrieval_query = user_input
+        from app.services.query_transformer import is_followup_query
+        if (
+            chat_history
+            and active_client is not None
+            and is_followup_query(user_input)
+        ):
+            try:
+                followup_transformer = QueryTransformer(active_client)
+                rewritten = await followup_transformer.rewrite_followup(
+                    user_input, chat_history
+                )
+                if rewritten and rewritten.lower().strip() != user_input.lower().strip():
+                    logger.info(
+                        "Follow-up rewrite: '%s' -> '%s'",
+                        user_input[:80],
+                        rewritten[:120],
+                    )
+                    retrieval_query = rewritten
+                    trace.followup_rewrite = rewritten
+            except Exception as exc:  # noqa: BLE001 — defensive
+                logger.warning("Follow-up rewrite skipped: %s", exc)
+
         # Query transformation for broader retrieval (if enabled).
         # Use the active (mode-selected) client so Instant mode doesn't
         # pay Thinking latency on query rewrites.
-        transformed_queries: List[Tuple[str, str]] = [('original', user_input)]
+        transformed_queries: List[Tuple[str, str]] = [('original', retrieval_query)]
         if settings.query_transformation_enabled and active_client is not None:
             try:
                 query_transformer = QueryTransformer(active_client)
                 transformed_queries = await query_transformer.transform(
-                    user_input
+                    retrieval_query
                 )
                 # transformed_queries is now List[Tuple[str, str]] like [('original', '...'), ('step_back', '...'), ('hyde', '...')]
                 if len(transformed_queries) > 1:
@@ -440,7 +469,7 @@ class RAGEngine:
                 logger.warning(
                     "Query transformation failed (%s): %s, using original query only", type(e).__name__, e
                 )
-                transformed_queries = [('original', user_input)]
+                transformed_queries = [('original', retrieval_query)]
 
         logger.debug("[query] transformed_queries=%s", transformed_queries)
 
@@ -499,7 +528,7 @@ class RAGEngine:
         if self._wiki_retrieval is not None and vault_id is not None:
             try:
                 wiki_evidence = await asyncio.to_thread(
-                    self._wiki_retrieval.retrieve, user_input, vault_id
+                    self._wiki_retrieval.retrieve, retrieval_query, vault_id
                 )
                 logger.info("[query] Wiki retrieval: %d candidates", len(wiki_evidence))
             except Exception as exc:
@@ -507,8 +536,8 @@ class RAGEngine:
                 wiki_evidence = []
 
         # Update trace with wiki results
-        query_type = _classify_query(user_input)
-        trace.wiki_query = user_input
+        query_type = _classify_query(retrieval_query)
+        trace.wiki_query = retrieval_query
         trace.wiki_candidates_total = len(wiki_evidence)
         trace.wiki_injected = len(wiki_evidence)
         trace.wiki_filtered = [

@@ -13,6 +13,46 @@ from app.services.llm_client import LLMClient
 logger = logging.getLogger(__name__)
 
 
+# Short / referential follow-up patterns. When the latest user message matches
+# any of these, the retrieval query is rewritten using the prior turn instead
+# of being searched literally — "try again" alone returns no useful evidence.
+_FOLLOWUP_REGEX = re.compile(
+    r"^\s*("
+    r"try\s+again|again\s+please|again|"
+    r"retry|regenerate|redo|"
+    r"continue|go\s+on|keep\s+going|"
+    r"more|more\s+please|tell\s+me\s+more|"
+    r"expand|expand\s+on\s+that|elaborate|"
+    r"in\s+more\s+detail|more\s+detail(s)?|"
+    r"shorter|shorter\s+please|summari[sz]e|tl;?dr|"
+    r"longer|longer\s+please|"
+    r"that('?s)?\s+wrong|that('?s)?\s+not\s+right|no,\s*.*"
+    r")[\s.\!\?]*$",
+    re.IGNORECASE,
+)
+
+
+def is_followup_query(query: str) -> bool:
+    """Return True when the user message is a short/referential follow-up.
+
+    These messages lack standalone retrieval signal — they only make sense
+    relative to the prior conversation turn. Examples: ``try again``,
+    ``continue``, ``expand on that``, ``in more detail``.
+    """
+    if not query or len(query) > 80:
+        return False
+    if _FOLLOWUP_REGEX.match(query):
+        return True
+    # Very short pronoun-anchored questions like "what about X?" / "and X?"
+    short = query.strip()
+    if 0 < len(short) <= 40:
+        if re.match(r"^(and|or|but|so)\b", short, re.IGNORECASE):
+            return True
+        if re.match(r"^what\s+about\b", short, re.IGNORECASE):
+            return True
+    return False
+
+
 def _is_exact_or_document_query(query: str) -> bool:
     """Detect queries that should NOT be broadened by step-back/HyDE.
 
@@ -251,6 +291,85 @@ class QueryTransformer:
                 variants.append(('hyde', hyde_passage))
 
         return variants
+
+    async def rewrite_followup(
+        self,
+        query: str,
+        chat_history: List[dict],
+    ) -> Optional[str]:
+        """Rewrite a short/referential follow-up into a self-contained question.
+
+        Uses the most recent user/assistant exchange from ``chat_history`` to
+        produce a standalone retrieval query. Returns ``None`` if there is
+        insufficient history or the LLM call fails — callers should fall back
+        to the original ``query`` for retrieval in that case.
+        """
+        if not chat_history:
+            return None
+
+        # Pull the most recent user turn (before the current message) and the
+        # most recent assistant turn so the rewriter has the immediate context.
+        prior_user: Optional[str] = None
+        prior_assistant: Optional[str] = None
+        for entry in reversed(chat_history):
+            role = entry.get("role")
+            content = entry.get("content")
+            if not isinstance(content, str):
+                continue
+            if role == "assistant" and prior_assistant is None:
+                prior_assistant = content
+            elif role == "user" and prior_user is None:
+                prior_user = content
+            if prior_user and prior_assistant:
+                break
+
+        if not prior_user:
+            return None
+
+        # Cap inputs so we don't pay token cost on huge prior answers.
+        prior_user_clipped = prior_user[:1000]
+        prior_assistant_clipped = (prior_assistant or "")[:1500]
+
+        system_prompt = (
+            "You rewrite short follow-up chat messages into self-contained "
+            "questions for document retrieval. Output ONLY the rewritten "
+            "question on a single line. Do not include preambles, quotes, "
+            "explanations, or trailing punctuation beyond a single '?' if "
+            "appropriate."
+        )
+        user_prompt = (
+            f"Previous user question:\n<user_query>{prior_user_clipped}</user_query>\n\n"
+            f"Previous assistant answer (for context only):\n"
+            f"<assistant_answer>{prior_assistant_clipped}</assistant_answer>\n\n"
+            f"New follow-up message from the user:\n"
+            f"<user_query>{query}</user_query>\n\n"
+            "Rewrite the follow-up as a standalone question that captures what "
+            "the user wants now, using the prior question/answer for missing "
+            "subject matter. If the follow-up is a retry/regenerate signal "
+            "(e.g. 'try again', 'again please'), output the previous user "
+            "question verbatim."
+        )
+        try:
+            response = await self._llm_client.chat_completion(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                max_tokens=120,
+                temperature=settings.query_transform_temperature,
+            )
+        except Exception as exc:  # noqa: BLE001 — defensive
+            logger.warning("Follow-up rewrite failed: %s", exc)
+            return None
+
+        if not response:
+            return None
+        rewritten = response.strip().splitlines()[0].strip()
+        # Strip surrounding quotes/brackets if the model added them.
+        rewritten = rewritten.strip('"').strip("'").strip()
+        if len(rewritten) < 3:
+            return None
+        return rewritten
 
     async def generate_hyde(self, query: str) -> Optional[str]:
         """

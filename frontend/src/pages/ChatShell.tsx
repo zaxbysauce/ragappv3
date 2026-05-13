@@ -158,6 +158,7 @@ export default function ChatShell() {
           sources: m.sources ?? undefined,
           memoriesUsed: m.memories ?? undefined,
           wikiRefs: m.wiki_refs ?? undefined,
+          mode: m.mode ?? undefined,
           created_at: m.created_at,
           feedback: m.feedback ?? null,
         }));

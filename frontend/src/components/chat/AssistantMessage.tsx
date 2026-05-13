@@ -1,7 +1,7 @@
 // frontend/src/components/chat/AssistantMessage.tsx
 import { useState, useMemo, useCallback } from "react";
 import { motion, useReducedMotion } from "framer-motion";
-import { Bot, AlertCircle } from "lucide-react";
+import { Bot, AlertCircle, Sparkles, Zap } from "lucide-react";
 import type { Message } from "@/stores/useChatStore";
 import type { Source } from "@/lib/api";
 import { useChatShellStore } from "@/stores/useChatShellStore";
@@ -106,6 +106,26 @@ export function AssistantMessage({
       <div className="flex-1 min-w-0 max-w-[68ch]">
         <div className="flex items-center gap-2 mb-2">
           <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Assistant</span>
+          {message.mode === "thinking" && (
+            <span
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md border border-violet-500/40 bg-violet-500/10 text-violet-700 dark:text-violet-300 text-[10px] font-semibold tracking-wide"
+              title="Generated with the Thinking model"
+              aria-label="Thinking model"
+            >
+              <Sparkles className="h-3 w-3" aria-hidden />
+              Thinking
+            </span>
+          )}
+          {message.mode === "instant" && (
+            <span
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md border border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300 text-[10px] font-semibold tracking-wide"
+              title="Generated with the Instant model"
+              aria-label="Instant model"
+            >
+              <Zap className="h-3 w-3" aria-hidden />
+              Instant
+            </span>
+          )}
         </div>
 
         {/* Markdown body */}
