@@ -94,16 +94,15 @@ async def register(
             "INSERT INTO users (username, hashed_password, full_name, role, is_active) VALUES (?, ?, ?, ?, 1)",
             (body.username, hashed_pw, body.full_name, role),
         )
-        db.commit()
         user_id = cursor.lastrowid
+
+        # Keep user creation and default access grants in one transaction.
+        _auto_assign_user_to_defaults(db, user_id)
+        db.commit()
     except Exception:
         db.rollback()
-        logger.error("Failed to create user", exc_info=True)
+        logger.error("Failed to create user with default assignments", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again later.")
-
-    # Auto-assign user to Default org, All Users group, and vault 1 access
-    _auto_assign_user_to_defaults(db, user_id)
-    db.commit()
 
     # Create tokens for auto-login
     access_token = create_access_token(user_id, body.username, role)
