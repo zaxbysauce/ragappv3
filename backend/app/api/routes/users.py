@@ -1,6 +1,7 @@
 """User management routes (admin/superadmin only)."""
 
 import asyncio
+import logging
 import sqlite3
 from typing import List, Optional
 
@@ -18,6 +19,7 @@ from app.security import csrf_protect
 from app.services.auth_service import hash_password, password_strength_check
 
 router = APIRouter(prefix="/users", tags=["users"])
+logger = logging.getLogger(__name__)
 
 
 def _auto_assign_user_to_defaults(conn, user_id: int) -> None:
@@ -187,25 +189,28 @@ async def create_user(
                 detail=f"Username '{body.username}' already exists",
             )
 
-        # Insert the new user
+        # Insert the new user and default assignments in one transaction.
         cursor = conn.execute(
             """INSERT INTO users (username, hashed_password, full_name, role, is_active)
             VALUES (?, ?, ?, ?, 1)""",
             (body.username, hashed_password, body.full_name, body.role),
         )
-        conn.commit()
         user_id = cursor.lastrowid
 
         # Auto-assign user to Default org, All Users group, and vault 1 access
         _auto_assign_user_to_defaults(conn, user_id)
-        conn.commit()
 
-        # Fetch the created user
+        # Fetch the created user before commit so response construction remains
+        # part of the same rollback boundary as creation and default grants.
         cursor = conn.execute(
             "SELECT id, username, full_name, role, is_active, created_at FROM users WHERE id = ?",
             (user_id,),
         )
         row = cursor.fetchone()
+        if row is None:
+            raise RuntimeError("Failed to retrieve created user")
+
+        conn.commit()
 
         return {
             "id": row[0],
@@ -215,6 +220,16 @@ async def create_user(
             "is_active": bool(row[4]),
             "created_at": row[5],
         }
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as exc:
+        conn.rollback()
+        logger.error("Failed to create user with default assignments", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="An internal error occurred. Please try again later.",
+        ) from exc
     finally:
         pool.release_connection(conn)
 
