@@ -29,9 +29,12 @@ const TRIGGER_LABELS: Record<WikiCompileJob["trigger_type"], string> = {
 
 interface WikiJobsPanelProps {
   vaultId: number;
+  // Incremented by the parent on receipt of a wiki SSE event so this panel
+  // refetches without depending on a manual refresh button click.
+  refreshSignal?: number;
 }
 
-export function WikiJobsPanel({ vaultId }: WikiJobsPanelProps) {
+export function WikiJobsPanel({ vaultId, refreshSignal = 0 }: WikiJobsPanelProps) {
   const [jobs, setJobs] = useState<WikiCompileJob[]>([]);
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [loading, setLoading] = useState(false);
@@ -51,7 +54,7 @@ export function WikiJobsPanel({ vaultId }: WikiJobsPanelProps) {
 
   useEffect(() => {
     refresh();
-  }, [refresh]);
+  }, [refresh, refreshSignal]);
 
   async function handleRetry(jobId: number) {
     setActionLoading(jobId);

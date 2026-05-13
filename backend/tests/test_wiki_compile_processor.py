@@ -250,6 +250,31 @@ class TestCompileIngestJob(unittest.TestCase):
         )
         self.assertTrue(result.get("skipped"))
 
+    def test_creates_page_even_when_extraction_is_empty(self):
+        # Prose with no acronyms and no ALL-CAPS-org role claims must still
+        # produce a wiki page so the wiki reflects every ingested document.
+        plain_text = (
+            "The product team shipped a release on Tuesday. "
+            "Feedback was gathered from beta users and incorporated."
+        )
+        result = self.compiler.compile_ingest_job(
+            vault_id=1, input_json={"file_id": 1, "text": plain_text}
+        )
+        self.assertFalse(
+            result.get("skipped"),
+            "Ingest must produce a page even when deterministic extraction is empty",
+        )
+        self.assertIsNotNone(result.get("page"))
+        self.assertEqual(result["claims"], [])
+        self.assertEqual(result["entities"], [])
+        # The page row must actually exist in the DB.
+        row = self.conn.execute(
+            "SELECT id, page_type, status FROM wiki_pages WHERE id = ?",
+            (result["page"]["id"],),
+        ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(dict(row)["status"], "needs_review")
+
 
 # ---------------------------------------------------------------------------
 # WikiStore concurrent claim safety
