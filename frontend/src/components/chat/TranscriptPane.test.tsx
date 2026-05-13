@@ -602,6 +602,28 @@ describe("TranscriptPane", () => {
     });
   });
 
+  describe("12a. Composer clears slash menu on send button submit", () => {
+    it("closes the slash menu when the send button submits a message", async () => {
+      mockChatState.input = "/summarize this";
+      renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: false });
+
+      const textarea = screen.getByPlaceholderText(/Message\.\.\./i);
+
+      fireEvent.change(textarea, { target: { value: "/summarize" } });
+
+      await waitFor(() => {
+        expect(screen.getByRole("listbox", { name: "Slash commands" })).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+
+      await waitFor(() => {
+        expect(mockHandleSend).toHaveBeenCalled();
+        expect(screen.queryByRole("listbox", { name: "Slash commands" })).not.toBeInTheDocument();
+      });
+    });
+  });
+
   describe("13. Composer stop button visible during streaming", () => {
     it("shows stop button when isStreaming is true", () => {
       renderComposerWithProviders({ onSend: mockHandleSend, onStop: mockHandleStop, isStreaming: true });

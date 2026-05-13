@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useVaultStore } from "@/stores/useVaultStore";
 import { VaultSelector } from "@/components/vault/VaultSelector";
 import { WikiPageList } from "./WikiPageList";
@@ -17,6 +17,8 @@ export default function WikiPage() {
   const [editingPage, setEditingPage] = useState<import("@/lib/api").WikiPage | null>(null);
   const [lintPanelOpen, setLintPanelOpen] = useState(false);
   const [jobsPanelOpen, setJobsPanelOpen] = useState(false);
+  const [jobsRefreshSignal, setJobsRefreshSignal] = useState(0);
+  const eventSourceRef = useRef<EventSource | null>(null);
 
   const {
     pages,
@@ -39,6 +41,45 @@ export default function WikiPage() {
       fetchPages();
       fetchLintFindings();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeVaultId]);
+
+  // Subscribe to wiki compile job completion events for the active vault.
+  // On any terminal job event, refetch pages, lint findings, and bump the
+  // refresh signal so an open WikiJobsPanel reloads too. The auth cookie is
+  // carried over withCredentials; EventSource cannot set Authorization headers.
+  useEffect(() => {
+    if (!activeVaultId) return;
+    // jsdom (vitest) does not provide EventSource. Skip cleanly so unit tests
+    // that don't exercise the live stream still mount the page.
+    if (typeof EventSource === "undefined") return;
+    const apiBase = import.meta.env.VITE_API_URL || "/api";
+    const url = `${apiBase}/wiki/events?vault_id=${activeVaultId}`;
+    const es = new EventSource(url, { withCredentials: true });
+    eventSourceRef.current = es;
+
+    es.onmessage = (ev) => {
+      try {
+        const data = JSON.parse(ev.data) as { type?: string };
+        if (data.type === "job_completed" || data.type === "job_failed") {
+          fetchPages();
+          fetchLintFindings();
+          setJobsRefreshSignal((n) => n + 1);
+        }
+      } catch {
+        // Ignore malformed events; SSE keepalives are comment lines and never
+        // reach onmessage.
+      }
+    };
+
+    es.onerror = () => {
+      // Browser auto-reconnects with exponential backoff for SSE. No-op here.
+    };
+
+    return () => {
+      es.close();
+      eventSourceRef.current = null;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeVaultId]);
 
@@ -159,7 +200,7 @@ export default function WikiPage() {
         {/* Jobs panel: right side overlay */}
         {jobsPanelOpen && activeVaultId && (
           <div className="w-80 border-l border-border p-4 overflow-y-auto shrink-0">
-            <WikiJobsPanel vaultId={activeVaultId} />
+            <WikiJobsPanel vaultId={activeVaultId} refreshSignal={jobsRefreshSignal} />
           </div>
         )}
       </div>

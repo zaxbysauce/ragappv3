@@ -44,14 +44,19 @@ const createMockStore = (overrides = {}) => ({
   sessionRailOpen: true,
   rightPaneOpen: false,
   rightPaneWidth: 320,
+  sessionRailWidth: 260,
   activeSessionId: null,
+  activeSessionTitle: null,
+  sessionListRefreshToken: 0,
   sessionSearchQuery: "",
   pinnedSessionIds: [],
   toggleSessionRail: vi.fn(),
   toggleRightPane: vi.fn(),
   setRightPaneWidth: vi.fn(),
+  setSessionRailWidth: vi.fn(),
   setActiveSessionId: mockSetActiveSessionId,
   setActiveSessionTitle: vi.fn(),
+  requestSessionListRefresh: vi.fn(),
   openSessionRail: vi.fn(),
   closeSessionRail: vi.fn(),
   openRightPane: vi.fn(),
@@ -89,6 +94,60 @@ describe("SessionRail ADVERSARIAL TESTS", () => {
     // Reset the module-level cache after each test to prevent cross-test pollution
     _sessionCache.data = null;
     _sessionCache.ts = 0;
+  });
+
+  // ===========================================================================
+  // 0. CACHE REFRESH SIGNAL
+  // ===========================================================================
+  describe("Cache refresh signal", () => {
+    it("bypasses the fresh session cache when the shell refresh token changes", async () => {
+      const cachedSession = {
+        id: 1,
+        vault_id: 1,
+        title: "Cached Session",
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        message_count: 1,
+      };
+      const refreshedSession = {
+        id: 2,
+        vault_id: 1,
+        title: "Refreshed Session",
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        message_count: 2,
+      };
+      _sessionCache.data = [cachedSession];
+      _sessionCache.vaultId = undefined;
+      _sessionCache.ts = Date.now();
+      vi.mocked(api.listChatSessions).mockResolvedValue({ sessions: [refreshedSession] });
+
+      const { rerender } = render(
+        <Wrapper>
+          <SessionRail />
+        </Wrapper>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Cached Session")).toBeInTheDocument();
+      });
+      expect(api.listChatSessions).not.toHaveBeenCalled();
+
+      vi.mocked(useChatShellStoreModule.useChatShellStore).mockReturnValue(
+        createMockStore({ sessionListRefreshToken: 1 })
+      );
+
+      rerender(
+        <Wrapper>
+          <SessionRail />
+        </Wrapper>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Refreshed Session")).toBeInTheDocument();
+      });
+      expect(api.listChatSessions).toHaveBeenCalledTimes(1);
+    });
   });
 
   // ===========================================================================
