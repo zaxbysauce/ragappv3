@@ -1,8 +1,9 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import { updateMessageFeedback } from "@/lib/api";
-import { AssistantMessageActions } from "./MessageActions";
+import { AssistantMessageActions, UserMessageActions } from "./MessageActions";
 
 vi.mock("@/lib/api", () => ({
   updateMessageFeedback: vi.fn(),
@@ -85,5 +86,24 @@ describe("AssistantMessageActions feedback", () => {
 
     expect(screen.getByLabelText("Good response")).toHaveAttribute("aria-pressed", "false");
     expect(localStorage.removeItem).toHaveBeenCalledWith("chat_feedback_42");
+  });
+});
+
+describe("UserMessageActions", () => {
+  it("disables edit while generation is streaming", async () => {
+    const onEdit = vi.fn();
+    render(
+      <UserMessageActions
+        content="question"
+        onEdit={onEdit}
+        isEditDisabled
+      />
+    );
+
+    const edit = screen.getByRole("button", { name: "Edit message" });
+    expect(edit).toBeDisabled();
+
+    await userEvent.click(edit);
+    expect(onEdit).not.toHaveBeenCalled();
   });
 });

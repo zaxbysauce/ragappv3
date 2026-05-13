@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { BrowserRouter } from "react-router-dom";
 import ChatShell from "./ChatShell";
 
@@ -28,8 +28,10 @@ let mockStoreState = {
   sessionRailOpen: true,
   rightPaneOpen: false,
   rightPaneWidth: 320,
+  sessionRailWidth: 280,
   activeSessionId: null as string | null,
   activeSessionTitle: null as string | null,
+  sessionListRefreshToken: 0,
   activeRightTab: "evidence" as "evidence" | "preview",
   sessionSearchQuery: "",
   pinnedSessionIds: [] as number[],
@@ -37,8 +39,10 @@ let mockStoreState = {
   toggleSessionRail: vi.fn(),
   toggleRightPane: vi.fn(),
   setRightPaneWidth: vi.fn(),
+  setSessionRailWidth: vi.fn(),
   setActiveSessionId: vi.fn(),
   setActiveSessionTitle: vi.fn(),
+  requestSessionListRefresh: vi.fn(),
   openSessionRail: vi.fn(),
   closeSessionRail: vi.fn(),
   openRightPane: vi.fn(),
@@ -91,8 +95,10 @@ describe("ChatShell Mobile Layout", () => {
       sessionRailOpen: false,
       rightPaneOpen: false,
       rightPaneWidth: 320,
+      sessionRailWidth: 280,
       activeSessionId: null,
       activeSessionTitle: null,
+      sessionListRefreshToken: 0,
       activeRightTab: "evidence",
       sessionSearchQuery: "",
       pinnedSessionIds: [],
@@ -100,8 +106,10 @@ describe("ChatShell Mobile Layout", () => {
       toggleSessionRail: vi.fn(),
       toggleRightPane: vi.fn(),
       setRightPaneWidth: vi.fn(),
+      setSessionRailWidth: vi.fn(),
       setActiveSessionId: vi.fn(),
       setActiveSessionTitle: vi.fn(),
+      requestSessionListRefresh: vi.fn(),
       openSessionRail: vi.fn(),
       closeSessionRail: vi.fn(),
       openRightPane: vi.fn(),
@@ -280,6 +288,92 @@ describe("ChatShell Mobile Layout", () => {
       const rightPaneToggle = screen.getByLabelText("Show details panel");
       expect(rightPaneToggle).toBeDefined();
       expect(rightPaneToggle.className).not.toContain("md:hidden");
+    });
+  });
+
+  describe("resize handler rAF coalescing", () => {
+    it("coalesces details panel mousemove width updates to one animation frame", () => {
+      const rafCallbacks: FrameRequestCallback[] = [];
+      const requestAnimationFrameSpy = vi
+        .spyOn(window, "requestAnimationFrame")
+        .mockImplementation((cb) => {
+          rafCallbacks.push(cb);
+          return rafCallbacks.length;
+        });
+      const cancelAnimationFrameSpy = vi
+        .spyOn(window, "cancelAnimationFrame")
+        .mockImplementation(() => undefined);
+
+      mockStoreState.rightPaneOpen = true;
+
+      render(
+        <BrowserRouter>
+          <ChatShell />
+        </BrowserRouter>
+      );
+      requestAnimationFrameSpy.mockClear();
+      rafCallbacks.length = 0;
+
+      fireEvent.mouseDown(screen.getByRole("separator", { name: "Resize details panel" }), {
+        clientX: 500,
+      });
+      fireEvent.mouseMove(document, { clientX: 480 });
+      fireEvent.mouseMove(document, { clientX: 450 });
+
+      expect(mockStoreState.setRightPaneWidth).not.toHaveBeenCalled();
+      expect(requestAnimationFrameSpy).toHaveBeenCalled();
+
+      act(() => {
+        rafCallbacks.forEach((cb) => cb(0));
+      });
+
+      expect(mockStoreState.setRightPaneWidth).toHaveBeenCalledTimes(1);
+      expect(mockStoreState.setRightPaneWidth).toHaveBeenCalledWith(370);
+
+      requestAnimationFrameSpy.mockRestore();
+      cancelAnimationFrameSpy.mockRestore();
+    });
+
+    it("coalesces session rail mousemove width updates to one animation frame", () => {
+      const rafCallbacks: FrameRequestCallback[] = [];
+      const requestAnimationFrameSpy = vi
+        .spyOn(window, "requestAnimationFrame")
+        .mockImplementation((cb) => {
+          rafCallbacks.push(cb);
+          return rafCallbacks.length;
+        });
+      const cancelAnimationFrameSpy = vi
+        .spyOn(window, "cancelAnimationFrame")
+        .mockImplementation(() => undefined);
+
+      mockStoreState.sessionRailOpen = true;
+
+      render(
+        <BrowserRouter>
+          <ChatShell />
+        </BrowserRouter>
+      );
+      requestAnimationFrameSpy.mockClear();
+      rafCallbacks.length = 0;
+
+      fireEvent.mouseDown(screen.getByRole("separator", { name: "Resize session panel" }), {
+        clientX: 200,
+      });
+      fireEvent.mouseMove(document, { clientX: 230 });
+      fireEvent.mouseMove(document, { clientX: 260 });
+
+      expect(mockStoreState.setSessionRailWidth).not.toHaveBeenCalled();
+      expect(requestAnimationFrameSpy).toHaveBeenCalled();
+
+      act(() => {
+        rafCallbacks.forEach((cb) => cb(0));
+      });
+
+      expect(mockStoreState.setSessionRailWidth).toHaveBeenCalledTimes(1);
+      expect(mockStoreState.setSessionRailWidth).toHaveBeenCalledWith(340);
+
+      requestAnimationFrameSpy.mockRestore();
+      cancelAnimationFrameSpy.mockRestore();
     });
   });
 });

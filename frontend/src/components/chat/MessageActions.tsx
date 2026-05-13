@@ -315,10 +315,16 @@ export function AssistantMessageActions({
 interface UserMessageActionsProps {
   content: string;
   onEdit?: () => void;
+  isEditDisabled?: boolean;
   onFork?: () => void;
 }
 
-export function UserMessageActions({ content, onEdit, onFork }: UserMessageActionsProps) {
+export function UserMessageActions({
+  content,
+  onEdit,
+  isEditDisabled = false,
+  onFork,
+}: UserMessageActionsProps) {
   return (
     <div className="flex items-center gap-0.5 mt-2 opacity-0 group-hover:opacity-100 focus-within:opacity-100 [@media(pointer:coarse)]:opacity-100 transition-opacity duration-200">
       <TooltipProvider>
@@ -332,12 +338,13 @@ export function UserMessageActions({ content, onEdit, onFork }: UserMessageActio
                 size="icon"
                 className="h-7 w-7 active:scale-95"
                 onClick={onEdit}
+                disabled={isEditDisabled}
                 aria-label="Edit message"
               >
                 <Pencil className="h-3.5 w-3.5" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent><p>Edit</p></TooltipContent>
+            <TooltipContent><p>{isEditDisabled ? "Editing disabled while generating" : "Edit"}</p></TooltipContent>
           </Tooltip>
         )}
 

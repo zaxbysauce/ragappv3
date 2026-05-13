@@ -685,6 +685,7 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
     isSessionPinned,
     setActiveSessionId,
     setActiveSessionTitle,
+    sessionListRefreshToken,
   } = useChatShellStore();
   const { getActiveVault: _getActiveVault } = useVaultStore();
   const activeVault = _getActiveVault();
@@ -701,11 +702,15 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
   const [debouncedSearchQuery] = useDebounce(sessionSearchQuery, 300);
 
   // Fetch sessions on mount and when vaultId changes (with dedup cache)
+  const lastRefreshTokenRef = useRef(sessionListRefreshToken);
   useEffect(() => {
     let cancelled = false;
+    const forceRefresh = sessionListRefreshToken !== lastRefreshTokenRef.current;
+    lastRefreshTokenRef.current = sessionListRefreshToken;
     const fetchSessions = async () => {
       // Use cache if fresh and same vault
       if (
+        !forceRefresh &&
         _sessionCache.data &&
         _sessionCache.vaultId === vaultId &&
         Date.now() - _sessionCache.ts < SESSION_CACHE_TTL
@@ -734,7 +739,7 @@ export function SessionRail({ vaultId, className }: SessionRailProps) {
 
     fetchSessions();
     return () => { cancelled = true; };
-  }, [vaultId]);
+  }, [vaultId, sessionListRefreshToken]);
 
   // Track which session IDs have been fetched to avoid duplicate fetches
   const fetchedIdsRef = useRef<Set<number>>(new Set());

@@ -172,12 +172,23 @@ export default function ChatShell() {
     e.preventDefault();
     const startX = e.clientX;
     const startWidth = rightPaneWidth;
+    let pendingWidth = startWidth;
+    let frame: number | null = null;
     const onMouseMove = (moveEvent: MouseEvent) => {
       const delta = startX - moveEvent.clientX;
-      const newWidth = Math.max(240, Math.min(600, startWidth + delta));
-      setRightPaneWidth(newWidth);
+      pendingWidth = Math.max(240, Math.min(600, startWidth + delta));
+      if (frame !== null) return;
+      frame = window.requestAnimationFrame(() => {
+        setRightPaneWidth(pendingWidth);
+        frame = null;
+      });
     };
     const onMouseUp = () => {
+      if (frame !== null) {
+        window.cancelAnimationFrame(frame);
+        setRightPaneWidth(pendingWidth);
+        frame = null;
+      }
       document.removeEventListener("mousemove", onMouseMove);
       document.removeEventListener("mouseup", onMouseUp);
       window.removeEventListener("blur", onMouseUp);
@@ -195,12 +206,23 @@ export default function ChatShell() {
     e.preventDefault();
     const startX = e.clientX;
     const startWidth = sessionRailWidth;
+    let pendingWidth = startWidth;
+    let frame: number | null = null;
     const onMouseMove = (moveEvent: MouseEvent) => {
       const delta = moveEvent.clientX - startX;
-      const newWidth = Math.max(200, Math.min(400, startWidth + delta));
-      setSessionRailWidth(newWidth);
+      pendingWidth = Math.max(200, Math.min(400, startWidth + delta));
+      if (frame !== null) return;
+      frame = window.requestAnimationFrame(() => {
+        setSessionRailWidth(pendingWidth);
+        frame = null;
+      });
     };
     const onMouseUp = () => {
+      if (frame !== null) {
+        window.cancelAnimationFrame(frame);
+        setSessionRailWidth(pendingWidth);
+        frame = null;
+      }
       document.removeEventListener("mousemove", onMouseMove);
       document.removeEventListener("mouseup", onMouseUp);
       window.removeEventListener("blur", onMouseUp);
