@@ -209,8 +209,29 @@ describe('DocumentsPage - Drag to Resize Filename Column', () => {
               progress_percent: 25,
             },
           },
+          {
+            id: 'processing-doc',
+            filename: 'processing.pdf',
+            size: 2048,
+            created_at: '2024-01-02',
+            phase: 'embedding',
+            phase_message: null,
+            progress_percent: null,
+            processed_units: 0,
+            total_units: 0,
+            unit_label: 'chunks',
+            metadata: {
+              status: 'processing',
+              chunk_count: 0,
+              phase: 'embedding',
+              progress_percent: null,
+              processed_units: 0,
+              total_units: 0,
+              unit_label: 'chunks',
+            },
+          },
         ],
-        total: 1,
+        total: 2,
       });
 
       await act(async () => {
@@ -223,6 +244,8 @@ describe('DocumentsPage - Drag to Resize Filename Column', () => {
         expect(screen.getByText('Parsing failed - 1 / 4 pages')).toBeInTheDocument();
       });
       expect(screen.getByText('25%')).toBeInTheDocument();
+      expect(screen.getByText('embedding - 0 / 0 chunks')).toBeInTheDocument();
+      expect(screen.queryByText('NaN%')).not.toBeInTheDocument();
       expect(container.querySelector('[title="Parser could not read the file"]')).toBeInTheDocument();
     });
 

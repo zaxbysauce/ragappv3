@@ -336,6 +336,7 @@ def _row_to_document_response(row: sqlite3.Row) -> DocumentResponse:
             "status": status,
             "chunk_count": chunk_count,
             "chunks": chunk_count,  # Backward compatibility
+            # Keep progress fields mirrored for legacy metadata-based clients.
             "error_message": error_message,
             "phase": phase,
             "phase_message": phase_message,

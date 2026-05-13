@@ -580,6 +580,12 @@ class TestDocumentsEndpoints(unittest.TestCase):
         """GET /api/documents includes list-row phase, progress, and error detail."""
         conn = self._connection_pool.get_connection()
         try:
+            conn.execute(
+                "INSERT OR IGNORE INTO vaults (id, name, description) VALUES (1, 'Vault 1', '')"
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO vaults (id, name, description) VALUES (2, 'Vault 2', '')"
+            )
             cur = conn.execute(
                 """INSERT INTO files
                    (vault_id, file_path, file_name, file_size, status,
@@ -592,14 +598,36 @@ class TestDocumentsEndpoints(unittest.TestCase):
                            1, 4, 'pages', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)""",
             )
             file_id = cur.lastrowid
+            leaked_cur = conn.execute(
+                """INSERT INTO files
+                   (vault_id, file_path, file_name, file_size, status,
+                    error_message, phase, phase_message, progress_percent)
+                   VALUES (2, '/uploads/leaked.txt', 'leaked.txt', 100,
+                           'processing', 'should not leak',
+                           'embedding', 'Embedding hidden vault', 50.0)""",
+            )
+            inaccessible_file_id = leaked_cur.lastrowid
             conn.commit()
         finally:
             self._connection_pool.release_connection(conn)
 
-        response = self.client.get("/api/documents/")
+        app.dependency_overrides[self._get_current_active_user] = lambda: {
+            "id": 42,
+            "username": "vault-one-reader",
+            "role": "member",
+        }
+
+        async def allow_only_vault_one(user, resource_type, resource_id, action):
+            return resource_type == "vault" and resource_id == 1 and action == "read"
+
+        app.dependency_overrides[self._get_evaluate_policy] = lambda: allow_only_vault_one
+
+        response = self.client.get("/api/documents/?vault_id=1")
 
         self.assertEqual(response.status_code, 200, response.text)
-        doc = next(item for item in response.json()["documents"] if item["id"] == file_id)
+        docs = response.json()["documents"]
+        self.assertNotIn(inaccessible_file_id, {item["id"] for item in docs})
+        doc = next(item for item in docs if item["id"] == file_id)
         self.assertEqual(doc["status"], "error")
         self.assertEqual(doc["error_message"], "Parser could not read the file")
         self.assertEqual(doc["phase"], "parsing")
