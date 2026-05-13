@@ -10,6 +10,7 @@ import { formatRelativeTime } from "@/lib/formatters";
 interface MessageBubbleProps {
   message: Message;
   isStreaming?: boolean;
+  isEditDisabled?: boolean;
   onFork?: () => void;
   userInitial: string;
   onEdit?: (messageId: string, content: string) => void;
@@ -18,6 +19,7 @@ interface MessageBubbleProps {
 export const MessageBubble = memo(function MessageBubble({
   message,
   isStreaming,
+  isEditDisabled = false,
   onFork,
   userInitial,
   onEdit,
@@ -81,7 +83,14 @@ export const MessageBubble = memo(function MessageBubble({
             {/* Actions */}
             <UserMessageActions
               content={message.content}
-              onEdit={onEdit ? () => onEdit(message.id, message.content) : undefined}
+              onEdit={
+                onEdit
+                  ? () => {
+                      if (!isEditDisabled) onEdit(message.id, message.content);
+                    }
+                  : undefined
+              }
+              isEditDisabled={isEditDisabled}
               onFork={onFork}
             />
           </div>

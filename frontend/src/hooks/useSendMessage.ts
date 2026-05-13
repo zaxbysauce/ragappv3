@@ -9,6 +9,7 @@ import {
 } from "@/lib/api";
 import { useChatStore, type Message } from "@/stores/useChatStore";
 import { useChatModeStore } from "@/stores/useChatModeStore";
+import { useChatShellStore } from "@/stores/useChatShellStore";
 import { useLlmHealthStore } from "@/stores/useLlmHealthStore";
 import { useSettingsStore } from "@/stores/useSettingsStore";
 import { computeEffectiveChatMode } from "@/lib/chatMode";
@@ -27,7 +28,7 @@ export interface UseSendMessageReturn {
 
 export function useSendMessage(
   activeVaultId: number | null,
-  refreshHistory: () => Promise<void>
+  refreshHistory: (force?: boolean) => Promise<void>
 ): UseSendMessageReturn {
   const {
     setInput,
@@ -203,7 +204,8 @@ export function useSendMessage(
               migrateId(userMessage.id, userSaveResult);
               if (assistantSaveResult) migrateId(assistantMessageId, assistantSaveResult);
 
-              await refreshHistory();
+              await refreshHistory(true);
+              useChatShellStore.getState().requestSessionListRefresh();
             } catch (err) {
               console.error("Failed to save chat messages:", err);
             }

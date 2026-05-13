@@ -141,6 +141,11 @@ export function Composer({ onSend, onStop, isStreaming, className, inputRef }: C
   const [showSlashMenu, setShowSlashMenu] = useState(false);
   const [selectedCmd, setSelectedCmd] = useState(0);
   const [slashQuery, setSlashQuery] = useState("");
+  const closeSlashMenu = useCallback(() => {
+    setShowSlashMenu(false);
+    setSlashQuery("");
+    setSelectedCmd(0);
+  }, []);
 
   // File attachments
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
@@ -199,9 +204,9 @@ export function Composer({ onSend, onStop, isStreaming, className, inputRef }: C
     const next = lines.join("\n");
     setInput(next);
     persistDraft(next);
-    setShowSlashMenu(false);
+    closeSlashMenu();
     textareaRef.current?.focus();
-  }, [input, setInput, persistDraft, textareaRef]);
+  }, [input, setInput, persistDraft, textareaRef, closeSlashMenu]);
 
   // Input change
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -216,8 +221,7 @@ export function Composer({ onSend, onStop, isStreaming, className, inputRef }: C
       setSlashQuery(last.slice(1));
       setSelectedCmd(0);
     } else {
-      setShowSlashMenu(false);
-      setSlashQuery("");
+      closeSlashMenu();
     }
   };
 
@@ -258,6 +262,7 @@ export function Composer({ onSend, onStop, isStreaming, className, inputRef }: C
           onClick: () => {
             setAttachments((prev) => prev.filter((a) => !indexingIds.has(a.id)));
             persistDraft("");
+            closeSlashMenu();
             onSend();
           },
         },
@@ -265,6 +270,7 @@ export function Composer({ onSend, onStop, isStreaming, className, inputRef }: C
       return;
     }
     persistDraft("");
+    closeSlashMenu();
     onSend();
     // Keep attachments in the tray after send only if they are still
     // indexing or in error — fully indexed/uploading-failed files have

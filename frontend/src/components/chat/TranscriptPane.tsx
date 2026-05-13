@@ -198,6 +198,7 @@ const MessageRow = memo(function MessageRow({
         <MessageBubble
           message={safeMessage}
           isStreaming={isAssistantStreaming}
+          isEditDisabled={isStreaming}
           onFork={() => onFork(messageId)}
           userInitial={userInitial}
           onEdit={onEdit}
@@ -383,13 +384,14 @@ export function TranscriptPane({ className }: TranscriptPaneProps) {
 
   // Edit: trim store from message index, restore content to composer
   const handleEdit = useCallback((messageId: string, content: string) => {
+    if (isStreaming) return;
     const { messageIds: ids } = useChatStore.getState();
     const idx = ids.indexOf(messageId);
     if (idx < 0) return;
     removeMessagesFrom(idx);
     setInput(content);
     composerRef.current?.focus();
-  }, [removeMessagesFrom, setInput]);
+  }, [isStreaming, removeMessagesFrom, setInput]);
 
   // Fork
   const handleFork = useCallback(async (messageId: string) => {
