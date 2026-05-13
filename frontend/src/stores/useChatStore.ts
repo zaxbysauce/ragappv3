@@ -10,6 +10,8 @@ export interface Message {
   memoriesUsed?: UsedMemory[];
   /** Wiki evidence cited as [W#] in this assistant message. */
   wikiRefs?: WikiReference[];
+  /** Chat mode used to generate this assistant message. */
+  mode?: "instant" | "thinking";
   stopped?: boolean;
   error?: string;
   created_at?: string;

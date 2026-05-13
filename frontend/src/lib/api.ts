@@ -640,6 +640,8 @@ export interface ChatStreamCallbacks {
   onMemories?: (memories: UsedMemory[]) => void;
   onWiki?: (wikiRefs: WikiReference[]) => void;
   onCitationValidation?: (validation: CitationValidationDebug) => void;
+  /** Resolved chat mode reported by the backend at the start of the stream. */
+  onMode?: (mode: "instant" | "thinking") => void;
   onError?: (error: Error) => void;
   onComplete?: () => void;
 }
@@ -674,6 +676,8 @@ export interface ChatSessionMessage {
   wiki_refs?: WikiReference[] | null;
   created_at: string;
   feedback?: "up" | "down" | null;
+  /** Chat mode used to generate this assistant message. Null on user rows / legacy data. */
+  mode?: "instant" | "thinking" | null;
 }
 
 export interface ChatSessionDetail extends ChatSession {
@@ -691,6 +695,7 @@ export interface AddMessageRequest {
   sources?: Source[];
   memories?: UsedMemory[];
   wiki_refs?: WikiReference[];
+  mode?: "instant" | "thinking";
 }
 
 export interface Organization {
@@ -990,6 +995,10 @@ export async function parseSSEStream(
           if (parsed.type === 'error') {
             callbacks.onError?.(new Error(parsed.message || 'Chat stream error'));
             return;
+          }
+          if (parsed.type === 'mode' && (parsed.mode === 'instant' || parsed.mode === 'thinking')) {
+            callbacks.onMode?.(parsed.mode);
+            continue;
           }
           // Defense in depth: drop any reasoning/thinking event regardless of
           // whether it appears as ``type`` or as a content field.

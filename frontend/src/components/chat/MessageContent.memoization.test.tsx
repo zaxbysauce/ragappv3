@@ -18,7 +18,7 @@ vi.mock("react-markdown", () => ({
 
 // Mock remark-gfm and rehype-sanitize (required by the real component's imports)
 vi.mock("remark-gfm", () => ({ default: () => {} }));
-vi.mock("rehype-sanitize", () => ({ default: () => {} }));
+vi.mock("rehype-sanitize", () => ({ default: () => {}, defaultSchema: { attributes: {} } }));
 
 // Mock other imports
 vi.mock("lucide-react", () => ({ Copy: () => null, Check: () => null, FileText: () => null }));
