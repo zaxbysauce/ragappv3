@@ -26,7 +26,8 @@ _FOLLOWUP_REGEX = re.compile(
     r"in\s+more\s+detail|more\s+detail(s)?|"
     r"shorter|shorter\s+please|summari[sz]e|tl;?dr|"
     r"longer|longer\s+please|"
-    r"that('?s)?\s+wrong|that('?s)?\s+not\s+right|no,\s*.*"
+    r"that('?s)?\s+wrong|that('?s)?\s+not\s+right|"
+    r"no,?\s+that('?s)?\s+(wrong|not\s+right|incorrect)"
     r")[\s.\!\?]*$",
     re.IGNORECASE,
 )
@@ -307,8 +308,10 @@ class QueryTransformer:
         if not chat_history:
             return None
 
-        # Pull the most recent user turn (before the current message) and the
-        # most recent assistant turn so the rewriter has the immediate context.
+        # Pull the most recent NON-FOLLOWUP user turn so chains of follow-ups
+        # ("try again" -> "try again" -> "try again") don't decay into a
+        # rewritten query of "try again" itself. Also pull the most recent
+        # assistant turn for context.
         prior_user: Optional[str] = None
         prior_assistant: Optional[str] = None
         for entry in reversed(chat_history):
@@ -319,6 +322,9 @@ class QueryTransformer:
             if role == "assistant" and prior_assistant is None:
                 prior_assistant = content
             elif role == "user" and prior_user is None:
+                # Skip follow-up phrases so we anchor on the original question.
+                if is_followup_query(content):
+                    continue
                 prior_user = content
             if prior_user and prior_assistant:
                 break
