@@ -32,6 +32,83 @@ import { EmptyState } from "@/components/shared/EmptyState";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
+function documentField<T>(doc: Document, key: string): T | null {
+  const directValue = (doc as unknown as Record<string, unknown>)[key];
+  if (directValue !== undefined && directValue !== null) {
+    return directValue as T;
+  }
+  const metadataValue = doc.metadata?.[key];
+  return metadataValue === undefined || metadataValue === null ? null : (metadataValue as T);
+}
+
+function documentProgress(doc: Document) {
+  const status = (doc.metadata?.status as string | undefined) ?? "";
+  const phase = documentField<string>(doc, "phase");
+  const phaseMessage = documentField<string>(doc, "phase_message");
+  const errorMessage = documentField<string>(doc, "error_message");
+  const progressPercent = documentField<number>(doc, "progress_percent");
+  const processedUnits = documentField<number>(doc, "processed_units");
+  const totalUnits = documentField<number>(doc, "total_units");
+  const unitLabel = documentField<string>(doc, "unit_label");
+  const isFailed = status === "error" || status === "failed";
+  const isActive = status === "pending" || status === "processing";
+  const label =
+    phaseMessage ?? phase ?? (isFailed ? "Failed" : status === "indexed" ? "Complete" : "Waiting");
+  const unitsText =
+    processedUnits != null && totalUnits != null
+      ? `${processedUnits.toLocaleString()} / ${totalUnits.toLocaleString()} ${
+          unitLabel ?? ""
+        }`.trim()
+      : null;
+
+  return {
+    errorMessage,
+    isActive,
+    isFailed,
+    label,
+    progressPercent,
+    title: isFailed && errorMessage ? errorMessage : label,
+    unitsText,
+    shouldRender: isActive || isFailed || progressPercent != null || Boolean(phaseMessage || phase),
+  };
+}
+
+function DocumentProgressCell({ doc }: { doc: Document }) {
+  const progress = documentProgress(doc);
+
+  if (!progress.shouldRender) {
+    return <span className="text-muted-foreground">-</span>;
+  }
+
+  return (
+    <div className="space-y-1" title={progress.title}>
+      <div className="flex items-center justify-between gap-2 text-xs">
+        <span
+          className={cn(
+            "truncate",
+            progress.isFailed ? "text-destructive" : "text-muted-foreground"
+          )}
+        >
+          {progress.label}
+          {progress.unitsText ? ` - ${progress.unitsText}` : ""}
+        </span>
+        {progress.progressPercent != null && (
+          <span className="tabular-nums text-muted-foreground">
+            {Math.round(progress.progressPercent)}%
+          </span>
+        )}
+      </div>
+      {!progress.isFailed && (
+        <Progress
+          value={progress.progressPercent ?? undefined}
+          className="h-1.5"
+          aria-label={`Processing progress for ${doc.filename}`}
+        />
+      )}
+    </div>
+  );
+}
+
 export default function DocumentsPage() {
   const [documents, setDocuments] = useState<Document[]>([]);
   const [stats, setStats] = useState<DocumentStatsResponse | null>(null);
@@ -469,7 +546,7 @@ export default function DocumentsPage() {
   const tableVirtualizer = useVirtualizer({
     count: filteredDocuments.length,
     getScrollElement: () => tableScrollRef.current,
-    estimateSize: () => 56,
+    estimateSize: () => 72,
     overscan: 5,
   });
 
@@ -892,6 +969,7 @@ export default function DocumentsPage() {
                     </th>
                     <th scope="col" className="text-left p-4 font-medium">Filename</th>
                     <th scope="col" className="text-left p-4 font-medium">Status</th>
+                    <th scope="col" className="text-left p-4 font-medium">Progress</th>
                     <th scope="col" className="text-left p-4 font-medium">Chunks</th>
                     <th scope="col" className="text-left p-4 font-medium">Size</th>
                     <th scope="col" className="text-left p-4 font-medium">Uploaded</th>
@@ -911,6 +989,7 @@ export default function DocumentsPage() {
                         </div>
                       </td>
                       <td className="p-4"><Skeleton className="h-5 w-[80px]" /></td>
+                      <td className="p-4"><Skeleton className="h-5 w-[120px]" /></td>
                       <td className="p-4"><Skeleton className="h-4 w-[40px]" /></td>
                       <td className="p-4"><Skeleton className="h-4 w-[60px]" /></td>
                       <td className="p-4"><Skeleton className="h-4 w-[80px]" /></td>
@@ -1003,6 +1082,7 @@ export default function DocumentsPage() {
                         />
                       </th>
                       <th scope="col" className="text-left p-4 font-medium flex-none w-[120px]">Status</th>
+                      <th scope="col" className="text-left p-4 font-medium flex-none w-[180px]">Progress</th>
                       <th scope="col" className="text-left p-4 font-medium flex-none w-20">Chunks</th>
                       <th scope="col" className="text-left p-4 font-medium flex-none w-[120px]">Wiki</th>
                       <th scope="col" className="text-left p-4 font-medium flex-none w-[100px]">Size</th>
@@ -1044,7 +1124,15 @@ export default function DocumentsPage() {
                               <span className="font-medium truncate max-w-full" title={doc.filename}>{doc.filename}</span>
                             </div>
                           </td>
-                          <td className="p-4 flex-none w-[120px]"><StatusBadge status={doc.metadata?.status as string} /></td>
+                          <td
+                            className="p-4 flex-none w-[120px]"
+                            title={documentProgress(doc).errorMessage ?? undefined}
+                          >
+                            <StatusBadge status={doc.metadata?.status as string} />
+                          </td>
+                          <td className="p-4 flex-none w-[180px]">
+                            <DocumentProgressCell doc={doc} />
+                          </td>
                           <td className="p-4 flex-none w-20">
                             {(() => {
                               const count = Number(doc.metadata?.chunk_count ?? 0);

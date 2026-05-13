@@ -3,6 +3,7 @@
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Progress } from "@/components/ui/progress";
 import { Trash2, MoreVertical } from "lucide-react";
 import { FileIcon } from "@/lib/fileIcon";
 import { StatusBadge } from "./StatusBadge";
@@ -21,6 +22,13 @@ interface DocumentCardProps {
     filename: string;
     size?: number;
     created_at?: string;
+    error_message?: string | null;
+    phase?: string | null;
+    phase_message?: string | null;
+    progress_percent?: number | null;
+    processed_units?: number | null;
+    total_units?: number | null;
+    unit_label?: string | null;
     metadata?: Record<string, unknown>;
   };
   /** Callback when delete action is triggered */
@@ -54,6 +62,37 @@ export function DocumentCard({
 }: DocumentCardProps) {
   const status = document.metadata?.status as string | undefined;
   const chunkCount = document.metadata?.chunk_count as number | undefined;
+  const phase =
+    document.phase ?? (document.metadata?.phase as string | null | undefined);
+  const phaseMessage =
+    document.phase_message ??
+    (document.metadata?.phase_message as string | null | undefined);
+  const errorMessage =
+    document.error_message ??
+    (document.metadata?.error_message as string | null | undefined);
+  const progressPercent =
+    document.progress_percent ??
+    (document.metadata?.progress_percent as number | null | undefined);
+  const processedUnits =
+    document.processed_units ??
+    (document.metadata?.processed_units as number | null | undefined);
+  const totalUnits =
+    document.total_units ??
+    (document.metadata?.total_units as number | null | undefined);
+  const unitLabel =
+    document.unit_label ??
+    (document.metadata?.unit_label as string | null | undefined);
+  const isFailed = status === "error" || status === "failed";
+  const isActive = status === "pending" || status === "processing";
+  const progressLabel =
+    phaseMessage ?? phase ?? (isFailed ? "Failed" : status === "indexed" ? "Complete" : "Waiting");
+  const progressTitle = isFailed && errorMessage ? errorMessage : progressLabel;
+  const unitsText =
+    processedUnits != null && totalUnits != null
+      ? `${processedUnits.toLocaleString()} / ${totalUnits.toLocaleString()} ${
+          unitLabel ?? ""
+        }`.trim()
+      : null;
 
   return (
     <Card
@@ -128,7 +167,7 @@ export function DocumentCard({
         <div className="grid grid-cols-2 gap-3 text-sm">
           <div className="space-y-1">
             <div className="text-muted-foreground">Status</div>
-            <div>
+            <div title={isFailed && errorMessage ? errorMessage : undefined}>
               <StatusBadge status={status} />
             </div>
           </div>
@@ -151,6 +190,27 @@ export function DocumentCard({
             </div>
           </div>
         </div>
+
+        {(isActive || isFailed || progressPercent != null || phaseMessage || phase) && (
+          <div className="mt-4 space-y-1" title={progressTitle}>
+            <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+              <span className={isFailed ? "text-destructive" : undefined}>
+                {progressLabel}
+                {unitsText ? ` - ${unitsText}` : ""}
+              </span>
+              {progressPercent != null && (
+                <span className="tabular-nums">{Math.round(progressPercent)}%</span>
+              )}
+            </div>
+            {!isFailed && (
+              <Progress
+                value={progressPercent ?? undefined}
+                className="h-1.5"
+                aria-label={`Processing progress for ${document.filename}`}
+              />
+            )}
+          </div>
+        )}
 
         {/* Standalone delete button (visible on larger mobile screens) */}
         {canDelete && (

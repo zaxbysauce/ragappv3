@@ -484,7 +484,7 @@ class TestDocumentsEndpoints(unittest.TestCase):
         import threading
         from queue import Empty, Queue
 
-        from app.api.deps import get_db
+        from app.api.deps import get_current_active_user, get_db, get_evaluate_policy
 
         class SimpleConnectionPool:
             def __init__(self, db_path):
@@ -533,11 +533,25 @@ class TestDocumentsEndpoints(unittest.TestCase):
                 self._connection_pool.release_connection(conn)
 
         app.dependency_overrides[get_db] = override_get_db
+        app.dependency_overrides[get_current_active_user] = lambda: {
+            "id": 1,
+            "username": "test-admin",
+            "role": "admin",
+        }
+
+        async def allow_policy(user, resource_type, resource_id, action):
+            return True
+
+        app.dependency_overrides[get_evaluate_policy] = lambda: allow_policy
         self._db_path = db_path
         self._get_db = get_db
+        self._get_current_active_user = get_current_active_user
+        self._get_evaluate_policy = get_evaluate_policy
 
     def tearDown(self):
         app.dependency_overrides.pop(self._get_db, None)
+        app.dependency_overrides.pop(self._get_current_active_user, None)
+        app.dependency_overrides.pop(self._get_evaluate_policy, None)
         if hasattr(self, "_connection_pool"):
             self._connection_pool.close_all()
         import shutil
@@ -561,6 +575,42 @@ class TestDocumentsEndpoints(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data["documents"], [])
+
+    def test_list_documents_returns_phase_progress_and_error_fields(self):
+        """GET /api/documents includes list-row phase, progress, and error detail."""
+        conn = self._connection_pool.get_connection()
+        try:
+            cur = conn.execute(
+                """INSERT INTO files
+                   (vault_id, file_path, file_name, file_size, status,
+                    error_message, phase, phase_message, progress_percent,
+                    processed_units, total_units, unit_label,
+                    phase_started_at, processing_started_at)
+                   VALUES (1, '/uploads/failed.txt', 'failed.txt', 100,
+                           'error', 'Parser could not read the file',
+                           'parsing', 'Parsing failed', 25.0,
+                           1, 4, 'pages', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)""",
+            )
+            file_id = cur.lastrowid
+            conn.commit()
+        finally:
+            self._connection_pool.release_connection(conn)
+
+        response = self.client.get("/api/documents/")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        doc = next(item for item in response.json()["documents"] if item["id"] == file_id)
+        self.assertEqual(doc["status"], "error")
+        self.assertEqual(doc["error_message"], "Parser could not read the file")
+        self.assertEqual(doc["phase"], "parsing")
+        self.assertEqual(doc["phase_message"], "Parsing failed")
+        self.assertEqual(doc["progress_percent"], 25.0)
+        self.assertEqual(doc["processed_units"], 1)
+        self.assertEqual(doc["total_units"], 4)
+        self.assertEqual(doc["unit_label"], "pages")
+        self.assertEqual(doc["metadata"]["error_message"], "Parser could not read the file")
+        self.assertEqual(doc["metadata"]["phase_message"], "Parsing failed")
+        self.assertEqual(doc["metadata"]["progress_percent"], 25.0)
 
 
 class TestChatEndpoint(unittest.TestCase):
