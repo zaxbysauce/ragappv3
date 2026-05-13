@@ -142,14 +142,37 @@ async def list_groups(
     # Calculate skip from page
     skip = (page - 1) * per_page
 
-    # Build WHERE clause for search
-    where_clause = ""
+    # Non-superadmin users only see groups in their own organization(s)
+    user_role = user.get("role", "")
+    user_id = user.get("id")
+    user_org_ids = []
+    if user_role != "superadmin":
+        # Get the user's org memberships
+        org_cursor = await asyncio.to_thread(
+            db.execute,
+            "SELECT org_id FROM org_members WHERE user_id = ?",
+            (user_id,),
+        )
+        user_org_rows = await asyncio.to_thread(org_cursor.fetchall)
+        user_org_ids = [row[0] for row in user_org_rows]
+
+    # Build WHERE clause for search and org filtering
+    where_clause_parts = []
     params = []
     if search:
         # Escape special LIKE characters in search term
         escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        where_clause = "WHERE g.name LIKE '%' || ? || '%' ESCAPE '\\'"
+        where_clause_parts.append("g.name LIKE '%' || ? || '%' ESCAPE '\\'")
         params.append(escaped)
+    if user_role != "superadmin":
+        if user_org_ids:
+            placeholders = ",".join("?" for _ in user_org_ids)
+            where_clause_parts.append(f"g.org_id IN ({placeholders})")
+            params.extend(user_org_ids)
+        else:
+            # Non-superadmin with no org memberships sees nothing
+            where_clause_parts.append("0=1")
+    where_clause = ("WHERE " + " AND ".join(where_clause_parts)) if where_clause_parts else ""
 
     # Get total count with search filter
     total_query = f"SELECT COUNT(*) FROM groups g {where_clause}"
@@ -600,6 +623,7 @@ async def get_eligible_members(
     group_id: int,
     user: dict = Depends(require_role("admin")),
     db: sqlite3.Connection = Depends(get_db),
+    evaluate: Callable = Depends(get_evaluate_policy),
 ):
     """Return active users who belong to the same org as this group.
 
@@ -611,6 +635,9 @@ async def get_eligible_members(
     group_row = await asyncio.to_thread(cursor.fetchone)
     if not group_row:
         raise HTTPException(status_code=404, detail="Group not found")
+
+    if not await evaluate(user, "group", group_id, "read"):
+        raise HTTPException(status_code=403, detail="No access to this group")
 
     org_id = group_row[1]
 

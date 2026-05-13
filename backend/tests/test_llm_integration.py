@@ -112,8 +112,10 @@ class TestModelChecker(unittest.TestCase):
         self.mock_settings = self.settings_patcher.start()
         self.mock_settings.ollama_embedding_url = "http://localhost:11434"
         self.mock_settings.ollama_chat_url = "http://localhost:11434"
+        self.mock_settings.instant_chat_url = "http://localhost:1234"
         self.mock_settings.embedding_model = "nomic-embed-text"
         self.mock_settings.chat_model = "qwen2.5:32b"
+        self.mock_settings.instant_chat_model = "nvidia/nemotron-3-nano-4b"
 
     def tearDown(self):
         """Clean up test fixtures."""
@@ -177,6 +179,34 @@ class TestModelChecker(unittest.TestCase):
             mock_client.get.assert_called_once()
             call_args = mock_client.get.call_args
             self.assertEqual(call_args[0][0], "http://localhost:11434/api/tags")
+
+        asyncio.run(run_test())
+
+    def test_check_models_checks_thinking_and_instant_chat_models(self):
+        """Test check_models includes both Thinking and Instant chat model probes."""
+        async def run_test():
+            checker = ModelChecker()
+            checker._check_model_availability = AsyncMock(
+                side_effect=[
+                    {"available": True, "error": None},
+                    {"available": True, "error": None},
+                    {"available": False, "error": "Model not found"},
+                ]
+            )
+
+            result = await checker.check_models()
+
+            self.assertIn("embedding_model", result)
+            self.assertIn("chat_model", result)
+            self.assertIn("instant_chat_model", result)
+            self.assertFalse(result["instant_chat_model"]["available"])
+            calls = checker._check_model_availability.call_args_list
+            self.assertEqual(calls[0].args[1:], ("http://localhost:11434", "nomic-embed-text"))
+            self.assertEqual(calls[1].args[1:], ("http://localhost:11434", "qwen2.5:32b"))
+            self.assertEqual(
+                calls[2].args[1:],
+                ("http://localhost:1234", "nvidia/nemotron-3-nano-4b"),
+            )
 
         asyncio.run(run_test())
 

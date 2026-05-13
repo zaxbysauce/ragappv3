@@ -466,7 +466,7 @@ async def add_org_member(
         )
         row = cursor.fetchone()
         return {
-            "id": row[0],
+            "user_id": row[0],
             "username": row[1],
             "full_name": row[2] or "",
             "role": row[3],
@@ -536,7 +536,7 @@ async def update_org_member_role(
         )
         row = cursor.fetchone()
         return {
-            "id": row[0],
+            "user_id": row[0],
             "username": row[1],
             "full_name": row[2] or "",
             "role": row[3],

@@ -297,6 +297,33 @@ class TestHyDE:
             # Results could be the same or different depending on LLM responses
             # But the important thing is each transformer called its own LLM
 
+    @pytest.mark.asyncio
+    async def test_transform_cache_key_uses_active_client_model(self):
+        """Changing the active client model should bypass cached query transforms."""
+        mock_settings = MagicMock()
+        mock_settings.hyde_enabled = False
+        mock_settings.stepback_enabled = True
+        mock_settings.query_transform_temperature = 0.0
+        mock_settings.redis_url = None
+        mock_settings.chat_model = "thinking-model"
+
+        mock_llm_client = MagicMock(spec=LLMClient)
+        mock_llm_client.model = "thinking-model"
+        mock_llm_client.chat_completion = AsyncMock(
+            side_effect=["thinking rewrite", "instant rewrite"]
+        )
+
+        with patch("app.services.query_transformer.settings", mock_settings):
+            transformer = QueryTransformer(mock_llm_client)
+
+            first = await transformer.transform("What is gradient descent?")
+            mock_llm_client.model = "instant-model"
+            second = await transformer.transform("What is gradient descent?")
+
+            assert first[1] == ("step_back", "thinking rewrite")
+            assert second[1] == ("step_back", "instant rewrite")
+            assert mock_llm_client.chat_completion.call_count == 2
+
 
 class TestIsExactOrDocumentQuery:
     """Tests for _is_exact_or_document_query function."""

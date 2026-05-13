@@ -65,7 +65,7 @@ export function useChatHistory(activeVaultId: number | null): UseChatHistoryRetu
         sources: m.sources ?? undefined,
         memoriesUsed: m.memories ?? undefined,
         created_at: m.created_at,
-        feedback: m.feedback ?? undefined,
+        feedback: m.feedback ?? null,
       }));
       useChatStore.getState().loadChat(session.id.toString(), loadedMessages);
     } catch (err) {

@@ -86,85 +86,72 @@ describe('VaultMembersPanel ADVERSARIAL', () => {
     });
   });
 
-  // 2. Injection in add member form
-  describe('Injection in add member form', () => {
-    it('should reject non-numeric user ID input', async () => {
+  // 2. Search user autocomplete
+  describe('Search user autocomplete', () => {
+    it('should search users when typing in the search box', async () => {
       await act(async () => { render(<VaultMembersPanel vaultId={1} />); });
 
       await waitFor(() => {
         expect(screen.getByText('Alice Johnson')).toBeInTheDocument();
       });
 
-      const input = screen.getByPlaceholderText('Enter user ID...');
-      await act(async () => {
-        fireEvent.change(input, { target: { value: '<script>alert(1)</script>' } });
+      const api = await import('@/lib/api');
+      (api.default.get as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        data: { users: [{ id: 99, username: 'newuser', full_name: 'New User', is_active: true }] },
       });
 
-      const addButton = screen.getByRole('button', { name: /add/i });
-      await act(async () => { fireEvent.click(addButton); });
+      const input = screen.getByPlaceholderText('Search users...');
+      await act(async () => {
+        fireEvent.change(input, { target: { value: 'new' } });
+      });
 
-      // Should show error toast for invalid user ID
+      // Wait for debounce (300ms) + API response
+      await new Promise(r => setTimeout(r, 400));
       await waitFor(() => {
-        expect(toast.error).toHaveBeenCalledWith('Please enter a valid user ID');
+        expect(screen.getByText('New User')).toBeInTheDocument();
       });
     });
 
-    it('should reject float user ID', async () => {
+    it('should select user from dropdown and add them', async () => {
+      const api = await import('@/lib/api');
+      // Setup: first GET is for members list, second GET is for search
+      (api.default.get as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ data: { members: [{ user_id: 1, username: 'alice', full_name: 'Alice Johnson', permission: 'read', granted_at: '2024-01-01' }], total: 1 } })
+        .mockResolvedValueOnce({ data: { users: [{ id: 42, username: 'bob', full_name: 'Bob Smith', is_active: true }] } });
+
       await act(async () => { render(<VaultMembersPanel vaultId={1} />); });
+      await new Promise(r => setTimeout(r, 100));
 
-      await waitFor(() => {
-        expect(screen.getByText('Alice Johnson')).toBeInTheDocument();
-      });
-
-      const input = screen.getByPlaceholderText('Enter user ID...');
+      const input = screen.getByPlaceholderText('Search users...');
       await act(async () => {
-        fireEvent.change(input, { target: { value: '3.14' } });
+        fireEvent.change(input, { target: { value: 'bob' } });
       });
 
-      // parseInt('3.14') === 3, so this is actually valid
-      // But let's verify the API is called with the integer
+      // Wait for debounce + API
+      await new Promise(r => setTimeout(r, 400));
+      await waitFor(() => {
+        expect(screen.getByText('Bob Smith')).toBeInTheDocument();
+      });
+
+      // Click on user to select
+      await act(async () => {
+        fireEvent.click(screen.getByText('Bob Smith'));
+      });
+
+      // Now click add
       const addButton = screen.getByRole('button', { name: /add/i });
       await act(async () => { fireEvent.click(addButton); });
 
-      const api = await import('@/lib/api');
       await waitFor(() => {
         expect(api.default.post).toHaveBeenCalledWith('/vaults/1/members', {
-          member_user_id: 3,
+          member_user_id: 42,
           permission: 'read',
         });
       });
     });
   });
 
-  // 3. Negative user IDs
-  describe('Negative user IDs', () => {
-    it('should accept negative user ID and send to API', async () => {
-      await act(async () => { render(<VaultMembersPanel vaultId={1} />); });
-
-      await waitFor(() => {
-        expect(screen.getByText('Alice Johnson')).toBeInTheDocument();
-      });
-
-      const input = screen.getByPlaceholderText('Enter user ID...');
-      await act(async () => {
-        fireEvent.change(input, { target: { value: '-1' } });
-      });
-
-      const addButton = screen.getByRole('button', { name: /add/i });
-      await act(async () => { fireEvent.click(addButton); });
-
-      // parseInt('-1') === -1, valid number, sends to API
-      const api = await import('@/lib/api');
-      await waitFor(() => {
-        expect(api.default.post).toHaveBeenCalledWith('/vaults/1/members', {
-          member_user_id: -1,
-          permission: 'read',
-        });
-      });
-    });
-  });
-
-  // 4. API error handling
+  // 3. API error handling
   describe('API error handling', () => {
     it('should show error toast on fetch failure', async () => {
       const api = await import('@/lib/api');
@@ -179,18 +166,29 @@ describe('VaultMembersPanel ADVERSARIAL', () => {
 
     it('should show error toast on add member failure', async () => {
       const api = await import('@/lib/api');
-      vi.mocked(api.default.post).mockRejectedValueOnce(new Error('403'));
+      // Setup: first GET is members list, second GET is user search
+      (api.default.get as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ data: { members: [{ user_id: 1, username: 'alice', full_name: 'Alice Johnson', permission: 'read', granted_at: '2024-01-01' }], total: 1 } })
+        .mockResolvedValueOnce({ data: { users: [{ id: 99, username: 'newguy', full_name: 'New Guy', is_active: true }] } });
 
       await act(async () => { render(<VaultMembersPanel vaultId={1} />); });
+      await new Promise(r => setTimeout(r, 100));
 
-      await waitFor(() => {
-        expect(screen.getByText('Alice Johnson')).toBeInTheDocument();
-      });
-
-      const input = screen.getByPlaceholderText('Enter user ID...');
+      // Search and select user
+      const input = screen.getByPlaceholderText('Search users...');
       await act(async () => {
-        fireEvent.change(input, { target: { value: '99' } });
+        fireEvent.change(input, { target: { value: 'new' } });
       });
+      await new Promise(r => setTimeout(r, 400));
+      await waitFor(() => {
+        expect(screen.getByText('New Guy')).toBeInTheDocument();
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByText('New Guy'));
+      });
+
+      // Mock the POST to fail
+      vi.mocked(api.default.post).mockRejectedValueOnce(new Error('403'));
 
       const addButton = screen.getByRole('button', { name: /add/i });
       await act(async () => { fireEvent.click(addButton); });

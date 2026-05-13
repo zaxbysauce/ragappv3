@@ -1,11 +1,11 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import apiClient from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Users, UserX, Loader2, Building2 } from "lucide-react";
+import { Users, UserX, Loader2, Building2, Search } from "lucide-react";
 
 type VaultPermission = "read" | "write" | "admin";
 
@@ -37,6 +37,13 @@ export function VaultGroupAccessPanel({ vaultId }: VaultGroupAccessPanelProps) {
   const [removeDialogOpen, setRemoveDialogOpen] = useState(false);
   const [groupToRemove, setGroupToRemove] = useState<GroupAccess | null>(null);
   const [updatingGroupId, setUpdatingGroupId] = useState<number | null>(null);
+  const [groupSearchQuery, setGroupSearchQuery] = useState("");
+  const [groupSearchResults, setGroupSearchResults] = useState<{id: number; name: string; org_name?: string}[]>([]);
+  const [showGroupDropdown, setShowGroupDropdown] = useState(false);
+  const [searchingGroups, setSearchingGroups] = useState(false);
+
+  const groupSearchRef = useRef<HTMLDivElement>(null);
+  const groupSearchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const fetchGroupAccess = useCallback(async () => {
     setLoading(true);
@@ -54,6 +61,52 @@ export function VaultGroupAccessPanel({ vaultId }: VaultGroupAccessPanelProps) {
   }, [vaultId]);
 
   useEffect(() => { fetchGroupAccess(); }, [fetchGroupAccess]);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (groupSearchRef.current && !groupSearchRef.current.contains(e.target as Node)) {
+        setShowGroupDropdown(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (groupSearchTimeoutRef.current) clearTimeout(groupSearchTimeoutRef.current);
+    };
+  }, []);
+
+  const searchGroups = useCallback(async (query: string) => {
+    if (!query.trim()) {
+      setGroupSearchResults([]);
+      setShowGroupDropdown(false);
+      return;
+    }
+    setSearchingGroups(true);
+    try {
+      const response = await apiClient.get<{ groups: {id: number; name: string; org_name?: string}[] }>("/groups/", { params: { q: query, limit: 10 } });
+      setGroupSearchResults(Array.isArray(response.data) ? response.data : response.data.groups ?? []);
+      setShowGroupDropdown(true);
+    } catch {
+      setGroupSearchResults([]);
+    } finally {
+      setSearchingGroups(false);
+    }
+  }, []);
+
+  const handleGroupSearchChange = (value: string) => {
+    setGroupSearchQuery(value);
+    if (groupSearchTimeoutRef.current) clearTimeout(groupSearchTimeoutRef.current);
+    groupSearchTimeoutRef.current = setTimeout(() => searchGroups(value), 300);
+  };
+
+  const selectGroup = (group: {id: number; name: string}) => {
+    setGroupSearchQuery(group.name);
+    setNewGroupId(String(group.id));
+    setShowGroupDropdown(false);
+  };
 
   const handleAddGroup = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -102,9 +155,45 @@ export function VaultGroupAccessPanel({ vaultId }: VaultGroupAccessPanelProps) {
       </CardHeader>
       <CardContent className="space-y-6">
         <form onSubmit={handleAddGroup} className="flex gap-2 items-end">
-          <div className="flex-1 space-y-2">
-            <label htmlFor={`group-id-${vaultId}`} className="text-sm font-medium">Group ID</label>
-            <Input id={`group-id-${vaultId}`} placeholder="Enter group ID..." value={newGroupId} onChange={(e) => setNewGroupId(e.target.value)} disabled={addingGroup} aria-label="Group ID to grant vault access" />
+          <div className="flex-1 space-y-2 relative" ref={groupSearchRef}>
+            <label htmlFor={`group-id-${vaultId}`} className="text-sm font-medium">Group</label>
+            <div className="relative">
+              <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                id={`group-id-${vaultId}`}
+                placeholder="Search groups..."
+                value={groupSearchQuery}
+                onChange={(e) => handleGroupSearchChange(e.target.value)}
+                onFocus={() => { if (groupSearchResults.length > 0) setShowGroupDropdown(true); }}
+                className="pl-8"
+                aria-label="Search groups"
+              />
+            </div>
+            {showGroupDropdown && groupSearchResults.length > 0 && (
+              <div className="absolute z-50 w-full mt-1 rounded-md border bg-popover shadow-md max-h-60 overflow-auto">
+                {groupSearchResults.map((g) => (
+                  <button
+                    key={g.id}
+                    type="button"
+                    onClick={() => selectGroup(g)}
+                    className="w-full px-3 py-2 text-left text-sm hover:bg-accent hover:text-accent-foreground transition-colors flex flex-col"
+                  >
+                    <span>{g.name}</span>
+                    {g.org_name && <span className="text-xs text-muted-foreground">{g.org_name}</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+            {showGroupDropdown && groupSearchQuery.trim() && !searchingGroups && groupSearchResults.length === 0 && (
+              <div className="absolute z-50 w-full mt-1 rounded-md border bg-popover p-2 text-sm text-muted-foreground text-center">
+                No groups found
+              </div>
+            )}
+            {searchingGroups && (
+              <div className="absolute z-50 w-full mt-1 rounded-md border bg-popover p-2 text-sm text-muted-foreground text-center">
+                Searching...
+              </div>
+            )}
           </div>
           <div className="space-y-2">
             <label htmlFor={`group-perm-${vaultId}`} className="text-sm font-medium">Permission</label>

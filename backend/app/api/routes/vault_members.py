@@ -367,15 +367,19 @@ def grant_vault_group_access(
     try:
         cursor = conn.cursor()
 
-        # Verify vault exists
-        cursor.execute("SELECT id FROM vaults WHERE id = ?", (vault_id,))
-        if not cursor.fetchone():
+        # Verify vault exists and get org_id
+        cursor.execute("SELECT id, org_id FROM vaults WHERE id = ?", (vault_id,))
+        vault_row = cursor.fetchone()
+        if not vault_row:
             raise HTTPException(status_code=404, detail="Vault not found")
+        vault_org_id = vault_row[1]
 
-        # Verify target group exists
-        cursor.execute("SELECT id FROM groups WHERE id = ?", (request.group_id,))
-        if not cursor.fetchone():
+        # Verify target group exists and get org_id
+        cursor.execute("SELECT id, org_id FROM groups WHERE id = ?", (request.group_id,))
+        group_row = cursor.fetchone()
+        if not group_row:
             raise HTTPException(status_code=404, detail="Group not found")
+        group_org_id = group_row[1]
 
         # Check not already granted
         cursor.execute(
@@ -385,6 +389,14 @@ def grant_vault_group_access(
         if cursor.fetchone():
             raise HTTPException(
                 status_code=409, detail="Group already has access to this vault"
+            )
+
+        # Validate group and vault belong to the same org (NULL-safe comparison)
+        # Only reject if both have non-NULL org_ids that differ
+        if (group_org_id is not None and vault_org_id is not None and group_org_id != vault_org_id):
+            raise HTTPException(
+                status_code=400,
+                detail="Group belongs to a different organization than this vault",
             )
 
         # Insert new group access

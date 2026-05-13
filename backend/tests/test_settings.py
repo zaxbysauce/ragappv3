@@ -94,6 +94,9 @@ class TestSettingsResponseFields(unittest.TestCase):
 
     def setUp(self):
         self.client = TestClient(app)
+        self.client.headers.update(
+            {"Authorization": f"Bearer {settings.admin_secret_token}"}
+        )
         # Override get_db to use a pool that allows cross-thread usage
         from app.api.deps import get_db
         from app.models.database import get_pool
@@ -149,7 +152,7 @@ class TestSettingsResponseFields(unittest.TestCase):
         self.assertIsInstance(data["hybrid_search_enabled"], bool)
         self.assertIsInstance(data["hybrid_alpha"], float)
         self.assertTrue(data["hybrid_search_enabled"])  # Default is True
-        self.assertEqual(data["hybrid_alpha"], 0.5)  # Default is 0.5
+        self.assertEqual(data["hybrid_alpha"], settings.hybrid_alpha)
 
     def test_settings_response_all_new_fields_present(self):
         """Test GET /api/settings includes all new character-based and config fields."""
@@ -176,12 +179,24 @@ class TestSettingsResponseFields(unittest.TestCase):
         self.assertIn("hybrid_search_enabled", data)
         self.assertIn("hybrid_alpha", data)
 
+        # Instant chat mode fields
+        self.assertIn("instant_chat_url", data)
+        self.assertIn("instant_chat_model", data)
+        self.assertIn("default_chat_mode", data)
+        self.assertIn("instant_initial_retrieval_top_k", data)
+        self.assertIn("instant_reranker_top_n", data)
+        self.assertIn("instant_memory_context_top_k", data)
+        self.assertIn("instant_max_tokens", data)
+
 
 class TestSettingsUpdateValidation(unittest.TestCase):
     """Tests for SettingsUpdate validation of new fields."""
 
     def setUp(self):
         self.client = TestClient(app)
+        self.client.headers.update(
+            {"Authorization": f"Bearer {settings.admin_secret_token}"}
+        )
         # Override get_db to use a pool that allows cross-thread usage
         from app.api.deps import get_db
         from app.models.database import get_pool
@@ -235,6 +250,40 @@ class TestSettingsUpdateValidation(unittest.TestCase):
         data = response.json()
         self.assertEqual(data["hybrid_search_enabled"], False)
         self.assertEqual(data["hybrid_alpha"], 0.3)
+
+    def test_post_settings_valid_instant_chat_config(self):
+        """Test POST /api/settings with valid instant model configuration."""
+        payload = {
+            "instant_chat_url": "http://localhost:1234",
+            "instant_chat_model": "nvidia/nemotron-3-nano-4b",
+            "default_chat_mode": "instant",
+            "instant_initial_retrieval_top_k": 8,
+            "instant_reranker_top_n": 3,
+            "instant_memory_context_top_k": 2,
+            "instant_max_tokens": 2048,
+        }
+
+        response = self.client.post("/api/settings", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        for key, value in payload.items():
+            self.assertEqual(data[key], value)
+
+    def test_post_settings_invalid_default_chat_mode(self):
+        """Test POST /api/settings rejects unknown default chat mode."""
+        response = self.client.post("/api/settings", json={"default_chat_mode": "fast"})
+
+        self.assertEqual(response.status_code, 422)
+
+    def test_post_settings_invalid_instant_budget(self):
+        """Test POST /api/settings rejects non-positive instant budgets."""
+        response = self.client.post(
+            "/api/settings",
+            json={"instant_initial_retrieval_top_k": 0},
+        )
+
+        self.assertEqual(response.status_code, 422)
 
     def test_post_settings_invalid_hybrid_alpha_low(self):
         """Test POST /api/settings with hybrid_alpha < 0 returns 422."""
@@ -352,6 +401,9 @@ class TestConnectionEndpoint(unittest.TestCase):
 
     def setUp(self):
         self.client = TestClient(app)
+        self.client.headers.update(
+            {"Authorization": f"Bearer {settings.admin_secret_token}"}
+        )
         # Override get_db to use a pool that allows cross-thread usage
         from app.api.deps import get_db
         from app.models.database import get_pool

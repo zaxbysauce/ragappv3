@@ -1012,6 +1012,52 @@ async def scan_directories(
     # Note: No finally block to stop processor - it runs continuously
 
 
+async def _delete_file_record(
+    conn: sqlite3.Connection,
+    vector_store: VectorStore,
+    file_id: int,
+    file_name: str,
+    vault_id: int,
+) -> None:
+    """Delete one file and its derived data with consistent cleanup."""
+    try:
+        try:
+            db = vector_store.db
+            if db is not None and "chunks" in await db.table_names():
+                vector_store.table = await db.open_table("chunks")
+                deleted_chunks = await vector_store.delete_by_file(str(file_id))
+                logger.info(
+                    "Deleted %d chunks from vector store for file_id %s",
+                    deleted_chunks,
+                    file_id,
+                )
+            else:
+                logger.debug(
+                    "Chunks table not found, skipping vector store deletion for file_id %s",
+                    file_id,
+                )
+        except Exception as e:
+            logger.warning("Error deleting chunks from vector store: %s", e)
+
+        try:
+            from app.services.wiki_store import WikiStore as _WikiStore
+
+            await asyncio.to_thread(
+                lambda: _WikiStore(conn).mark_claims_stale_by_file(file_id, vault_id)
+            )
+        except Exception as e:
+            logger.warning("mark_claims_stale_by_file(%d) failed: %s", file_id, e)
+
+        await asyncio.to_thread(
+            conn.execute, "DELETE FROM files WHERE id = ?", (file_id,)
+        )
+        await asyncio.to_thread(conn.commit)
+        logger.info("Deleted document '%s' (id: %d)", file_name, file_id)
+    except Exception:
+        await asyncio.to_thread(conn.rollback)
+        raise
+
+
 @router.delete("/{file_id}", response_model=DeleteResponse)
 async def delete_document(
     file_id: int,
@@ -1048,40 +1094,13 @@ async def delete_document(
         raise HTTPException(status_code=403, detail="Insufficient vault permissions")
 
     try:
-        # Delete from vector store first
-        try:
-            db = vector_store.db
-            if db is not None and "chunks" in await db.table_names():
-                vector_store.table = await db.open_table("chunks")
-                deleted_chunks = await vector_store.delete_by_file(str(file_id))
-                logger.info(
-                    "Deleted %d chunks from vector store for file_id %s",
-                    deleted_chunks,
-                    file_id,
-                )
-            else:
-                logger.debug(
-                    "Chunks table not found, skipping vector store deletion for file_id %s",
-                    file_id,
-                )
-        except Exception as e:
-            logger.warning("Error deleting chunks from vector store: %s", e)
-            # Continue with database deletion even if vector store fails
-
-        # Mark wiki claims stale before removing the file record
-        try:
-            from app.services.wiki_store import WikiStore as _WikiStore
-            await asyncio.to_thread(
-                lambda: _WikiStore(conn).mark_claims_stale_by_file(file_id, file_vault_id)
-            )
-        except Exception as _wiki_exc:
-            logger.warning("mark_claims_stale_by_file(%d) failed: %s", file_id, _wiki_exc)
-
-        # Delete from database
-        await asyncio.to_thread(
-            conn.execute, "DELETE FROM files WHERE id = ?", (file_id,)
+        await _delete_file_record(
+            conn,
+            vector_store,
+            file_id,
+            file_name,
+            file_vault_id,
         )
-        await asyncio.to_thread(conn.commit)
 
         return DeleteResponse(
             file_id=file_id,
@@ -1103,8 +1122,9 @@ async def batch_delete_documents(
         ..., embed=True, description="List of file IDs to delete"
     ),
     conn: sqlite3.Connection = Depends(get_db),
-    user: dict = Depends(require_admin_role),
+    user: dict = Depends(get_current_active_user),
     vector_store: VectorStore = Depends(get_vector_store),
+    evaluate: Callable = Depends(get_evaluate_policy),
 ):
     """
     Batch delete documents by IDs.
@@ -1118,9 +1138,17 @@ async def batch_delete_documents(
 
     for file_id in file_ids:
         try:
+            try:
+                normalized_file_id = int(file_id)
+            except (TypeError, ValueError):
+                failed_ids.append(file_id)
+                continue
+
             # Check if file exists
             cursor = await asyncio.to_thread(
-                conn.execute, "SELECT id, file_name FROM files WHERE id = ?", (file_id,)
+                conn.execute,
+                "SELECT id, file_name, vault_id FROM files WHERE id = ?",
+                (normalized_file_id,),
             )
             row = await asyncio.to_thread(cursor.fetchone)
 
@@ -1129,30 +1157,23 @@ async def batch_delete_documents(
                 continue
 
             file_name = row["file_name"]
+            file_vault_id = row["vault_id"]
 
-            # Delete from vector store first
-            try:
-                db = vector_store.db
-                if db is not None and "chunks" in await db.table_names():
-                    vector_store.table = await db.open_table("chunks")
-                    await vector_store.delete_by_file(str(file_id))
-            except Exception as e:
-                logger.warning(
-                    "Error deleting chunks from vector store for file_id %d: %s",
-                    file_id,
-                    e,
-                )
+            if not await evaluate(user, "vault", file_vault_id, "admin"):
+                failed_ids.append(file_id)
+                continue
 
-            # Delete from database
-            await asyncio.to_thread(
-                conn.execute, "DELETE FROM files WHERE id = ?", (file_id,)
+            await _delete_file_record(
+                conn,
+                vector_store,
+                normalized_file_id,
+                file_name,
+                file_vault_id,
             )
-            await asyncio.to_thread(conn.commit)
             deleted_count += 1
-            logger.info("Deleted document '%s' (id: %d)", file_name, file_id)
 
         except Exception:
-            logger.exception("Error deleting document %d", file_id)
+            logger.exception("Error deleting document %s", file_id)
             failed_ids.append(file_id)
 
     return BatchDeleteResponse(
@@ -1177,33 +1198,23 @@ async def delete_all_vault_documents(
     """
     # Get all file IDs in the vault
     cursor = await asyncio.to_thread(
-        conn.execute, "SELECT id FROM files WHERE vault_id = ?", (vault_id,)
+        conn.execute, "SELECT id, file_name FROM files WHERE vault_id = ?", (vault_id,)
     )
     rows = await asyncio.to_thread(cursor.fetchall)
 
-    file_ids = [row["id"] for row in rows]
     deleted_count = 0
 
-    for file_id in file_ids:
+    for row in rows:
+        file_id = row["id"]
+        file_name = row["file_name"]
         try:
-            # Delete from vector store first
-            try:
-                db = vector_store.db
-                if db is not None and "chunks" in await db.table_names():
-                    vector_store.table = await db.open_table("chunks")
-                    await vector_store.delete_by_file(str(file_id))
-            except Exception as e:
-                logger.warning(
-                    "Error deleting chunks from vector store for file_id %d: %s",
-                    file_id,
-                    e,
-                )
-
-            # Delete from database
-            await asyncio.to_thread(
-                conn.execute, "DELETE FROM files WHERE id = ?", (file_id,)
+            await _delete_file_record(
+                conn,
+                vector_store,
+                file_id,
+                file_name,
+                vault_id,
             )
-            await asyncio.to_thread(conn.commit)
             deleted_count += 1
 
         except Exception:

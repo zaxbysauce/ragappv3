@@ -69,6 +69,22 @@ class TestValidateHydeConfig:
             # Verify no warnings were raised
             assert len(w) == 0
 
+
+class TestValidateInstantChatConfig:
+    """Tests for instant chat mode Settings validators."""
+
+    def test_default_chat_mode_accepts_known_values(self):
+        assert Settings(default_chat_mode="thinking").default_chat_mode == "thinking"
+        assert Settings(default_chat_mode="instant").default_chat_mode == "instant"
+
+    def test_default_chat_mode_rejects_unknown_value(self):
+        with pytest.raises(ValueError, match="default_chat_mode"):
+            Settings(default_chat_mode="fast")
+
+    def test_instant_budgets_must_be_positive(self):
+        with pytest.raises(ValueError, match="instant-mode numeric settings"):
+            Settings(instant_max_tokens=0)
+
     def test_hyde_disabled_without_query_transformation_no_warning(self):
         """hyde_enabled=False, query_transformation_enabled=False should not emit warning."""
         with warnings.catch_warnings(record=True) as w:

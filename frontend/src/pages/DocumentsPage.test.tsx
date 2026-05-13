@@ -129,6 +129,7 @@ vi.mock('@/lib/formatters', () => ({
 
 // Import component after mocks
 import DocumentsPage from '@/pages/DocumentsPage';
+import { useVaultStore } from '@/stores/useVaultStore';
 
 describe('DocumentsPage - Drag to Resize Filename Column', () => {
   let container: HTMLElement;
@@ -136,6 +137,10 @@ describe('DocumentsPage - Drag to Resize Filename Column', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(useVaultStore).mockReturnValue({
+      activeVaultId: null,
+      vaults: [],
+    } as ReturnType<typeof useVaultStore>);
     document.body.style.cursor = '';
   });
 
@@ -172,6 +177,52 @@ describe('DocumentsPage - Drag to Resize Filename Column', () => {
       const headers = Array.from(container.querySelectorAll('th[scope="col"]'));
       const filenameTh = headers.find(th => th.textContent?.includes('Filename'));
       expect(filenameTh).toBeTruthy();
+    });
+  });
+
+  describe('Vault permission gating', () => {
+    it('hides destructive document actions without an active vault', async () => {
+      vi.mocked(useVaultStore).mockReturnValue({
+        activeVaultId: null,
+        vaults: [],
+      } as ReturnType<typeof useVaultStore>);
+
+      await act(async () => {
+        const result = render(<DocumentsPage />);
+        container = result.container;
+        unmount = result.unmount;
+      });
+
+      await waitFor(() => {
+        expect(findResizeHandle()).toBeTruthy();
+      });
+
+      expect(container.textContent).not.toContain('Delete All in Vault');
+      expect(
+        container.querySelector('input[aria-label="Select all documents"]')
+      ).toBeDisabled();
+    });
+
+    it('enables destructive document actions for vault admins', async () => {
+      vi.mocked(useVaultStore).mockReturnValue({
+        activeVaultId: 2,
+        vaults: [{ id: 2, name: 'Admin Vault', current_user_permission: 'admin' }],
+      } as ReturnType<typeof useVaultStore>);
+
+      await act(async () => {
+        const result = render(<DocumentsPage />);
+        container = result.container;
+        unmount = result.unmount;
+      });
+
+      await waitFor(() => {
+        expect(findResizeHandle()).toBeTruthy();
+      });
+
+      expect(container.textContent).toContain('Delete All in Vault');
+      expect(
+        container.querySelector('input[aria-label="Select all documents"]')
+      ).not.toBeDisabled();
     });
   });
 

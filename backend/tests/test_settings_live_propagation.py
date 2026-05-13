@@ -5,7 +5,7 @@ which calls ``setattr(settings, field, value)`` on the singleton — takes
 effect on the next service call without restarting the process.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -297,6 +297,54 @@ class TestRAGEngineLiveReads:
 
         assert fake_dr.retrieval_top_k == 42
         assert fake_dr.max_distance_threshold == 0.1
+
+    @pytest.mark.asyncio
+    async def test_retrieval_evaluator_uses_active_client(self, mock_settings):
+        """Instant-mode retrieval evaluation should use the mode-selected LLM client."""
+        from app.services.rag_engine import RAGEngine
+
+        engine = RAGEngine.__new__(RAGEngine)
+        engine.vector_store = MagicMock()
+        engine.vector_store.search = AsyncMock(
+            return_value=[
+                {
+                    "id": "chunk-1",
+                    "file_id": "file-1",
+                    "text": "Relevant text",
+                    "_distance": 0.1,
+                    "metadata": {},
+                }
+            ]
+        )
+        engine.vector_store.get_fts_exceptions.return_value = 0
+        engine.reranking_service = None
+        engine._retrieval_evaluators = {}
+
+        mock_settings.retrieval_evaluation_enabled = True
+        mock_settings.context_max_tokens = 0
+        mock_settings.retrieval_recency_weight = 0.0
+        mock_settings.rrf_legacy_mode = False
+        mock_settings.exact_match_promote = False
+        mock_settings.reranking_enabled = False
+        mock_settings.hybrid_search_enabled = False
+
+        instant_client = MagicMock()
+        fake_evaluator = MagicMock()
+        fake_evaluator.evaluate = AsyncMock(return_value="CONFIDENT")
+
+        with patch(
+            "app.services.rag_engine.RetrievalEvaluator",
+            return_value=fake_evaluator,
+        ) as evaluator_cls:
+            await engine._execute_retrieval(
+                [("original", [0.1, 0.2, 0.3])],
+                "question",
+                vault_id=1,
+                active_client=instant_client,
+            )
+
+        evaluator_cls.assert_called_once_with(instant_client)
+        fake_evaluator.evaluate.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

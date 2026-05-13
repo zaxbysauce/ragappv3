@@ -446,7 +446,7 @@ class TestAddOrgMember:
         )
         assert response.status_code == 200
         data = response.json()
-        assert data["id"] == 3
+        assert data["user_id"] == 3
         assert data["role"] == "member"
 
     def test_non_admin_rejected(self, client):

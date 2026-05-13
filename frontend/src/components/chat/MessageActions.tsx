@@ -106,14 +106,23 @@ function FeedbackActions({
   const [internalFeedback, setInternalFeedback] = useState<"up" | "down" | null>(null);
 
   useEffect(() => {
-    if (serverFeedback != null) {
+    if (serverFeedback !== undefined) {
       setInternalFeedback(serverFeedback);
+      if (serverFeedback === null && messageId) {
+        try {
+          localStorage.removeItem(`chat_feedback_${messageId}`);
+        } catch { /* ignore */ }
+      }
       return;
     }
-    if (!messageId) return;
+    if (!messageId) {
+      setInternalFeedback(null);
+      return;
+    }
     try {
       const stored = localStorage.getItem(`chat_feedback_${messageId}`);
       if (stored === "up" || stored === "down") setInternalFeedback(stored);
+      else setInternalFeedback(null);
     } catch { /* ignore */ }
   }, [messageId, serverFeedback]);
 
@@ -121,7 +130,7 @@ function FeedbackActions({
 
   const handleFeedback = useCallback(
     (type: "up" | "down") => {
-      const prev = internalFeedback;
+      const prev = current;
       const next: "up" | "down" | null = current === type ? null : type;
 
       if (externalFeedback === undefined) setInternalFeedback(next);
@@ -152,7 +161,7 @@ function FeedbackActions({
         });
       }
     },
-    [current, internalFeedback, externalFeedback, messageId, sessionId, onFeedback]
+    [current, externalFeedback, messageId, sessionId, onFeedback]
   );
 
   return (

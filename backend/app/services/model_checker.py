@@ -34,18 +34,21 @@ class ModelChecker:
         calls the appropriate API to verify configured models are available.
 
         Returns:
-            Dictionary with 'embedding_model' and 'chat_model' keys,
+            Dictionary with 'embedding_model', 'chat_model', and
+            'instant_chat_model' keys,
             each containing a dict with 'available' (bool) and 'error' (str or None).
 
         Example:
             {
                 'embedding_model': {'available': True, 'error': None},
-                'chat_model': {'available': False, 'error': 'Model not found'}
+                'chat_model': {'available': False, 'error': 'Model not found'},
+                'instant_chat_model': {'available': True, 'error': None}
             }
         """
         result = {
             'embedding_model': {'available': False, 'error': None},
-            'chat_model': {'available': False, 'error': None}
+            'chat_model': {'available': False, 'error': None},
+            'instant_chat_model': {'available': False, 'error': None},
         }
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -61,6 +64,13 @@ class ModelChecker:
                 client,
                 settings.ollama_chat_url,
                 settings.chat_model
+            )
+
+            # Check instant chat model
+            result['instant_chat_model'] = await self._check_model_availability(
+                client,
+                settings.instant_chat_url,
+                settings.instant_chat_model
             )
 
         return result
