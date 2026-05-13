@@ -239,7 +239,12 @@ def stream_chat_response(
         try:
             from app.config import settings as _settings
             resolved_mode = mode if mode is not None else ChatMode(_settings.default_chat_mode)
-        except Exception:
+        except Exception as _mode_exc:  # noqa: BLE001 — bad config should not block streaming
+            logger.warning(
+                "Could not resolve chat mode for SSE event (default_chat_mode=%r): %s; falling back to THINKING",
+                getattr(_settings, "default_chat_mode", None) if "_settings" in locals() else None,
+                _mode_exc,
+            )
             resolved_mode = ChatMode.THINKING
         yield f"data: {json.dumps({'type': 'mode', 'mode': resolved_mode.value})}\n\n"
 

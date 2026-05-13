@@ -335,7 +335,12 @@ interface MarkdownMessageProps {
 /**
  * Unified markdown + citation renderer used by both assistant and user messages.
  *
- * - Renders one ReactMarkdown instance per text segment (between citations).
+ * - Renders the full message through a single ReactMarkdown pass. A custom
+ *   remark plugin (``remarkCitations``) converts ``[S#]``/``[M#]``/``[W#]``
+ *   markers into inline span nodes, and the ``span`` component override
+ *   below renders each one as an interactive citation chip. Splitting the
+ *   message at citation boundaries is intentionally avoided so block
+ *   constructs (tables, lists, code blocks) survive intact.
  * - Lazily loads Shiki for syntax-highlighted code blocks.
  * - Inline citation chips are interactive and call onCitationClick.
  * - Streaming caret blinks while isStreaming is true.

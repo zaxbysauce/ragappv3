@@ -44,9 +44,12 @@ def is_followup_query(query: str) -> bool:
         return False
     if _FOLLOWUP_REGEX.match(query):
         return True
-    # Very short pronoun-anchored questions like "what about X?" / "and X?"
+    # Very short pronoun-anchored questions like "what about X?" / "and X?".
+    # Gate at 80 chars (same as the explicit-phrase gate above) to catch
+    # mid-length conjunctive follow-ups like "and what about the pricing
+    # tier for enterprise customers?".
     short = query.strip()
-    if 0 < len(short) <= 40:
+    if 0 < len(short) <= 80:
         if re.match(r"^(and|or|but|so)\b", short, re.IGNORECASE):
             return True
         if re.match(r"^what\s+about\b", short, re.IGNORECASE):
