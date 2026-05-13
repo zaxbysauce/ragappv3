@@ -104,6 +104,8 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     vault_id INTEGER NOT NULL DEFAULT 1,
     user_id INTEGER,
     title TEXT,
+    forked_from_session_id INTEGER,
+    fork_message_index INTEGER,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (vault_id) REFERENCES vaults(id)

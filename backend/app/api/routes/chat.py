@@ -815,81 +815,135 @@ async def fork_session(
         )
     forked_rows = all_rows[: request.message_index + 1]
 
-    # Create new forked session
+    # Create new forked session and copy messages atomically.
     fork_title = f"Branch of {session_row[2] or 'conversation'}"
-    cursor = await asyncio.to_thread(
-        conn.execute,
-        "INSERT INTO chat_sessions (vault_id, user_id, title, forked_from_session_id, fork_message_index, created_at, updated_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-        (vault_id, user["id"], fork_title, session_id, request.message_index),
-    )
-    await asyncio.to_thread(conn.commit)
-    new_session_id = cursor.lastrowid
+    try:
+        await asyncio.to_thread(conn.execute, "BEGIN")
+        cursor = await asyncio.to_thread(
+            conn.execute,
+            "INSERT INTO chat_sessions (vault_id, user_id, title, forked_from_session_id, fork_message_index, created_at, updated_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            (vault_id, user["id"], fork_title, session_id, request.message_index),
+        )
+        new_session_id = cursor.lastrowid
 
-    # Copy messages into the new session — preserve sources, memories, and wiki_refs.
+        # Copy messages into the new session — preserve sources, memories, and wiki_refs.
+        if has_memories_col and has_wiki_refs_col:
+            for row in forked_rows:
+                await asyncio.to_thread(
+                    conn.execute,
+                    "INSERT INTO chat_messages (session_id, role, content, sources, memories, wiki_refs, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+                    (new_session_id, row[0], row[1], row[2], row[3], row[4]),
+                )
+        elif has_memories_col:
+            for row in forked_rows:
+                await asyncio.to_thread(
+                    conn.execute,
+                    "INSERT INTO chat_messages (session_id, role, content, sources, memories, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+                    (new_session_id, row[0], row[1], row[2], row[3]),
+                )
+        else:
+            for row in forked_rows:
+                await asyncio.to_thread(
+                    conn.execute,
+                    "INSERT INTO chat_messages (session_id, role, content, sources, created_at) "
+                    "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)",
+                    (new_session_id, row[0], row[1], row[2]),
+                )
+        await asyncio.to_thread(conn.commit)
+    except Exception:
+        await asyncio.to_thread(conn.rollback)
+        raise
+
+    # Return new session info with the newly inserted message IDs.
     if has_memories_col and has_wiki_refs_col:
-        for row in forked_rows:
-            await asyncio.to_thread(
-                conn.execute,
-                "INSERT INTO chat_messages (session_id, role, content, sources, memories, wiki_refs, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
-                (new_session_id, row[0], row[1], row[2], row[3], row[4]),
-            )
+        copied_result = await asyncio.to_thread(
+            conn.execute,
+            "SELECT id, role, content, sources, memories, wiki_refs, created_at FROM chat_messages "
+            "WHERE session_id = ? ORDER BY created_at ASC, id ASC",
+            (new_session_id,),
+        )
     elif has_memories_col:
-        for row in forked_rows:
-            await asyncio.to_thread(
-                conn.execute,
-                "INSERT INTO chat_messages (session_id, role, content, sources, memories, created_at) "
-                "VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
-                (new_session_id, row[0], row[1], row[2], row[3]),
-            )
+        copied_result = await asyncio.to_thread(
+            conn.execute,
+            "SELECT id, role, content, sources, memories, created_at FROM chat_messages "
+            "WHERE session_id = ? ORDER BY created_at ASC, id ASC",
+            (new_session_id,),
+        )
     else:
-        for row in forked_rows:
-            await asyncio.to_thread(
-                conn.execute,
-                "INSERT INTO chat_messages (session_id, role, content, sources, created_at) "
-                "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)",
-                (new_session_id, row[0], row[1], row[2]),
-            )
-    await asyncio.to_thread(conn.commit)
+        copied_result = await asyncio.to_thread(
+            conn.execute,
+            "SELECT id, role, content, sources, created_at FROM chat_messages "
+            "WHERE session_id = ? ORDER BY created_at ASC, id ASC",
+            (new_session_id,),
+        )
+    copied_rows = await asyncio.to_thread(copied_result.fetchall)
 
-    # Return new session info with copied messages
     messages = []
-    for row in forked_rows:
+    for row in copied_rows:
         sources = None
-        if row[2]:
+        if row[3]:
             try:
-                sources = json.loads(row[2])
+                sources = json.loads(row[3])
             except json.JSONDecodeError:
                 sources = []
         if has_memories_col and has_wiki_refs_col:
             mem_val = None
-            if row[3]:
+            if row[4]:
                 try:
-                    mem_val = json.loads(row[3])
+                    mem_val = json.loads(row[4])
                 except json.JSONDecodeError:
                     mem_val = []
             wiki_val = None
-            if row[4]:
+            if row[5]:
                 try:
-                    wiki_val = json.loads(row[4])
+                    wiki_val = json.loads(row[5])
                 except json.JSONDecodeError:
                     wiki_val = []
             messages.append(
-                {"role": row[0], "content": row[1], "sources": sources, "memories": mem_val, "wiki_refs": wiki_val}
+                {
+                    "id": row[0],
+                    "role": row[1],
+                    "content": row[2],
+                    "sources": sources,
+                    "memories": mem_val,
+                    "wiki_refs": wiki_val,
+                    "created_at": row[6],
+                    "feedback": None,
+                }
             )
         elif has_memories_col:
             mem_val = None
-            if row[3]:
+            if row[4]:
                 try:
-                    mem_val = json.loads(row[3])
+                    mem_val = json.loads(row[4])
                 except json.JSONDecodeError:
                     mem_val = []
             messages.append(
-                {"role": row[0], "content": row[1], "sources": sources, "memories": mem_val, "wiki_refs": None}
+                {
+                    "id": row[0],
+                    "role": row[1],
+                    "content": row[2],
+                    "sources": sources,
+                    "memories": mem_val,
+                    "wiki_refs": None,
+                    "created_at": row[5],
+                    "feedback": None,
+                }
             )
         else:
             messages.append(
-                {"role": row[0], "content": row[1], "sources": sources, "memories": None, "wiki_refs": None}
+                {
+                    "id": row[0],
+                    "role": row[1],
+                    "content": row[2],
+                    "sources": sources,
+                    "memories": None,
+                    "wiki_refs": None,
+                    "created_at": row[4],
+                    "feedback": None,
+                }
             )
 
     return {
