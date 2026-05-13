@@ -819,7 +819,6 @@ class WikiCompiler:
         # populate claims later. Prior behavior short-circuited here and left
         # the wiki blank for any document whose prose did not match the narrow
         # acronym / ALL-CAPS-org role patterns.
-        extraction_empty = not extraction.acronyms and not extraction.role_claims
 
         file_name = file_data.get("file_name") or f"file:{file_id}"
         slug = normalize_slug(f"document/{file_name[:60]}")
