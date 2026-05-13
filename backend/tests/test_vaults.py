@@ -73,8 +73,10 @@ def setup_test_db():
 setup_test_db()
 
 from app.api.deps import (
+    get_current_active_user,
     get_db,
     get_embedding_service,
+    get_evaluate_policy,
     get_memory_store,
     get_rag_engine,
     get_vector_store,
@@ -578,11 +580,23 @@ class TestVaultScopedRoutes(unittest.TestCase):
 
         app.dependency_overrides[get_db] = override_get_db
         app.dependency_overrides[get_vector_store] = lambda: self._mock_vector_store
+        app.dependency_overrides[get_current_active_user] = lambda: {
+            "id": 1,
+            "username": "test-admin",
+            "role": "admin",
+        }
+
+        async def allow_policy(user, resource_type, resource_id, action):
+            return True
+
+        app.dependency_overrides[get_evaluate_policy] = lambda: allow_policy
         self._db_path = db_path
 
     def tearDown(self):
         app.dependency_overrides.pop(get_db, None)
         app.dependency_overrides.pop(get_vector_store, None)
+        app.dependency_overrides.pop(get_current_active_user, None)
+        app.dependency_overrides.pop(get_evaluate_policy, None)
         app.dependency_overrides.pop(get_memory_store, None)
         app.dependency_overrides.pop(get_rag_engine, None)
         app.dependency_overrides.pop(get_embedding_service, None)
@@ -730,7 +744,10 @@ class TestVaultScopedRoutes(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         stats = resp.json()
         self.assertEqual(stats["total_files"], 2)
+        self.assertEqual(stats["total_documents"], 2)
         self.assertEqual(stats["total_chunks"], 30)
+        self.assertEqual(stats["total_size_bytes"], 2000)
+        self.assertEqual(stats["documents_by_status"], {"indexed": 2})
 
     # 2. Memory routes (vault_id as Query param for list, in body for create/search)
 

@@ -493,6 +493,16 @@ export interface Document {
   content_type?: string;
   size?: number;
   created_at?: string;
+  processed_at?: string | null;
+  error_message?: string | null;
+  phase?: string | null;
+  phase_message?: string | null;
+  progress_percent?: number | null;
+  processed_units?: number | null;
+  total_units?: number | null;
+  unit_label?: string | null;
+  phase_started_at?: string | null;
+  processing_started_at?: string | null;
   metadata?: Record<string, unknown>;
 }
 

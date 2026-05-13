@@ -216,6 +216,15 @@ class DocumentResponse(BaseModel):
     size: Optional[int] = None  # Frontend expects size
     created_at: Optional[str]
     processed_at: Optional[str]
+    error_message: Optional[str] = None
+    phase: Optional[str] = None
+    phase_message: Optional[str] = None
+    progress_percent: Optional[float] = None
+    processed_units: Optional[int] = None
+    total_units: Optional[int] = None
+    unit_label: Optional[str] = None
+    phase_started_at: Optional[str] = None
+    processing_started_at: Optional[str] = None
     metadata: Optional[dict] = None  # Frontend expects metadata
 
     model_config = ConfigDict(from_attributes=True)
@@ -287,9 +296,21 @@ class DeleteAllVaultResponse(BaseModel):
 
 def _row_to_document_response(row: sqlite3.Row) -> DocumentResponse:
     """Convert a database row to a DocumentResponse."""
+    keys = row.keys()
     file_name = row["file_name"]
     chunk_count = row["chunk_count"] or 0
     status = row["status"]
+    error_message = row["error_message"] if "error_message" in keys else None
+    phase = row["phase"] if "phase" in keys else None
+    phase_message = row["phase_message"] if "phase_message" in keys else None
+    progress_percent = row["progress_percent"] if "progress_percent" in keys else None
+    processed_units = row["processed_units"] if "processed_units" in keys else None
+    total_units = row["total_units"] if "total_units" in keys else None
+    unit_label = row["unit_label"] if "unit_label" in keys else None
+    phase_started_at = row["phase_started_at"] if "phase_started_at" in keys else None
+    processing_started_at = (
+        row["processing_started_at"] if "processing_started_at" in keys else None
+    )
     return DocumentResponse(
         id=row["id"],
         file_name=file_name,
@@ -302,10 +323,29 @@ def _row_to_document_response(row: sqlite3.Row) -> DocumentResponse:
         else None,
         created_at=row["created_at"],
         processed_at=row["processed_at"],
+        error_message=error_message,
+        phase=phase,
+        phase_message=phase_message,
+        progress_percent=progress_percent,
+        processed_units=processed_units,
+        total_units=total_units,
+        unit_label=unit_label,
+        phase_started_at=phase_started_at,
+        processing_started_at=processing_started_at,
         metadata={
             "status": status,
             "chunk_count": chunk_count,
             "chunks": chunk_count,  # Backward compatibility
+            # Keep progress fields mirrored for legacy metadata-based clients.
+            "error_message": error_message,
+            "phase": phase,
+            "phase_message": phase_message,
+            "progress_percent": progress_percent,
+            "processed_units": processed_units,
+            "total_units": total_units,
+            "unit_label": unit_label,
+            "phase_started_at": phase_started_at,
+            "processing_started_at": processing_started_at,
         },
     )
 
@@ -362,7 +402,10 @@ async def list_documents(
         cursor = await asyncio.to_thread(
             conn.execute,
             f"""
-            SELECT id, file_name, file_path, status, chunk_count, file_size, created_at, processed_at
+            SELECT id, file_name, file_path, status, chunk_count, file_size,
+                   created_at, processed_at, error_message, phase, phase_message,
+                   progress_percent, processed_units, total_units, unit_label,
+                   phase_started_at, processing_started_at
             FROM files
             WHERE vault_id = ?{_extra_clause()}
             ORDER BY created_at DESC
@@ -388,7 +431,10 @@ async def list_documents(
             cursor = await asyncio.to_thread(
                 conn.execute,
                 f"""
-                SELECT id, file_name, file_path, status, chunk_count, file_size, created_at, processed_at
+                SELECT id, file_name, file_path, status, chunk_count, file_size,
+                       created_at, processed_at, error_message, phase, phase_message,
+                       progress_percent, processed_units, total_units, unit_label,
+                       phase_started_at, processing_started_at
                 FROM files
                 WHERE vault_id IN ({placeholders}){_extra_clause()}
                 ORDER BY created_at DESC
@@ -408,7 +454,10 @@ async def list_documents(
             cursor = await asyncio.to_thread(
                 conn.execute,
                 f"""
-                SELECT id, file_name, file_path, status, chunk_count, file_size, created_at, processed_at
+                SELECT id, file_name, file_path, status, chunk_count, file_size,
+                       created_at, processed_at, error_message, phase, phase_message,
+                       progress_percent, processed_units, total_units, unit_label,
+                       phase_started_at, processing_started_at
                 FROM files{base_where}
                 ORDER BY created_at DESC
                 LIMIT ? OFFSET ?

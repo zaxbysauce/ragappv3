@@ -1,6 +1,25 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, fireEvent, act, waitFor } from '@testing-library/react';
+import { render, fireEvent, act, waitFor, screen } from '@testing-library/react';
 import '@testing-library/jest-dom';
+
+vi.mock('@tanstack/react-virtual', () => ({
+  useVirtualizer: vi.fn(({ count, estimateSize }) => {
+    const size = estimateSize?.() ?? 72;
+    return {
+      getVirtualItems: () =>
+        Array.from({ length: count }, (_, i) => ({
+          index: i,
+          start: i * size,
+          size,
+          key: `doc-${i}`,
+        })),
+      getTotalSize: () => count * size,
+      measureElement: vi.fn(),
+      scrollToIndex: vi.fn(),
+      measure: vi.fn(),
+    };
+  }),
+}));
 
 // Mock API with documents so the table renders
 vi.mock('@/lib/api', () => ({
@@ -14,6 +33,13 @@ vi.mock('@/lib/api', () => ({
   deleteDocument: vi.fn().mockResolvedValue({}),
   deleteDocuments: vi.fn().mockResolvedValue({ deleted_count: 0, failed_ids: [] }),
   deleteAllDocumentsInVault: vi.fn().mockResolvedValue({ deleted_count: 0 }),
+  getDocumentWikiStatus: vi.fn().mockResolvedValue({
+    wiki_status: 'not_compiled',
+    pages_count: 0,
+    claims_count: 0,
+    lint_count: 0,
+  }),
+  compileDocumentWiki: vi.fn().mockResolvedValue({}),
   getDocumentStats: vi.fn().mockResolvedValue({
     total_documents: 2,
     total_chunks: 15,
@@ -130,6 +156,7 @@ vi.mock('@/lib/formatters', () => ({
 // Import component after mocks
 import DocumentsPage from '@/pages/DocumentsPage';
 import { useVaultStore } from '@/stores/useVaultStore';
+import { getDocumentStats, listDocuments } from '@/lib/api';
 
 describe('DocumentsPage - Drag to Resize Filename Column', () => {
   let container: HTMLElement;
@@ -159,6 +186,84 @@ describe('DocumentsPage - Drag to Resize Filename Column', () => {
   };
 
   describe('Default State', () => {
+    it('renders list-row phase progress and failed reason titles', async () => {
+      vi.mocked(listDocuments).mockResolvedValueOnce({
+        documents: [
+          {
+            id: 'failed-doc',
+            filename: 'failed.pdf',
+            size: 1024,
+            created_at: '2024-01-01',
+            error_message: 'Parser could not read the file',
+            phase: 'parsing',
+            phase_message: 'Parsing failed',
+            progress_percent: 25,
+            processed_units: 1,
+            total_units: 4,
+            unit_label: 'pages',
+            metadata: {
+              status: 'error',
+              chunk_count: 0,
+              error_message: 'Parser could not read the file',
+              phase_message: 'Parsing failed',
+              progress_percent: 25,
+            },
+          },
+          {
+            id: 'processing-doc',
+            filename: 'processing.pdf',
+            size: 2048,
+            created_at: '2024-01-02',
+            phase: 'embedding',
+            phase_message: null,
+            progress_percent: null,
+            processed_units: 0,
+            total_units: 0,
+            unit_label: 'chunks',
+            metadata: {
+              status: 'processing',
+              chunk_count: 0,
+              phase: 'embedding',
+              progress_percent: null,
+              processed_units: 0,
+              total_units: 0,
+              unit_label: 'chunks',
+            },
+          },
+        ],
+        total: 2,
+      });
+
+      await act(async () => {
+        const result = render(<DocumentsPage />);
+        container = result.container;
+        unmount = result.unmount;
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText('Parsing failed - 1 / 4 pages')).toBeInTheDocument();
+      });
+      expect(screen.getByText('25%')).toBeInTheDocument();
+      expect(screen.getByText('embedding - 0 / 0 chunks')).toBeInTheDocument();
+      expect(screen.queryByText('NaN%')).not.toBeInTheDocument();
+      expect(container.querySelector('[title="Parser could not read the file"]')).toBeInTheDocument();
+    });
+
+    it('requests all-vault stats when no active vault is selected', async () => {
+      await act(async () => {
+        const result = render(<DocumentsPage />);
+        container = result.container;
+        unmount = result.unmount;
+      });
+
+      await waitFor(() => {
+        expect(getDocumentStats).toHaveBeenCalledWith(undefined);
+      });
+      expect(screen.getByText('2')).toBeInTheDocument();
+      expect(screen.getByText('15')).toBeInTheDocument();
+      expect(screen.getByText('3072 bytes')).toBeInTheDocument();
+    });
+
     it('should have default filenameColWidth of 250', async () => {
       await act(async () => {
         const result = render(<DocumentsPage />);
