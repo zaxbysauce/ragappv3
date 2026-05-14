@@ -37,7 +37,7 @@ KnowledgeVault enables you to:
 ```
 +------------------+     +------------------+     +------------------+
 |   React Frontend |---->|  FastAPI Backend |---->|   LanceDB Vector |
-|   (Port 5173*)   |     |   (Port 9090)    |     |   Store          |
+|   (Port 3000*)   |     |   (Port 9090)    |     |   Store          |
 +------------------+     +------------------+     +------------------+
                                |                           |
                                |                    +------v------+
@@ -53,7 +53,7 @@ KnowledgeVault enables you to:
                         |  - Embeddings (dense, 1024-dim)  |
                         +----------------------------------+
 
-*Port 5173 is for development only. In Docker, the backend runs on port 9090.
+*Port 3000 is for development only. In Docker, the combined app runs on port 9090.
 ```
 
 ### Backend Structure
@@ -131,7 +131,7 @@ backend/app/
 
 ```bash
 git clone <repository-url>
-cd RAGAPPv2
+cd ragappv3
 cp .env.example .env
 ```
 
@@ -218,8 +218,8 @@ On first launch, you'll be redirected to the **Setup Wizard** (`/setup`) to crea
 | `USERS_ENABLED` | true | Enable multi-user JWT authentication |
 | `JWT_SECRET_KEY` | change-me-... | Secret key for JWT signing (generate with `python -c "import secrets; print(secrets.token_urlsafe(48))"`) |
 | `JWT_ALGORITHM` | HS256 | JWT signing algorithm |
-| `ADMIN_SECRET_TOKEN` | "" | Admin API key. **Required** when `USERS_ENABLED=true` (JWT mode) and when `USERS_ENABLED=false` (single-admin mode — sole auth mechanism) |
-| `PARENT_RETRIEVAL_ENABLED` | `false` | Enable small-to-big context expansion (parent window retrieval) |
+| `ADMIN_SECRET_TOKEN` | "" | Admin bootstrap/API token. **Required** when `USERS_ENABLED=true` (JWT mode) and when `USERS_ENABLED=false` (single-admin bearer-token mode) |
+| `PARENT_RETRIEVAL_ENABLED` | `true` | Enable small-to-big context expansion (parent window retrieval) |
 | `PARENT_WINDOW_CHARS` | `6000` | Total parent window size in characters (±3000 around matched chunk) |
 | `NEW_DEDUP_POLICY` | `true` | Use group-aware dedup (caps per-doc chunks and distinct docs in results) |
 | `PER_DOC_CHUNK_CAP` | `5` | Max chunks per document in retrieval results |
@@ -519,7 +519,9 @@ Feedback is stored as the current user's signal on owned chat sessions. Non-admi
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/settings` | Get settings |
+| POST | `/api/settings` | Apply settings update |
 | PUT | `/api/settings` | Update settings |
+| GET | `/api/settings/connection` | Test authenticated model service connections |
 
 ### API Documentation
 
@@ -565,7 +567,7 @@ Admin users also have access to:
 
 ### Authentication
 
-KnowledgeVault supports JWT-based authentication with optional API key fallback.
+KnowledgeVault supports JWT-based browser authentication with httpOnly refresh cookies.
 
 **First-Time Setup:**
 1. On first launch, the app redirects to `/setup`
@@ -574,7 +576,7 @@ KnowledgeVault supports JWT-based authentication with optional API key fallback.
 
 **Login:**
 - JWT mode: Enter username and password on the login page
-- API key mode: Enter your API key (legacy support)
+- Single-admin token mode: send `Authorization: Bearer <ADMIN_SECRET_TOKEN>` to API endpoints when `USERS_ENABLED=false`
 - Sessions persist across browser refreshes via httpOnly refresh cookies
 
 **User Roles:**
@@ -704,7 +706,7 @@ The three-zone chat workspace is built from these key components:
 | `AdminGuard` | `src/components/auth/RoleGuard.tsx` | Convenience wrapper for admin + superadmin |
 | `SuperAdminGuard` | `src/components/auth/RoleGuard.tsx` | Convenience wrapper for superadmin only |
 | `SetupPage` | `src/pages/SetupPage.tsx` | First-time admin account creation wizard |
-| `LoginPage` | `src/pages/LoginPage.tsx` | JWT login with API key fallback |
+| `LoginPage` | `src/pages/LoginPage.tsx` | JWT username/password login |
 | `RegisterPage` | `src/pages/RegisterPage.tsx` | User registration form |
 | `ProfilePage` | `src/pages/ProfilePage.tsx` | User profile and password change |
 | `AdminUsersPage` | `src/pages/AdminUsersPage.tsx` | Admin user management (role/active/delete) |

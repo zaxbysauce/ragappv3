@@ -129,9 +129,9 @@ Wait for the download to finish before continuing.
 3. Remember this location - you will need it later
 
 Example locations:
-- Windows: `C:\Users\YourName\RAGAPPv2`
-- Mac: `/Users/YourName/RAGAPPv2`
-- Linux: `/home/YourName/RAGAPPv2`
+- Windows: `C:\Users\YourName\ragappv3`
+- Mac: `/Users/YourName/ragappv3`
+- Linux: `/home/YourName/ragappv3`
 
 ---
 
@@ -186,12 +186,12 @@ HOST_DATA_DIR=/home/YourName/KnowledgeVault/data
 
 **Windows:**
 ```
-cd C:\Users\YourName\RAGAPPv2
+cd C:\Users\YourName\ragappv3
 ```
 
 **Mac/Linux:**
 ```
-cd /Users/YourName/RAGAPPv2
+cd /Users/YourName/ragappv3
 ```
 
 **[SCREENSHOT PLACEHOLDER: Terminal showing docker compose command]**
@@ -302,7 +302,7 @@ To view saved memories:
 To stop KnowledgeVault when you're done:
 
 1. Open terminal
-2. Navigate to RAGAPPv2 folder
+2. Navigate to the ragappv3 folder
 3. Type: `docker compose down`
 4. Press Enter
 

@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Changed
+
+- Browser login documentation now reflects JWT-only username/password auth with httpOnly refresh cookies; the legacy frontend `kv_api_key` fallback is no longer documented as supported.
+- Settings write endpoints (`POST /api/settings` and `PUT /api/settings`) are documented as admin-protected operations, and `GET /api/settings/connection` is documented as an authenticated model connection check.
+- Auth error handling changes are documented for API consumers: expired or invalid JWTs now return HTTP 401 with structured token error details.
+- Configuration and installation docs now align with the current Harrier TEI embedding service, 9090 backend port, 3000 frontend dev port, and thinking/instant model defaults.
+- Docker Compose defaults now match runtime retrieval defaults: `PARENT_RETRIEVAL_ENABLED=true` and `PER_DOC_CHUNK_CAP=5`.
+
+### Fixed
+
+- Declared `numpy` as a direct backend dependency and removed the unused `pybreaker` dependency.
+- Removed or rewired hardcoded local Windows paths from development helper scripts and stale sample/test output artifacts.
+
 ## [1.0.6] - 2026-05-02
 
 ### Fixed

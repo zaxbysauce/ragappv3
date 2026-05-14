@@ -97,7 +97,7 @@ ollama --version
 
 # Pull required models
 ollama pull llama3.2
-ollama pull nomic-embed-text
+# Harrier TEI embeddings are started by docker-compose; no Ollama embedding pull is required.
 ```
 
 #### Step 5: Windows-Specific Configuration
@@ -157,7 +157,7 @@ brew services start ollama
 
 # Pull required models
 ollama pull llama3.2
-ollama pull nomic-embed-text
+# Harrier TEI embeddings are started by docker-compose; no Ollama embedding pull is required.
 ```
 
 ### Linux (Ubuntu/Debian)
@@ -208,7 +208,7 @@ sudo systemctl start ollama
 
 # Pull required models
 ollama pull llama3.2
-ollama pull nomic-embed-text
+# Harrier TEI embeddings are started by docker-compose; no Ollama embedding pull is required.
 ```
 
 ---
@@ -304,7 +304,7 @@ cd backend
 source venv/bin/activate  # or venv\Scripts\activate on Windows
 
 # Start backend server
-python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 9090
 
 # Should see: Application startup complete
 ```
@@ -317,7 +317,7 @@ cd frontend
 npm run dev
 
 # Should see: VITE v5.x ready in xxx ms
-# Local: http://localhost:5173/
+# Local: http://localhost:3000/
 ```
 
 **Terminal 3 - Ollama (if not running as service):**
@@ -358,12 +358,15 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     ports:
-      - "8000:8000"
+      - "9090:9090"
     environment:
       - SQLITE_PATH=/app/data/ragapp.db
       - JWT_SECRET_KEY=${JWT_SECRET_KEY}
       - ADMIN_SECRET_TOKEN=${ADMIN_SECRET_TOKEN}
-      - OLLAMA_HOST=http://ollama:11434
+      - OLLAMA_EMBEDDING_URL=http://harrier-embed:8080/v1/embeddings
+      - OLLAMA_CHAT_URL=http://ollama:11434
+      - EMBEDDING_MODEL=microsoft/harrier-oss-v1-0.6b
+      - CHAT_MODEL=gemma-4-26b-a4b-it-apex
     volumes:
       - ./data:/app/data
       - ./uploads:/app/uploads
@@ -377,9 +380,9 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     ports:
-      - "5173:5173"
+      - "3000:3000"
     environment:
-      - VITE_API_URL=http://localhost:8000
+      - VITE_API_URL=http://localhost:9090
     depends_on:
       - backend
     networks:
@@ -430,10 +433,10 @@ COPY . .
 RUN mkdir -p /app/data /app/uploads
 
 # Expose port
-EXPOSE 8000
+EXPOSE 9090
 
 # Start command
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "9090"]
 ```
 
 #### Step 5: Create Frontend Dockerfile
@@ -449,7 +452,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install dependencies
-RUN npm install
+RUN npm ci
 
 # Copy application code
 COPY . .
@@ -458,10 +461,10 @@ COPY . .
 RUN npm run build
 
 # Expose port
-EXPOSE 5173
+EXPOSE 3000
 
 # Start command
-CMD ["npm", "run", "preview", "--", "--host", "0.0.0.0", "--port", "5173"]
+CMD ["npm", "run", "preview", "--", "--host", "0.0.0.0", "--port", "3000"]
 ```
 
 #### Step 6: Build and Run
@@ -497,7 +500,7 @@ docker-compose ps
 
 # Pull models
 docker-compose exec ollama ollama pull llama3.2
-docker-compose exec ollama ollama pull nomic-embed-text
+# Harrier TEI embeddings are started by docker-compose; no Ollama embedding pull is required.
 ```
 
 ---
@@ -508,16 +511,19 @@ docker-compose exec ollama ollama pull nomic-embed-text
 
 ```bash
 # Required
-JWT_SECRET_KEY=change-me-to-a-random-64-char-string-minimum
-ADMIN_SECRET_TOKEN=change-me-to-a-secure-admin-token
+JWT_SECRET_KEY=change-me-to-a-random-64-char-string
+ADMIN_SECRET_TOKEN=
 
 # Database
 SQLITE_PATH=./ragapp.db
 
-# Ollama Configuration
-OLLAMA_HOST=http://localhost:11434
-DEFAULT_LLM_MODEL=llama3.2
-DEFAULT_EMBEDDING_MODEL=nomic-embed-text
+# Model services
+OLLAMA_EMBEDDING_URL=http://harrier-embed:8080/v1/embeddings
+OLLAMA_CHAT_URL=http://localhost:11434
+INSTANT_CHAT_URL=http://localhost:1234
+CHAT_MODEL=gemma-4-26b-a4b-it-apex
+EMBEDDING_MODEL=microsoft/harrier-oss-v1-0.6b
+INSTANT_CHAT_MODEL=nvidia/nemotron-3-nano-4b
 
 # Embedding Configuration
 # Batch size for embedding requests (default: 32)
@@ -552,7 +558,7 @@ Create `frontend/.env`:
 
 ```bash
 # API URL
-VITE_API_URL=http://localhost:8000
+VITE_API_URL=http://localhost:9090
 
 # Feature Flags
 VITE_USERS_ENABLED=true
@@ -566,7 +572,7 @@ VITE_USERS_ENABLED=true
 
 ```bash
 # Test backend is running
-curl http://localhost:8000/api/health
+curl http://localhost:9090/api/health
 
 # Expected response:
 # {"status": "healthy", "version": "3.x.x"}
@@ -574,13 +580,13 @@ curl http://localhost:8000/api/health
 
 ### Frontend Check
 
-Open browser to: http://localhost:5173
+Open browser to: http://localhost:3000
 
 You should see the RAGAPPv3 login page.
 
 ### API Documentation
 
-Open browser to: http://localhost:8000/docs
+Open browser to: http://localhost:9090/docs
 
 You should see the Swagger UI with all API endpoints.
 
@@ -588,7 +594,7 @@ You should see the Swagger UI with all API endpoints.
 
 ```bash
 # Register first user (becomes superadmin)
-curl -X POST http://localhost:8000/api/auth/register \
+curl -X POST http://localhost:9090/api/auth/register \
   -H "Content-Type: application/json" \
   -d '{"username": "admin", "password": "SecurePass123!", "full_name": "Administrator"}'
 
@@ -632,17 +638,17 @@ npm install
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 ```
 
-#### Issue: "Address already in use" (port 8000 or 5173)
+#### Issue: "Address already in use" (port 9090 or 3000)
 
 **Solution:**
 ```bash
 # Find process using port
 # Windows:
-netstat -ano | findstr :8000
+netstat -ano | findstr :9090
 taskkill /PID <PID> /F
 
 # macOS/Linux:
-lsof -ti:8000 | xargs kill -9
+lsof -ti:9090 | xargs kill -9
 ```
 
 #### Issue: Database locked (SQLite)
@@ -681,7 +687,7 @@ ollama serve
 **Solution:**
 ```bash
 # Check backend is running
-curl http://localhost:8000/api/health
+curl http://localhost:9090/api/health
 
 # Check CORS settings in backend
 # Verify VITE_API_URL in frontend/.env
@@ -750,13 +756,13 @@ cd ..
 
 # 6. Start Services
 # Terminal 1: ollama serve
-# Terminal 2: cd backend && source venv/bin/activate && uvicorn app.main:app --host 0.0.0.0 --port 8000
+# Terminal 2: cd backend && source venv/bin/activate && uvicorn app.main:app --host 0.0.0.0 --port 9090
 # Terminal 3: cd frontend && npm run dev
 
 echo "RAGAPPv3 installation complete"
-echo "Backend: http://localhost:8000"
-echo "Frontend: http://localhost:5173"
-echo "API Docs: http://localhost:8000/docs"
+echo "Backend: http://localhost:9090"
+echo "Frontend: http://localhost:3000"
+echo "API Docs: http://localhost:9090/docs"
 ```
 
 ---

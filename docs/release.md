@@ -210,7 +210,7 @@ echo "Restore completed from: $TIMESTAMP"
 
 3. Test search functionality via API:
    ```bash
-   curl -X POST http://localhost:8080/api/chat \
+   curl -X POST http://localhost:9090/api/chat \
      -H "Content-Type: application/json" \
      -d '{"message": "test", "history": [], "stream": false}'
    ```
@@ -232,7 +232,7 @@ When maintenance mode is enabled:
 
 ```bash
 # Via API (requires admin scope)
-curl -X POST http://localhost:8080/api/admin/maintenance \
+curl -X POST http://localhost:9090/api/admin/maintenance \
   -H "Content-Type: application/json" \
   -H "X-CSRF-Token: <csrf-token>" \
   -H "Authorization: Bearer <admin-token>" \
@@ -242,7 +242,7 @@ curl -X POST http://localhost:8080/api/admin/maintenance \
 ### Checking Maintenance Status
 
 ```bash
-curl http://localhost:8080/api/admin/maintenance
+curl http://localhost:9090/api/admin/maintenance
 ```
 
 Response:
@@ -258,7 +258,7 @@ Response:
 ### Disabling Maintenance Mode
 
 ```bash
-curl -X POST http://localhost:8080/api/admin/maintenance \
+curl -X POST http://localhost:9090/api/admin/maintenance \
   -H "Content-Type: application/json" \
   -H "X-CSRF-Token: <csrf-token>" \
   -H "Authorization: Bearer <admin-token>" \
@@ -346,7 +346,7 @@ fi
 # test-llm.sh
 
 CHAT_URL="${OLLAMA_CHAT_URL:-http://localhost:11434}/api/chat"
-CHAT_MODEL="${CHAT_MODEL:-qwen2.5:32b}"
+CHAT_MODEL="${CHAT_MODEL:-gemma-4-26b-a4b-it-apex}"
 
 echo "Testing LLM service at $CHAT_URL..."
 
@@ -364,7 +364,32 @@ else
 fi
 ```
 
-#### 4. Redis Connection Test
+#### 4. Instant Chat Service Test
+
+```bash
+#!/bin/bash
+# test-instant-llm.sh
+
+INSTANT_CHAT_URL="${INSTANT_CHAT_URL:-http://localhost:1234}/v1/chat/completions"
+INSTANT_CHAT_MODEL="${INSTANT_CHAT_MODEL:-nvidia/nemotron-3-nano-4b}"
+
+echo "Testing instant chat service at $INSTANT_CHAT_URL..."
+
+response=$(curl -s -X POST "$INSTANT_CHAT_URL" \
+  -H "Content-Type: application/json" \
+  -d "{\"model\": \"$INSTANT_CHAT_MODEL\", \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}], \"stream\": false}" \
+  -w "\n%{http_code}")
+
+http_code=$(echo "$response" | tail -n1)
+
+if [ "$http_code" = "200" ]; then
+    echo "Instant chat service OK"
+else
+    echo "Instant chat service FAILED (HTTP $http_code)"
+fi
+```
+
+#### 5. Redis Connection Test
 
 ```bash
 #!/bin/bash
@@ -385,13 +410,13 @@ else
 fi
 ```
 
-#### 5. Full Integration Test
+#### 6. Full Integration Test
 
 ```bash
 #!/bin/bash
 # test-integration.sh
 
-API_BASE="${API_BASE:-http://localhost:8080}"
+API_BASE="${API_BASE:-http://localhost:9090}"
 
 echo "Running integration tests against $API_BASE..."
 
@@ -410,7 +435,7 @@ health=$(curl -sf "$API_BASE/api/health")
 if echo "$health" | grep -q '"status": "ok"'; then
     echo "✓"
     echo "  LLM: $(echo "$health" | python3 -c "import sys,json; print('OK' if json.load(sys.stdin)['llm']['ok'] else 'FAIL')")"
-    echo "  Models: $(echo "$health" | python3 -c "import sys,json; d=json.load(sys.stdin)['models']; print(f\"embed={d['embedding_model']['available']}, chat={d['chat_model']['available']}\")")"
+    echo "  Models: $(echo "$health" | python3 -c "import sys,json; d=json.load(sys.stdin)['models']; print(f\"embed={d['embedding_model']['available']}, chat={d['chat_model']['available']}, instant={d['instant_chat_model']['available']}\")")"
 else
     echo "✗ FAILED"
 fi
@@ -686,6 +711,25 @@ groups:
 
 ## Release Notes
 
+### Version 0.3.1 (Docs/config/supply-chain cleanup - Issues #47, #38)
+
+#### Security and Auth
+
+- Browser authentication documentation now reflects the current JWT username/password flow with httpOnly refresh cookies. The removed frontend `kv_api_key` fallback is no longer documented as a supported login path.
+- Expired and invalid JWTs now surface as HTTP 401 token errors for API consumers, with structured token-expired/token-invalid details instead of the older generic auth response.
+
+#### Settings and Connection API
+
+- `POST /api/settings` and `PUT /api/settings` are documented as admin-only settings write operations.
+- `GET /api/settings/connection` is documented as an authenticated connection probe that checks embedding, thinking-chat, instant-chat, and reranker availability.
+- Release connection-test guidance now covers the instant chat endpoint and reports instant model health alongside embedding and thinking-chat model health.
+
+#### Configuration and Supply Chain
+
+- Installation and README defaults now align with Harrier TEI embeddings, `microsoft/harrier-oss-v1-0.6b`, backend port 9090, frontend dev port 3000, and the current thinking/instant model defaults.
+- `numpy` is declared directly for vector-store production code and tests; unused `pybreaker` declarations were removed from backend requirements.
+- Local machine-specific Windows paths and generated build/test output artifacts were removed or replaced with repo-relative/configurable helper scripts.
+
 ### Version 0.3.0 (PDF/document viewer - Issue #54)
 
 #### New Features
@@ -755,11 +799,11 @@ without a silent failure mode.
 - **Parent-document retrieval / small-to-big (Issue #12):** When `PARENT_RETRIEVAL_ENABLED=true`,
   the RAG engine retrieves a ±3000-character window around each matched chunk and surfaces
   it to the LLM with a `[[MATCH: ...]]` anchor so the model sees precise evidence in context.
-  Feature-flagged off by default. New config: `PARENT_RETRIEVAL_ENABLED`, `PARENT_WINDOW_CHARS`.
+  Enabled by default. New config: `PARENT_RETRIEVAL_ENABLED`, `PARENT_WINDOW_CHARS`.
 
 - **Group-aware dedup (Issue #12):** Replaces the UID-strip dedup that collapsed multiple
   strong chunks from the same document into a single result. The best document now contributes
-  up to 2 chunks (configurable via `PER_DOC_CHUNK_CAP`), preserving evidence density. Up to
+  up to 5 chunks (configurable via `PER_DOC_CHUNK_CAP`), preserving evidence density. Up to
   5 distinct documents are returned (`UNIQUE_DOCS_IN_TOP_K`).
 
 - **Atomic ingestion visibility (Issue #13):** Chunks from documents still being processed
@@ -787,10 +831,10 @@ New environment variables (all optional, sensible defaults):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PARENT_RETRIEVAL_ENABLED` | `false` | Enable small-to-big context expansion |
+| `PARENT_RETRIEVAL_ENABLED` | `true` | Enable small-to-big context expansion |
 | `PARENT_WINDOW_CHARS` | `6000` | Characters per parent window (±3000 around chunk) |
 | `NEW_DEDUP_POLICY` | `true` | Use group-aware dedup (replaces UID-strip) |
-| `PER_DOC_CHUNK_CAP` | `2` | Max chunks per document in final result set |
+| `PER_DOC_CHUNK_CAP` | `5` | Max chunks per document in final result set |
 | `UNIQUE_DOCS_IN_TOP_K` | `5` | Max distinct documents in final result set |
 | `INDEX_REBUILD_DELTA` | `0.2` | Churn fraction (deletes/last_build) to trigger ANN rebuild |
 | `REUPLOAD_SAFE_ORDER` | `true` | Insert new chunks before deleting old on re-upload |
