@@ -38,6 +38,9 @@ const mockChatState = vi.hoisted(() => ({
   newChat: vi.fn(),
 }));
 const mockNavigate = vi.hoisted(() => vi.fn());
+const mockAuthState = vi.hoisted(() => ({
+  user: null as null | { full_name?: string | null; username?: string | null },
+}));
 
 // Mock the hooks and dependencies
 vi.mock("@/stores/useChatStore", () => ({
@@ -63,8 +66,7 @@ vi.mock("@/stores/useChatStore", () => ({
 vi.mock("@/stores/useVaultStore");
 vi.mock("@/stores/useAuthStore", () => ({
   useAuthStore: vi.fn((selector?: (s: any) => unknown) => {
-    const state = { user: null };
-    return typeof selector === "function" ? selector(state) : state;
+    return typeof selector === "function" ? selector(mockAuthState) : mockAuthState;
   }),
 }));
 vi.mock("@/stores/useChatShellStore", () => ({
@@ -91,8 +93,8 @@ vi.mock("react-router-dom", () => ({
   useNavigate: () => mockNavigate,
 }));
 vi.mock("./MessageBubble", () => ({
-  MessageBubble: ({ message, onFork }: { message: { id: string; role: string; content: string }; onFork?: () => void }) => (
-    <div data-testid="message-bubble" data-message-id={message.id}>
+  MessageBubble: ({ message, onFork, userInitial }: { message: { id: string; role: string; content: string }; onFork?: () => void; userInitial?: string }) => (
+    <div data-testid="message-bubble" data-message-id={message.id} data-user-initial={userInitial}>
       {message.content}
       {onFork && <button type="button" aria-label={`Fork ${message.id}`} onClick={onFork}>Fork</button>}
     </div>
@@ -188,6 +190,7 @@ describe("TranscriptPane", () => {
     mockChatState.stopStreaming = vi.fn();
     mockChatState.loadChat = vi.fn();
     mockChatState.newChat = vi.fn();
+    mockAuthState.user = null;
 
     // Mock useVaultStore with selector support
     (useVaultStore as unknown as ReturnType<typeof vi.fn>).mockImplementation((selector) => {
@@ -248,6 +251,20 @@ describe("TranscriptPane", () => {
 
       render(<TranscriptPane />);
       expect(screen.getByText("Test message")).toBeInTheDocument();
+    });
+
+    it.each([
+      [{ full_name: "Brett Example", username: "ignored" }, "B"],
+      [{ full_name: "", username: "codex-user" }, "C"],
+      [null, "U"],
+    ])("derives the user avatar initial from the current auth user", (user, expectedInitial) => {
+      mockAuthState.user = user;
+      _mockMessageCount = 1;
+      setMockMessages([{ id: "1", role: "user", content: "Initial source" }]);
+
+      render(<TranscriptPane />);
+
+      expect(screen.getByTestId("message-bubble")).toHaveAttribute("data-user-initial", expectedInitial);
     });
 
     it("guards fork requests against duplicate clicks while pending", async () => {
