@@ -5,7 +5,6 @@ description: >
   tracing root causes, reviewing tech debt, tracing issues, planning fixes, or completing
   any task. Enforces parallel sub-agent implementation, independent adversarial review,
   and a 95% confidence gate before stopping.
-effort: high
 ---
 
 ## QA & Independent Review Protocol
@@ -30,6 +29,7 @@ The review agent must:
 - Search for related issues and regressions the implementing agent may have introduced
 - Verify documented behavior vs. actual code behavior
 - Surface every edge case not explicitly covered
+- Treat external PR review findings as claims until independently validated; when they affect a PR update or publish flow, route accepted follow-up through `commit-pr`.
 
 ### Phase 3 — Completeness Verification
 Spawn a SECOND independent agent to verify original planned work vs. delivered work:

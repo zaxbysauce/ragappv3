@@ -54,18 +54,28 @@ and the current change touches them.
    - Run `npm run build` when the change touches build configuration, routing, app shell behavior, or release-critical frontend paths.
    - If a validation command fails because dependencies are missing, install the project dependencies in the correct subdirectory and rerun once.
 
-5. Commit cleanly.
+5. Handle external review findings.
+   - Use this protocol whenever the user provides external-agent, reviewer, CI, or audit findings for an existing PR.
+   - Refresh current state before judging findings: fetch the target branch, inspect the current branch or PR head, and compare against the current diff.
+   - Treat every finding as a claim until verified against source, diff, config, or focused runtime/test evidence.
+   - Classify each finding as `confirmed`, `partially valid`, `not reproduced`, `pre-existing`, or `out of scope`, and keep brief evidence for the classification.
+   - Fix confirmed findings. Fix partially valid findings only when the valid portion is in PR scope or explicitly accepted by the user/source agent.
+   - Do not broaden the PR with adjacent cleanup unless required to resolve a confirmed finding.
+   - Rerun focused validation for touched behavior before publishing the follow-up.
+   - In the PR body, summarize `Accepted`, `Rejected`, and `Deferred/out of scope` findings with short reasons and validation evidence. Do not write exhaustive prose for low-quality rejected findings.
+
+6. Commit cleanly.
    - Use one conventional commit: `<type>(<scope>): <lowercase description>`.
    - Prefer `feat`, `fix`, `test`, `docs`, `refactor`, or `chore`.
-   - For PR review follow-up on an unmerged branch, amend the single existing commit when practical.
+   - For PR review follow-up, follow `Handle external review findings`; amend the single existing commit when practical.
    - Keep the PR branch to one meaningful commit before asking for merge.
 
-6. Push safely.
+7. Push safely.
    - New branch: `git push -u origin <branch>`.
    - Amended review follow-up: `git push --force-with-lease -u origin <branch>`.
    - Never use plain `--force`.
 
-7. Open or update the PR.
+8. Open or update the PR.
    - Base branch: `master`.
    - Default to a draft PR.
    - Title must match the conventional commit message when practical.
@@ -75,7 +85,7 @@ and the current change touches them.
      - `## Review follow-up`: only when addressing review feedback.
      - Known warnings or intentionally skipped checks, with reasons.
 
-8. Final status check.
+9. Final status check.
    - Run `gh pr view <number> --json url,isDraft,mergeable,mergeStateStatus,headRefName,baseRefName,commits`.
    - Run `git status -sb`.
    - Confirm only expected untracked local files remain.
