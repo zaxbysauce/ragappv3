@@ -71,7 +71,7 @@ def _group_aware_dedup(
 
     Replaces UID-strip dedup that collapsed the best document's multiple strong
     chunks to a single entry.  This policy:
-    - Preserves up to *per_doc_chunk_cap* chunks per document (default 2).
+    - Preserves up to *per_doc_chunk_cap* chunks per document (default 5).
     - Caps breadth at *unique_docs_in_top_k* distinct documents (default 5).
 
     Sources are assumed to be in descending relevance order; iteration order is

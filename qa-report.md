@@ -131,8 +131,7 @@ Claim Ledger:
 
 ### HIGH-14: Insecure defaults in .env.example
 - **File:** `.env.example:22,51`
-- **Problem:** Ships with `ADMIN_SECRET_TOKEN=admin-secret-token` and `JWT_SECRET_KEY=change-me-to-a-random-64-char-string`. Users who copy without changing get known secrets.
-- **Fix:** Set to empty strings with generation instructions.
+- **Status:** Resolved in PR 9. `.env.example` now leaves `ADMIN_SECRET_TOKEN` empty and keeps the rejected JWT placeholder with generation instructions, so copied defaults fail closed.
 
 ### HIGH-15: Test with `pass` body hides missing coverage
 - **File:** `backend/tests/test_admin_user_management.py:696`
@@ -245,29 +244,25 @@ Claim Ledger:
 ## Dominant AI Failure Modes
 
 1. **happy-path-only** (3 instances): Retrieval evaluator returns CONFIDENT on empty input; token estimation uses naive heuristic; password check rejects valid passwords with whitespace
-2. **claim-hallucination** (3 instances): README claims xlsx/pptx support not in allowed_extensions; model defaults contradict actual docker-compose config; clone instructions reference wrong repo
+2. **claim-hallucination** (1 remaining instance): README claims xlsx/pptx support not in allowed_extensions. PR 9 resolved the stale model defaults and clone-directory drift.
 3. **context-rot** (1 instance): Dead callback functions in circuit_breaker.py from a prior API design
 4. **unwired-functionality** (1 instance): `max_context_chunks` parameter accepted but never applied
 
 ## Unsupported or Contradicted Claims
 
-### CONTRADICTED: README model defaults vs docker-compose defaults
-- README says embedding model is `nomic-embed-text`, docker-compose defaults to `bge-m3`
-- README says chat model is `qwen2.5:32b`, docker-compose defaults to `qwen3:8b`
-- README says `EMBEDDING_DIM=768`, but `bge-m3` produces 1024-dim embeddings
-- **Evidence:** `README.md:193-196` vs `docker-compose.yml:18-19`
+### RESOLVED: README model defaults vs docker-compose defaults
+- PR 9 aligned README and installation examples with Harrier TEI embeddings, `microsoft/harrier-oss-v1-0.6b`, 1024 dimensions, and the current thinking/instant chat defaults.
 
-### CONTRADICTED: README clone instructions reference wrong repo name
-- README says `cd RAGAPPv2` but the repo is `ragappv3`
-- **Evidence:** `README.md:131`
+### RESOLVED: README clone instructions reference wrong repo name
+- PR 9 changed the quick-start clone instructions to `cd ragappv3`.
 
 ### UNSUPPORTED: README claims xlsx and pptx support
 - README says "docx, xlsx, pptx, pdf, csv, sql, txt" but `config.py:198-214` `allowed_extensions` does NOT include `.xlsx` or `.pptx`
 - **Evidence:** `config.py:198-214` — set contains `.docx`, `.pdf`, `.csv`, `.sql`, `.txt` etc. but no `.xlsx`, `.pptx`
 
-### CONTRADICTED: README architecture diagram shows Ollama for embeddings
-- README shows `Ollama → nomic-embed-text` but docker-compose uses FlagEmbedding server (`flag-embed:18080`) with `bge-m3`
-- **Evidence:** `README.md:49-50` vs `docker-compose.yml:13-14`
+### RESOLVED: README architecture diagram shows stale embedding service
+- PR 9 updated the architecture diagram to show Harrier TEI for embeddings and Ollama only for chat.
+
 
 ## Stealth Changes
 
@@ -275,11 +270,11 @@ No stealth changes identified — all shipped behavior appears to correspond to 
 
 ## Supply Chain and Dependency Notes
 
-- **CRITICAL:** `PyJWT`, `bcrypt`, `passlib` missing from requirements.txt — app cannot authenticate
-- `numpy` imported by vector_store.py but not explicitly declared (likely transitive)
+- **RESOLVED:** `PyJWT`, `bcrypt`, and `passlib[bcrypt]` are declared directly in `requirements.txt`; PR 9 keeps the supply-chain notes current while adding direct `numpy` coverage.
+- `numpy` is now explicitly declared because vector_store.py imports it directly
 - `bleach>=6.0.0` is deprecated by Mozilla as of Jan 2023 — recommend `nh3`
 - `aioimaplib` is legitimate but low-download-count package — verified on PyPI
-- All other Python dependencies (`fastapi`, `uvicorn`, `httpx`, `pydantic`, `lancedb`, `pyarrow`, `pybreaker`, `unstructured`, `aiofiles`, `python-magic`, `slowapi`, `redis`, `sentence-transformers`, `cryptography`) are well-known, high-trust packages
+- All other Python dependencies (`fastapi`, `uvicorn`, `httpx`, `pydantic`, `lancedb`, `pyarrow`, `unstructured`, `aiofiles`, `python-magic`, `slowapi`, `redis`, `sentence-transformers`, `cryptography`) are well-known, high-trust packages
 - Frontend npm dependencies are all mainstream packages from verified publishers
 
 ## Coverage Notes

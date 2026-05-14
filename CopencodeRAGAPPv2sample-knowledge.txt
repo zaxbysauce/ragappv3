@@ -1,3 +1,0 @@
-KnowledgeVault compiles technical documents from multiple sources.
-It uses document processing, semantic chunking, and LanceDB vector search.
-Queries return answers with citations referencing the original file.

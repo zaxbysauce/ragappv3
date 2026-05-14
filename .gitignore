@@ -63,8 +63,12 @@ nul
 *.zip
 packaged_export/
 test_analysis.txt
+build.txt
+test-results.txt
+frontend/test-results.txt
 
 # Swarm local files
+.Codex/
 .swarm/
 opencodeRAGAPPv2-remote/
 opencodeRAGAPPv3-remote/
