@@ -6,6 +6,7 @@ This test suite verifies:
 """
 
 import os
+import shutil
 import sys
 import tempfile
 import threading
@@ -72,6 +73,7 @@ from app.api.deps import (
     get_embedding_service,
     get_vector_store,
 )
+from app.api.routes.documents import _allowed_document_roots, _path_is_within
 from app.config import settings
 from app.main import app
 from app.services.auth_service import create_access_token
@@ -280,8 +282,6 @@ class TestDocumentAuthBase(unittest.TestCase):
         if hasattr(self, "_connection_pool"):
             self._connection_pool.close_all()
 
-        import shutil
-
         shutil.rmtree(self._temp_dir, ignore_errors=True)
 
     def _get_db_conn(self):
@@ -348,6 +348,11 @@ class TestAuthentication(TestDocumentAuthBase):
     def test_delete_documents_by_id_unauthenticated(self):
         """DELETE /documents/{id} without auth returns 401."""
         response = self.client.delete("/api/documents/1")
+        self.assertEqual(response.status_code, 401)
+
+    def test_get_document_raw_unauthenticated(self):
+        """GET /documents/{id}/raw without auth returns 401."""
+        response = self.client.get("/api/documents/1/raw")
         self.assertEqual(response.status_code, 401)
 
     def test_post_documents_batch_unauthenticated(self):
@@ -485,6 +490,44 @@ class TestRoleAdminRequired(TestDocumentAuthBase):
 class TestReadAccess(TestDocumentAuthBase):
     """Tests for read access - members with read access can list documents."""
 
+    def _seed_document_file(
+        self,
+        file_id: int,
+        vault_id: int,
+        filename: str,
+        content: bytes,
+    ) -> Path:
+        file_path = settings.vault_uploads_dir(vault_id) / filename
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_bytes(content)
+
+        conn = self._get_db_conn()
+        try:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO files (
+                    id, file_name, file_path, file_size, file_type, status,
+                    chunk_count, vault_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    file_id,
+                    filename,
+                    str(file_path),
+                    len(content),
+                    Path(filename).suffix.lower(),
+                    "indexed",
+                    1,
+                    vault_id,
+                ),
+            )
+            conn.commit()
+        finally:
+            self._connection_pool.release_connection(conn)
+
+        return file_path
+
     def test_member_with_read_access_can_list_documents(self):
         """Member with read access can GET /documents."""
         # member_readonly (user 4) has READ permission on vault 3
@@ -506,6 +549,160 @@ class TestReadAccess(TestDocumentAuthBase):
         # Should succeed (200) or at least not 403
         self.assertNotEqual(response.status_code, 401)
         self.assertNotEqual(response.status_code, 403)
+
+    def test_member_with_read_access_can_fetch_pdf_raw_bytes(self):
+        """Member with read access can fetch inline PDF bytes."""
+        pdf_bytes = b"%PDF-1.4\n% test pdf\n"
+        self._seed_document_file(30, 3, "readable.pdf", pdf_bytes)
+
+        response = self.client.get(
+            "/api/documents/30/raw",
+            headers=self._auth_headers(self._member_readonly_token()),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, pdf_bytes)
+        self.assertIn("application/pdf", response.headers.get("content-type", ""))
+        self.assertIn("inline", response.headers.get("content-disposition", ""))
+        self.assertIn("readable.pdf", response.headers.get("content-disposition", ""))
+        self.assertEqual(response.headers.get("x-content-type-options"), "nosniff")
+
+    def test_member_with_read_access_can_fetch_non_pdf_raw_bytes(self):
+        """Non-PDF originals download instead of rendering active content inline."""
+        html_bytes = b"<script>window.opener.location='https://evil.example'</script>"
+        self._seed_document_file(34, 3, "preview.html", html_bytes)
+
+        response = self.client.get(
+            "/api/documents/34/raw",
+            headers=self._auth_headers(self._member_readonly_token()),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, html_bytes)
+        self.assertIn("text/html", response.headers.get("content-type", ""))
+        self.assertIn("attachment", response.headers.get("content-disposition", ""))
+        self.assertIn("preview.html", response.headers.get("content-disposition", ""))
+        self.assertEqual(response.headers.get("x-content-type-options"), "nosniff")
+
+    def test_member_without_read_access_cannot_fetch_raw_bytes(self):
+        """A file in another vault returns 403 before serving bytes."""
+        self._seed_document_file(31, 2, "private.pdf", b"%PDF-1.4\nprivate\n")
+
+        response = self.client.get(
+            "/api/documents/31/raw",
+            headers=self._auth_headers(self._member_no_access_token()),
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("No read access", response.text)
+
+    def test_document_raw_missing_row_returns_404(self):
+        """Missing document IDs return 404."""
+        response = self.client.get(
+            "/api/documents/404/raw",
+            headers=self._auth_headers(self._superadmin_token()),
+        )
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_document_raw_missing_file_returns_404(self):
+        """Missing files on disk return a controlled 404."""
+        missing_path = settings.vault_uploads_dir(3) / "missing.pdf"
+        conn = self._get_db_conn()
+        try:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO files (
+                    id, file_name, file_path, file_size, file_type, status,
+                    chunk_count, vault_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    32,
+                    "missing.pdf",
+                    str(missing_path),
+                    128,
+                    ".pdf",
+                    "indexed",
+                    1,
+                    3,
+                ),
+            )
+            conn.commit()
+        finally:
+            self._connection_pool.release_connection(conn)
+
+        response = self.client.get(
+            "/api/documents/32/raw",
+            headers=self._auth_headers(self._member_readonly_token()),
+        )
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_document_raw_rejects_paths_outside_document_roots(self):
+        """DB paths outside configured document roots are not served."""
+        outside_dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, outside_dir, ignore_errors=True)
+        outside_path = outside_dir / "outside.pdf"
+        outside_path.write_bytes(b"%PDF-1.4\noutside\n")
+        resolved_outside_path = outside_path.resolve(strict=False)
+        allowed_roots = [
+            root.resolve(strict=False) for root in _allowed_document_roots(settings, 3)
+        ]
+        self.assertFalse(
+            any(_path_is_within(resolved_outside_path, root) for root in allowed_roots)
+        )
+
+        conn = self._get_db_conn()
+        try:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO files (
+                    id, file_name, file_path, file_size, file_type, status,
+                    chunk_count, vault_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    33,
+                    "outside.pdf",
+                    str(outside_path),
+                    outside_path.stat().st_size,
+                    ".pdf",
+                    "indexed",
+                    1,
+                    3,
+                ),
+            )
+            conn.commit()
+        finally:
+            self._connection_pool.release_connection(conn)
+
+        response = self.client.get(
+            "/api/documents/33/raw",
+            headers=self._auth_headers(self._member_readonly_token()),
+        )
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_document_raw_serves_unknown_extension_as_attachment(self):
+        """Unknown MIME types are still downloadable without inline rendering."""
+        original_bytes = b"opaque bytes"
+        self._seed_document_file(35, 3, "archive.unknownext", original_bytes)
+
+        response = self.client.get(
+            "/api/documents/35/raw",
+            headers=self._auth_headers(self._member_readonly_token()),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, original_bytes)
+        self.assertIn(
+            "application/octet-stream", response.headers.get("content-type", "")
+        )
+        self.assertIn("attachment", response.headers.get("content-disposition", ""))
+        self.assertEqual(response.headers.get("x-content-type-options"), "nosniff")
 
     def test_document_search_matches_metadata_fields(self):
         """Document list search matches metadata, not only filename."""

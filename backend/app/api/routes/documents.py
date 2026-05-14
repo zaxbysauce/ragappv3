@@ -9,6 +9,7 @@ import asyncio
 import hashlib
 import hmac
 import logging
+import mimetypes
 import os
 import re
 import sqlite3
@@ -27,6 +28,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.deps import (
@@ -292,6 +294,24 @@ class DeleteAllVaultResponse(BaseModel):
 
     deleted_count: int
     vault_id: int
+
+
+def _path_is_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _allowed_document_roots(settings_dep: Settings, vault_id: int) -> list[Path]:
+    return [
+        settings_dep.vault_uploads_dir(vault_id),
+        settings_dep.vault_documents_dir(vault_id),
+        settings_dep.uploads_dir,
+        settings_dep.documents_dir,
+        settings_dep.library_dir,
+    ]
 
 
 def _row_to_document_response(row: sqlite3.Row) -> DocumentResponse:
@@ -624,6 +644,63 @@ async def get_document_status(
         wiki_phase=wiki_phase,
         wiki_job_id=wiki_job_id,
     )
+
+
+@router.get("/{file_id}/raw")
+async def get_document_raw(
+    file_id: int,
+    conn: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_active_user),
+    evaluate: Callable = Depends(get_evaluate_policy),
+    settings_dep: Settings = Depends(get_settings),
+):
+    """Stream original document bytes for authenticated users with vault read access."""
+    cursor = await asyncio.to_thread(
+        conn.execute,
+        """
+        SELECT id, vault_id, file_name, file_path
+        FROM files
+        WHERE id = ?
+        """,
+        (file_id,),
+    )
+    row = await asyncio.to_thread(cursor.fetchone)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    vault_id = row["vault_id"]
+    if not await evaluate(user, "vault", vault_id, "read"):
+        raise HTTPException(status_code=403, detail="No read access to this vault")
+
+    try:
+        file_path = Path(row["file_path"]).resolve(strict=False)
+    except (OSError, RuntimeError, TypeError, ValueError):
+        raise HTTPException(status_code=404, detail="Document file not found")
+
+    allowed_roots = [
+        root.resolve(strict=False) for root in _allowed_document_roots(settings_dep, vault_id)
+    ]
+    if not any(_path_is_within(file_path, root) for root in allowed_roots):
+        logger.warning(
+            "Refusing to serve document %s outside configured document roots: %s",
+            file_id,
+            file_path,
+        )
+        raise HTTPException(status_code=404, detail="Document file not found")
+
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Document file not found")
+
+    media_type = mimetypes.guess_type(row["file_name"])[0] or "application/octet-stream"
+    is_pdf = media_type == "application/pdf" or row["file_name"].lower().endswith(".pdf")
+    response = FileResponse(
+        path=file_path,
+        media_type=media_type,
+        filename=row["file_name"],
+        content_disposition_type="inline" if is_pdf else "attachment",
+    )
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
 
 
 def _safe_get(row, key: str, default=None):

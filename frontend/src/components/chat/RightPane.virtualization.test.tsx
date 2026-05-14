@@ -2,10 +2,15 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { RightPane } from "./RightPane";
 import * as useChatStoreModule from "@/stores/useChatStore";
 import * as useChatShellStoreModule from "@/stores/useChatShellStore";
+
+const apiMocks = vi.hoisted(() => ({
+  getChunkContext: vi.fn(),
+  getDocumentRawBlob: vi.fn(),
+}));
 
 // Mock @tanstack/react-virtual
 vi.mock("@tanstack/react-virtual", () => ({
@@ -87,6 +92,11 @@ vi.mock("@/stores/useChatShellStore", () => ({
   useChatShellStore: vi.fn(),
 }));
 
+vi.mock("@/lib/api", () => ({
+  getChunkContext: (...args: unknown[]) => apiMocks.getChunkContext(...args),
+  getDocumentRawBlob: (...args: unknown[]) => apiMocks.getDocumentRawBlob(...args),
+}));
+
 // Mock UI components with proper interactivity
 const mockOnValueChange = vi.fn();
 
@@ -121,11 +131,16 @@ vi.mock("@/components/ui/scroll-area", () => ({
 }));
 
 vi.mock("@/components/ui/button", () => ({
-  Button: ({ children, onClick, variant, size, ...props }: any) => (
-    <button data-testid={props["data-testid"]} onClick={onClick} {...props}>
-      {children}
-    </button>
-  ),
+  Button: ({ children, onClick, variant, size, asChild, ...props }: any) => {
+    if (asChild) {
+      return children;
+    }
+    return (
+      <button data-testid={props["data-testid"]} onClick={onClick} {...props}>
+        {children}
+      </button>
+    );
+  },
 }));
 
 const mockUseChatStore = useChatStoreModule.useChatStore as unknown as ReturnType<
@@ -169,6 +184,12 @@ describe("RightPane virtualization", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockOnValueChange.mockClear();
+    apiMocks.getChunkContext.mockRejectedValue(new Error("No context"));
+    apiMocks.getDocumentRawBlob.mockResolvedValue(
+      new Blob(["%PDF-1.4\n"], { type: "application/pdf" })
+    );
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:preview");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
 
     // Default store mocks
     mockUseChatStore.mockReturnValue({
@@ -579,6 +600,154 @@ describe("RightPane virtualization", () => {
 
       rerender(<RightPane />);
       expect(screen.getByLabelText("Sources list")).toBeInTheDocument();
+    });
+  });
+
+  describe("document preview", () => {
+    it("fetches document bytes through the authenticated API and targets the cited PDF page", async () => {
+      const source = createMockSource({
+        id: "src-pdf",
+        file_id: "42",
+        filename: "manual.pdf",
+        page_number: 5,
+      });
+      mockUseChatStore.mockReturnValue({
+        messages: [
+          createMockMessage({ role: "user", content: "manual" }),
+          createMockMessage({ role: "assistant", content: "response", sources: [source] }),
+        ],
+        expandedSources: new Set(),
+      });
+
+      render(<RightPane />);
+      fireEvent.click(screen.getByText("manual.pdf").closest("button")!);
+      fireEvent.click(await screen.findByRole("button", { name: /open document/i }));
+
+      await waitFor(() => {
+        expect(apiMocks.getDocumentRawBlob).toHaveBeenCalledWith(
+          "42",
+          expect.any(AbortSignal)
+        );
+      });
+      const frame = await screen.findByTitle("Preview of manual.pdf");
+      expect(frame).toHaveAttribute("src", "blob:preview#page=5");
+    });
+
+    it("uses metadata page numbers when source page_number is not flattened", async () => {
+      const source = createMockSource({
+        id: "src-metadata-page",
+        file_id: "45",
+        filename: "appendix.pdf",
+        metadata: { page_number: 9 },
+      });
+      mockUseChatStore.mockReturnValue({
+        messages: [
+          createMockMessage({ role: "user", content: "appendix" }),
+          createMockMessage({ role: "assistant", content: "response", sources: [source] }),
+        ],
+        expandedSources: new Set(),
+      });
+
+      render(<RightPane />);
+      fireEvent.click(screen.getByText("appendix.pdf").closest("button")!);
+      fireEvent.click(await screen.findByRole("button", { name: /open document/i }));
+
+      const frame = await screen.findByTitle("Preview of appendix.pdf");
+      expect(frame).toHaveAttribute("src", "blob:preview#page=9");
+    });
+
+    it("falls back to downloading the original for non-PDF sources", async () => {
+      apiMocks.getDocumentRawBlob.mockResolvedValueOnce(
+        new Blob(["<script>window.opener.location='https://evil.example'</script>"], {
+          type: "text/html",
+        })
+      );
+      const source = createMockSource({
+        id: "src-html",
+        file_id: "43",
+        filename: "preview.html",
+      });
+      mockUseChatStore.mockReturnValue({
+        messages: [
+          createMockMessage({ role: "user", content: "preview" }),
+          createMockMessage({ role: "assistant", content: "response", sources: [source] }),
+        ],
+        expandedSources: new Set(),
+      });
+
+      render(<RightPane />);
+      fireEvent.click(screen.getByText("preview.html").closest("button")!);
+      fireEvent.click(await screen.findByRole("button", { name: /open document/i }));
+
+      expect(await screen.findByText("Preview is available for PDF files.")).toBeInTheDocument();
+      const fallbackLink = screen.getByRole("link", { name: /download original/i });
+      expect(fallbackLink).toHaveAttribute("href", "blob:preview");
+      expect(fallbackLink).toHaveAttribute("download", "preview.html");
+      expect(fallbackLink).not.toHaveAttribute("target");
+    });
+
+    it("revokes object URLs when the preview unmounts", async () => {
+      const source = createMockSource({
+        id: "src-cleanup",
+        file_id: "44",
+        filename: "cleanup.pdf",
+      });
+      mockUseChatStore.mockReturnValue({
+        messages: [
+          createMockMessage({ role: "user", content: "cleanup" }),
+          createMockMessage({ role: "assistant", content: "response", sources: [source] }),
+        ],
+        expandedSources: new Set(),
+      });
+
+      const { unmount } = render(<RightPane />);
+      fireEvent.click(screen.getByText("cleanup.pdf").closest("button")!);
+      fireEvent.click(await screen.findByRole("button", { name: /open document/i }));
+
+      await screen.findByTitle("Preview of cleanup.pdf");
+      unmount();
+
+      expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:preview");
+    });
+
+    it("does not create a stale object URL when an aborted request resolves", async () => {
+      let resolveBlob!: (blob: Blob) => void;
+      apiMocks.getDocumentRawBlob.mockReturnValueOnce(
+        new Promise<Blob>((resolve) => {
+          resolveBlob = resolve;
+        })
+      );
+      const source = createMockSource({
+        id: "src-aborted",
+        file_id: "46",
+        filename: "aborted.pdf",
+      });
+      mockUseChatStore.mockReturnValue({
+        messages: [
+          createMockMessage({ role: "user", content: "abort" }),
+          createMockMessage({ role: "assistant", content: "response", sources: [source] }),
+        ],
+        expandedSources: new Set(),
+      });
+
+      const { unmount } = render(<RightPane />);
+      fireEvent.click(screen.getByText("aborted.pdf").closest("button")!);
+      fireEvent.click(await screen.findByRole("button", { name: /open document/i }));
+
+      await waitFor(() => {
+        expect(apiMocks.getDocumentRawBlob).toHaveBeenCalledWith(
+          "46",
+          expect.any(AbortSignal)
+        );
+      });
+      unmount();
+
+      await act(async () => {
+        resolveBlob(new Blob(["%PDF-1.4\n"], { type: "application/pdf" }));
+        await Promise.resolve();
+      });
+
+      expect(URL.createObjectURL).not.toHaveBeenCalled();
     });
   });
 });
