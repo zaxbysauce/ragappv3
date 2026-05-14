@@ -468,12 +468,12 @@ describe("DocumentsPage - Virtualization", () => {
       });
 
       await waitFor(() => {
-        const searchInput = container.querySelector('input[placeholder="Search documents..."]');
+        const searchInput = container.querySelector('input[placeholder="Search documents and metadata..."]');
         expect(searchInput).toBeTruthy();
       });
 
       // Type in search box
-      const searchInput = container.querySelector('input[placeholder="Search documents..."]') as HTMLInputElement;
+      const searchInput = container.querySelector('input[placeholder="Search documents and metadata..."]') as HTMLInputElement;
       await act(async () => {
         fireEvent.change(searchInput, { target: { value: "test" } });
       });

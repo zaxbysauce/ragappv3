@@ -8,7 +8,12 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from app.models.database import init_db, migrate_add_fork_columns
+from app.models.database import (
+    init_db,
+    migrate_add_files_search_fts,
+    migrate_add_fork_columns,
+    run_migrations,
+)
 
 
 class TestDatabaseSchema(unittest.TestCase):
@@ -92,6 +97,106 @@ class TestDatabaseSchema(unittest.TestCase):
                 table_names,
                 f"Required table '{table}' was not found after idempotent init_db() calls"
             )
+
+    def test_run_migrations_upgrades_legacy_files_table_before_files_fts(self):
+        """Legacy files schema should not trip FTS triggers that reference new columns."""
+        conn = sqlite3.connect(self.temp_db_path)
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE files (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_path TEXT NOT NULL,
+                    file_name TEXT NOT NULL,
+                    file_hash TEXT,
+                    file_size INTEGER NOT NULL,
+                    chunk_count INTEGER DEFAULT 0,
+                    status TEXT DEFAULT 'pending',
+                    error_message TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    processed_at TIMESTAMP
+                );
+                """
+            )
+            conn.execute(
+                "INSERT INTO files (file_path, file_name, file_size, status) VALUES (?, ?, ?, ?)",
+                ("/tmp/legacy.txt", "legacy.txt", 10, "indexed"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        run_migrations(self.temp_db_path)
+
+        conn = sqlite3.connect(self.temp_db_path)
+        try:
+            row = conn.execute(
+                "SELECT rowid FROM files_search_fts WHERE files_search_fts MATCH ?",
+                ("legacy*",),
+            ).fetchone()
+        finally:
+            conn.close()
+
+        self.assertIsNotNone(row)
+
+    def test_files_search_fts_migration_rebuilds_stale_legacy_triggers(self):
+        """Legacy files FTS triggers are dropped before missing metadata columns are added."""
+        conn = sqlite3.connect(self.temp_db_path)
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE files (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_path TEXT NOT NULL,
+                    file_name TEXT NOT NULL,
+                    file_hash TEXT,
+                    file_size INTEGER NOT NULL,
+                    chunk_count INTEGER DEFAULT 0,
+                    status TEXT DEFAULT 'pending',
+                    error_message TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    processed_at TIMESTAMP
+                );
+
+                CREATE VIRTUAL TABLE files_search_fts USING fts5(
+                    file_name,
+                    file_type,
+                    status,
+                    source,
+                    email_subject,
+                    email_sender,
+                    document_date,
+                    content='files',
+                    content_rowid='id'
+                );
+
+                CREATE TRIGGER files_search_fts_insert AFTER INSERT ON files BEGIN
+                    INSERT INTO files_search_fts(rowid, file_name, file_type, status, source, email_subject, email_sender, document_date)
+                    VALUES (new.id, new.file_name, new.file_type, new.status, new.source, new.email_subject, new.email_sender, new.document_date);
+                END;
+                """
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        migrate_add_files_search_fts(self.temp_db_path)
+
+        conn = sqlite3.connect(self.temp_db_path)
+        try:
+            conn.execute(
+                "INSERT INTO files (file_path, file_name, file_size, status) VALUES (?, ?, ?, ?)",
+                ("/tmp/recovered.txt", "recovered.txt", 10, "indexed"),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT rowid FROM files_search_fts WHERE files_search_fts MATCH ?",
+                ("recovered*",),
+            ).fetchone()
+        finally:
+            conn.close()
+
+        self.assertIsNotNone(row)
 
     def test_init_db_creates_fork_columns_on_chat_sessions(self):
         """Fresh databases should include fork metadata without migrations."""

@@ -581,6 +581,16 @@ export interface Source {
   score_type?: "distance" | "rerank" | "rrf";
 }
 
+export interface ChunkContextResponse {
+  id: string;
+  file_id: string;
+  filename: string;
+  chunk_index: number | string;
+  chunk_text: string;
+  context_text: string;
+  context_source: "parent_window" | "raw_text" | "chunk" | string;
+}
+
 /**
  * A memory the assistant referenced when generating a response.
  * Distinct from document sources: memories use the [M#] label space and
@@ -945,6 +955,13 @@ export async function deleteAllDocumentsInVault(vaultId: number): Promise<{ dele
 
 export async function getDocumentStats(vaultId?: number): Promise<DocumentStatsResponse> {
   const response = await apiClient.get<DocumentStatsResponse>("/documents/stats", vaultId != null ? { params: { vault_id: vaultId } } : undefined);
+  return response.data;
+}
+
+export async function getChunkContext(chunkId: string): Promise<ChunkContextResponse> {
+  const response = await apiClient.get<ChunkContextResponse>(
+    `/search/chunks/${encodeURIComponent(chunkId)}/context`
+  );
   return response.data;
 }
 
