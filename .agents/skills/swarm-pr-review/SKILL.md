@@ -28,13 +28,16 @@ Determine review scope using this priority:
 
 When scope is a PR URL or number and the branch is not checked out locally:
 
-1. Fetch the PR ref: `git fetch origin pull/{N}/head:pr-{N}`
-2. Create a detached worktree: `git worktree add .claude/worktrees/pr-{N} pr-{N}`
-3. Use the worktree path for all agent file reads — agents need local filesystem access to read PR files
-4. After review: `git worktree remove .claude/worktrees/pr-{N}` and `git branch -D pr-{N}`
-5. On Windows, also manually remove the worktree parent directory if git leaves it behind
+> GitHub-specific: `pull/{N}/head` is a GitHub refspec convention. For GitLab, Gitea, or Bitbucket, fetch the PR branch directly or use the platform's CLI.
 
-Rationale: Agents read files via the local filesystem. A detached worktree gives agents direct access to the PR's files without modifying the working tree, switching branches, or leaving uncommitted state.
+0. **Cleanup guard:** If a previous session left a stale worktree, remove it first: `git worktree remove --force .claude/worktrees/pr-{N}` (suppress errors if it doesn't exist)
+1. Fetch the PR ref: `git fetch origin pull/{N}/head:pr-{N}`
+2. Create a detached worktree: `git worktree add --detach .claude/worktrees/pr-{N} pr-{N}`
+3. Use the worktree path for all agent file reads — agents need local filesystem access to read PR files
+4. After review: `git worktree remove .claude/worktrees/pr-{N}` then `git branch -D pr-{N}`
+5. On Windows, also manually remove the worktree parent directory if git leaves it behind: `Remove-Item -Recurse -Force .claude/worktrees/pr-{N}`
+
+Rationale: A detached worktree gives agents direct access to the PR's files without modifying the working tree, switching branches, or leaving uncommitted state. Detachment makes cleanup order-independent — the branch can be deleted while the worktree exists.
 
 ---
 
