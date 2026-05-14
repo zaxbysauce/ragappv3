@@ -24,6 +24,18 @@ Determine review scope using this priority:
 3. staged changes
 4. latest commit
 
+### Remote PR checkout via worktree (when reviewing an unmerged PR)
+
+When scope is a PR URL or number and the branch is not checked out locally:
+
+1. Fetch the PR ref: `git fetch origin pull/{N}/head:pr-{N}`
+2. Create a detached worktree: `git worktree add .claude/worktrees/pr-{N} pr-{N}`
+3. Use the worktree path for all agent file reads — agents need local filesystem access to read PR files
+4. After review: `git worktree remove .claude/worktrees/pr-{N}` and `git branch -D pr-{N}`
+5. On Windows, also manually remove the worktree parent directory if git leaves it behind
+
+Rationale: Agents read files via the local filesystem. A detached worktree gives agents direct access to the PR's files without modifying the working tree, switching branches, or leaving uncommitted state.
+
 ---
 
 ## 6-Phase Review Workflow
