@@ -542,6 +542,26 @@ export default function DocumentsPage() {
     () => documents?.filter((doc) => !optimisticallyDeletedIds.has(doc.id)) ?? [],
     [documents, optimisticallyDeletedIds]
   );
+  const hasActiveSearch = searchQuery.trim().length > 0;
+  const hasStats = stats !== null;
+  const totalVaultDocuments = stats?.total_documents ?? 0;
+  const isResolvingSearchEmptyState = hasSelectedVault && hasActiveSearch && !hasStats;
+  const emptyState = !hasSelectedVault
+    ? {
+        title: "Select a vault to view documents",
+        description: "Documents are scoped to the active vault.",
+      }
+    : hasActiveSearch && totalVaultDocuments > 0
+      ? {
+          title: "No documents match your search",
+          description: "Search checks filename, type, status, source, sender, subject, and document date.",
+        }
+      : {
+          title: "No documents yet",
+          description: canWriteActiveVault
+            ? "Upload files to get started."
+            : "Documents will appear here when this vault has indexed files.",
+        };
 
   const tableVirtualizer = useVirtualizer({
     count: filteredDocuments.length,
@@ -922,7 +942,7 @@ export default function DocumentsPage() {
         <div className="relative flex-1 max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <Input
-            placeholder="Search documents..."
+            placeholder="Search documents and metadata..."
             className="pl-10"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
@@ -1043,11 +1063,16 @@ export default function DocumentsPage() {
             ))}
           </div>
         </>
+      ) : isResolvingSearchEmptyState ? (
+        <div className="space-y-3" role="status" aria-live="polite">
+          <Skeleton className="h-8 w-64" />
+          <Skeleton className="h-4 w-96 max-w-full" />
+        </div>
       ) : filteredDocuments.length === 0 ? (
         <EmptyState
           icon={FileText}
-          title={searchQuery ? "No documents match your search" : "No documents yet"}
-          description={searchQuery ? undefined : "Upload some files to get started."}
+          title={emptyState.title}
+          description={emptyState.description}
         />
       ) : (
         <>

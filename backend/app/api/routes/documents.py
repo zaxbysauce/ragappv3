@@ -350,13 +350,21 @@ def _row_to_document_response(row: sqlite3.Row) -> DocumentResponse:
     )
 
 
+def _build_files_fts_query(raw_search: str) -> str:
+    tokens = re.findall(r"[A-Za-z0-9_]+", raw_search.lower())
+    return " ".join(f"{token}*" for token in tokens[:8])
+
+
 @router.get("", response_model=DocumentListResponse)
 @router.get("/", response_model=DocumentListResponse)
 async def list_documents(
     vault_id: Optional[int] = Query(None, description="Filter by vault ID"),
     page: int = Query(1, ge=1, description="Page number (1-indexed)"),
     per_page: int = Query(50, ge=1, le=200, description="Items per page"),
-    search: Optional[str] = Query(None, description="Filter by filename (case-insensitive substring)"),
+    search: Optional[str] = Query(
+        None,
+        description="Filter by document name or metadata fields (case-insensitive substring)",
+    ),
     status: Optional[str] = Query(None, description="Filter by processing status"),
     conn: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_active_user),
@@ -367,7 +375,7 @@ async def list_documents(
 
     Returns a list of files with their id, file_name, file_path, status,
     chunk_count, created_at, and processed_at fields.
-    Optionally filter by vault_id, search (filename substring), or status.
+    Optionally filter by vault_id, search (document name/metadata substring), or status.
     Supports pagination via page/per_page.
     """
     offset = (page - 1) * per_page
@@ -376,8 +384,22 @@ async def list_documents(
     extra_where: list[str] = []
     extra_params: list = []
     if search and search.strip():
-        extra_where.append("LOWER(file_name) LIKE ?")
-        extra_params.append(f"%{search.strip().lower()}%")
+        fts_query = _build_files_fts_query(search.strip())
+        if fts_query:
+            extra_where.append(
+                """(
+                    LOWER(file_name) LIKE ?
+                    OR id IN (
+                        SELECT rowid FROM files_search_fts
+                        WHERE files_search_fts MATCH ?
+                    )
+                )"""
+            )
+            extra_params.append(f"%{search.strip().lower()}%")
+            extra_params.append(fts_query)
+        else:
+            extra_where.append("LOWER(file_name) LIKE ?")
+            extra_params.append(f"%{search.strip().lower()}%")
     if status and status.strip():
         extra_where.append("status = ?")
         extra_params.append(status.strip())

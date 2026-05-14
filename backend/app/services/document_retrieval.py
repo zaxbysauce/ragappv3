@@ -531,10 +531,14 @@ class DocumentRetrievalService:
             or chunk.metadata.get("heading")
             or ""
         )
-        # Construct unique ID per chunk to avoid duplicate React keys
+        # Prefer the persisted chunk UID so frontend lazy preview can fetch the
+        # exact indexed row, including reupload-safe hash-prefixed IDs.
         chunk_index = chunk.metadata.get("chunk_index", "")
         chunk_scale = chunk.metadata.get("chunk_scale", "")
-        if chunk_scale:
+        stored_chunk_id = chunk.metadata.get("_chunk_id") or chunk.metadata.get("chunk_uid")
+        if stored_chunk_id:
+            unique_id = str(stored_chunk_id)
+        elif chunk_scale:
             unique_id = f"{chunk.file_id}_{chunk_scale}_{chunk_index}"
         else:
             unique_id = f"{chunk.file_id}_{chunk_index}"

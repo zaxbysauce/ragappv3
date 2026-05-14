@@ -74,7 +74,7 @@ from app.api.deps import (
 )
 from app.config import settings
 from app.main import app
-from app.services.auth_service import create_access_token, hash_password
+from app.services.auth_service import create_access_token
 
 
 class SimpleConnectionPool:
@@ -193,7 +193,9 @@ class TestDocumentAuthBase(unittest.TestCase):
             conn.execute("DELETE FROM vault_members")
             conn.execute("DELETE FROM users WHERE id != 0")
 
-            pw = hash_password("testpass")
+            # These route tests authenticate with JWTs; the stored password hash
+            # is never verified, so keep setup independent from bcrypt backends.
+            pw = "test-password-hash"
 
             # User 1: superadmin
             conn.execute(
@@ -504,6 +506,118 @@ class TestReadAccess(TestDocumentAuthBase):
         # Should succeed (200) or at least not 403
         self.assertNotEqual(response.status_code, 401)
         self.assertNotEqual(response.status_code, 403)
+
+    def test_document_search_matches_metadata_fields(self):
+        """Document list search matches metadata, not only filename."""
+        conn = self._get_db_conn()
+        try:
+            conn.execute(
+                """
+                INSERT INTO files (
+                    id, file_name, file_path, file_size, file_type, status,
+                    chunk_count, vault_id, source, email_subject, email_sender,
+                    document_date
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    20,
+                    "budget.pdf",
+                    "/uploads/budget.pdf",
+                    100,
+                    "application/pdf",
+                    "indexed",
+                    1,
+                    2,
+                    "email",
+                    "Quarterly planning packet",
+                    "finance@example.com",
+                    "2026-05-13",
+                ),
+            )
+            conn.commit()
+        finally:
+            self._connection_pool.release_connection(conn)
+
+        response = self.client.get(
+            "/api/documents?vault_id=2&search=quarterly",
+            headers=self._auth_headers(self._member_token()),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        filenames = [doc["filename"] for doc in response.json()["documents"]]
+        self.assertEqual(filenames, ["budget.pdf"])
+
+    def test_document_search_preserves_filename_substring_matching(self):
+        """Filename search remains substring-based for existing UX expectations."""
+        response = self.client.get(
+            "/api/documents?vault_id=2&search=est_doc",
+            headers=self._auth_headers(self._member_token()),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        filenames = [doc["filename"] for doc in response.json()["documents"]]
+        self.assertEqual(filenames, ["test_doc.txt"])
+
+    def test_document_search_non_token_query_still_matches_filenames(self):
+        """Punctuation-only searches keep the legacy filename substring behavior."""
+        conn = self._get_db_conn()
+        try:
+            conn.execute(
+                """
+                INSERT INTO files (id, file_name, file_path, file_size, vault_id, status)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (997, "notes!!!.pdf", "/tmp/notes!!!.pdf", 128, 2, "indexed"),
+            )
+            conn.commit()
+        finally:
+            self._connection_pool.release_connection(conn)
+
+        response = self.client.get(
+            "/api/documents?vault_id=2&search=!!!",
+            headers=self._auth_headers(self._member_token()),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        filenames = [doc["filename"] for doc in response.json()["documents"]]
+        self.assertEqual(filenames, ["notes!!!.pdf"])
+
+    def test_document_search_fts_operator_text_is_escaped_to_tokens(self):
+        """FTS metacharacters are reduced to safe prefix tokens before MATCH."""
+        conn = self._get_db_conn()
+        try:
+            conn.execute(
+                """
+                INSERT INTO files (
+                    id, file_name, file_path, file_size, vault_id, status,
+                    source, email_subject
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    998,
+                    "operator-report.pdf",
+                    "/tmp/operator-report.pdf",
+                    128,
+                    2,
+                    "indexed",
+                    "email",
+                    'OR file_name MATCH x NEAR("unsafe")',
+                ),
+            )
+            conn.commit()
+        finally:
+            self._connection_pool.release_connection(conn)
+
+        response = self.client.get(
+            '/api/documents?vault_id=2&search=NEAR("unsafe")',
+            headers=self._auth_headers(self._member_token()),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        filenames = [doc["filename"] for doc in response.json()["documents"]]
+        self.assertEqual(filenames, ["operator-report.pdf"])
 
 
 if __name__ == "__main__":

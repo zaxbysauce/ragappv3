@@ -39,7 +39,7 @@ vi.mock('@/lib/api', () => ({
     claims_count: 0,
     lint_count: 0,
   }),
-  compileDocumentWiki: vi.fn().mockResolvedValue({}),
+  compileDocumentWiki: vi.fn().mockResolvedValue({ job_id: 1, status: 'queued' }),
   getDocumentStats: vi.fn().mockResolvedValue({
     total_documents: 2,
     total_chunks: 15,
@@ -145,7 +145,12 @@ vi.mock('@/components/shared/DocumentCard', () => ({
 }));
 
 vi.mock('@/components/shared/EmptyState', () => ({
-  EmptyState: () => <div data-testid="empty-state" />,
+  EmptyState: ({ title, description }: { title: string; description?: string }) => (
+    <div data-testid="empty-state">
+      <h2>{title}</h2>
+      {description && <p>{description}</p>}
+    </div>
+  ),
 }));
 
 vi.mock('@/lib/formatters', () => ({
@@ -164,6 +169,19 @@ describe('DocumentsPage - Drag to Resize Filename Column', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(listDocuments).mockResolvedValue({
+      documents: [
+        { id: '1', filename: 'test.pdf', size: 1024, created_at: '2024-01-01', metadata: { status: 'processed', chunk_count: 5 } },
+        { id: '2', filename: 'test2.pdf', size: 2048, created_at: '2024-01-02', metadata: { status: 'processed', chunk_count: 10 } },
+      ],
+      total: 2,
+    });
+    vi.mocked(getDocumentStats).mockResolvedValue({
+      total_documents: 2,
+      total_chunks: 15,
+      total_size_bytes: 3072,
+      documents_by_status: { processed: 2 },
+    });
     vi.mocked(useVaultStore).mockReturnValue({
       activeVaultId: null,
       vaults: [],
@@ -328,6 +346,98 @@ describe('DocumentsPage - Drag to Resize Filename Column', () => {
       expect(
         container.querySelector('input[aria-label="Select all documents"]')
       ).not.toBeDisabled();
+    });
+  });
+
+  describe('empty states', () => {
+    it('shows the no-documents state when the selected vault has no documents', async () => {
+      vi.mocked(useVaultStore).mockReturnValue({
+        activeVaultId: 2,
+        vaults: [{ id: 2, name: 'Writable Vault', current_user_permission: 'write' }],
+      } as ReturnType<typeof useVaultStore>);
+      vi.mocked(listDocuments).mockResolvedValueOnce({ documents: [], total: 0 });
+      vi.mocked(getDocumentStats).mockResolvedValueOnce({
+        total_documents: 0,
+        total_chunks: 0,
+        total_size_bytes: 0,
+        documents_by_status: {},
+      });
+
+      await act(async () => {
+        const result = render(<DocumentsPage />);
+        container = result.container;
+        unmount = result.unmount;
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText('No documents yet')).toBeInTheDocument();
+      });
+      expect(screen.getByText('Upload files to get started.')).toBeInTheDocument();
+    });
+
+    it('shows the no-search-matches state when a populated vault has no matching documents', async () => {
+      vi.mocked(useVaultStore).mockReturnValue({
+        activeVaultId: 2,
+        vaults: [{ id: 2, name: 'Admin Vault', current_user_permission: 'admin' }],
+      } as ReturnType<typeof useVaultStore>);
+      vi.mocked(listDocuments).mockResolvedValue({ documents: [], total: 0 });
+      vi.mocked(getDocumentStats).mockResolvedValueOnce({
+        total_documents: 2,
+        total_chunks: 10,
+        total_size_bytes: 2048,
+        documents_by_status: { indexed: 2 },
+      });
+
+      await act(async () => {
+        const result = render(<DocumentsPage />);
+        container = result.container;
+        unmount = result.unmount;
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText('No documents yet')).toBeInTheDocument();
+      });
+
+      const searchInput = container.querySelector(
+        'input[placeholder="Search documents and metadata..."]'
+      ) as HTMLInputElement;
+      fireEvent.change(searchInput, { target: { value: 'quarterly' } });
+
+      await waitFor(() => {
+        expect(screen.getByText('No documents match your search')).toBeInTheDocument();
+      });
+      expect(
+        screen.getByText('Search checks filename, type, status, source, sender, subject, and document date.')
+      ).toBeInTheDocument();
+    });
+
+    it('does not show the no-documents state for active search while stats are unavailable', async () => {
+      vi.mocked(useVaultStore).mockReturnValue({
+        activeVaultId: 2,
+        vaults: [{ id: 2, name: 'Admin Vault', current_user_permission: 'admin' }],
+      } as ReturnType<typeof useVaultStore>);
+      vi.mocked(listDocuments).mockResolvedValue({ documents: [], total: 0 });
+      vi.mocked(getDocumentStats).mockRejectedValueOnce(new Error('stats unavailable'));
+
+      await act(async () => {
+        const result = render(<DocumentsPage />);
+        container = result.container;
+        unmount = result.unmount;
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText('No documents yet')).toBeInTheDocument();
+      });
+
+      const searchInput = container.querySelector(
+        'input[placeholder="Search documents and metadata..."]'
+      ) as HTMLInputElement;
+      fireEvent.change(searchInput, { target: { value: 'quarterly' } });
+
+      await waitFor(() => {
+        expect(screen.getByRole('status')).toBeInTheDocument();
+      });
+      expect(screen.queryByText('No documents yet')).not.toBeInTheDocument();
     });
   });
 

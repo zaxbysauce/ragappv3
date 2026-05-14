@@ -12,6 +12,7 @@ Tests verify:
 Uses FastAPI TestClient with mocked embedding_service and vector_store.
 """
 
+import json
 import os
 import sys
 import tempfile
@@ -85,6 +86,7 @@ class FakeVectorStore:
 
     def __init__(self):
         self._initialized = False
+        self.chunk_records = []
 
     async def init_table(self, dimension: int):
         """Initialize the table with given dimension."""
@@ -104,6 +106,11 @@ class FakeVectorStore:
                 "_distance": 0.5,
             }
         ]
+
+    async def get_chunks_by_uid(self, chunk_uids: list[str]):
+        """Return fake chunks by UID."""
+        wanted = set(chunk_uids)
+        return [chunk for chunk in self.chunk_records if chunk.get("id") in wanted]
 
 
 class TestSearchAuth(unittest.TestCase):
@@ -146,10 +153,10 @@ class TestSearchAuth(unittest.TestCase):
         self.fake_embedding_service = FakeEmbeddingService()
         self.fake_vector_store = FakeVectorStore()
 
-        def get_fake_embedding_service(request):
+        def get_fake_embedding_service():
             return self.fake_embedding_service
 
-        def get_fake_vector_store(request):
+        def get_fake_vector_store():
             return self.fake_vector_store
 
         main_app.dependency_overrides[get_db] = get_test_db
@@ -485,6 +492,107 @@ class TestSearchAuth(unittest.TestCase):
         # Endpoint validates query is not empty/whitespace → returns 400
         # This is endpoint-level validation, not Pydantic validation
         self.assertIn(response.status_code, [400, 422])
+
+    def test_chunk_context_returns_parent_window_for_authorized_vault(self):
+        """GET /search/chunks/{id}/context returns stored parent-window text."""
+        conn = self.test_pool.get_connection()
+        try:
+            conn.execute(
+                """
+                INSERT INTO files (id, file_name, file_path, file_size, status, chunk_count, vault_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (42, "db-handbook.md", "/uploads/db-handbook.md", 100, "indexed", 1, self.accessible_vault_id),
+            )
+            conn.commit()
+        finally:
+            self.test_pool.release_connection(conn)
+
+        self.fake_vector_store.chunk_records = [
+            {
+                "id": "42_abc12345_default_0",
+                "text": "matched chunk",
+                "file_id": "42",
+                "vault_id": str(self.accessible_vault_id),
+                "chunk_index": 0,
+                "metadata": json.dumps(
+                    {
+                        "source_file": "handbook.md",
+                        "parent_window_text": "before matched chunk after",
+                        "raw_text": "matched chunk",
+                    }
+                ),
+            }
+        ]
+        token = self._create_jwt_token(self.member_user_id, "member_user", "member")
+
+        response = self.client.get(
+            "/api/search/chunks/42_abc12345_default_0/context",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        data = response.json()
+        self.assertEqual(data["id"], "42_abc12345_default_0")
+        self.assertEqual(data["context_text"], "before matched chunk after")
+        self.assertEqual(data["context_source"], "parent_window")
+        self.assertEqual(data["filename"], "db-handbook.md")
+        self.assertNotIn("metadata", data)
+
+    def test_chunk_context_hides_inaccessible_vault(self):
+        """Chunk context returns not found for inaccessible existing chunks."""
+        conn = self.test_pool.get_connection()
+        try:
+            conn.execute(
+                """
+                INSERT INTO files (id, file_name, file_path, file_size, status, chunk_count, vault_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (99, "restricted.md", "/uploads/restricted.md", 100, "indexed", 1, self.restricted_vault_id),
+            )
+            conn.commit()
+        finally:
+            self.test_pool.release_connection(conn)
+
+        self.fake_vector_store.chunk_records = [
+            {
+                "id": "99_0",
+                "text": "restricted chunk",
+                "file_id": "99",
+                "vault_id": str(self.restricted_vault_id),
+                "chunk_index": 0,
+                "metadata": "{}",
+            }
+        ]
+        token = self._create_jwt_token(self.member_user_id, "member_user", "member")
+
+        response = self.client.get(
+            "/api/search/chunks/99_0/context",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        self.assertEqual(response.status_code, 404, response.text)
+        inaccessible_body = response.json()
+
+        missing_response = self.client.get(
+            "/api/search/chunks/missing/context",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        self.assertEqual(missing_response.status_code, 404, missing_response.text)
+        self.assertEqual(inaccessible_body, missing_response.json())
+
+    def test_chunk_context_missing_chunk_returns_same_not_found(self):
+        """Missing chunk and inaccessible chunk share the same response status."""
+        token = self._create_jwt_token(self.member_user_id, "member_user", "member")
+
+        response = self.client.get(
+            "/api/search/chunks/missing/context",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        self.assertEqual(response.status_code, 404, response.text)
+        self.assertEqual(response.json(), {"detail": "Chunk not found"})
 
 
 if __name__ == "__main__":

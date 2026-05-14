@@ -62,6 +62,36 @@ CREATE TABLE IF NOT EXISTS files (
     FOREIGN KEY (vault_id) REFERENCES vaults(id)
 );
 
+-- Full-text search index for document list metadata search
+CREATE VIRTUAL TABLE IF NOT EXISTS files_search_fts USING fts5(
+    file_name,
+    file_type,
+    status,
+    source,
+    email_subject,
+    email_sender,
+    document_date,
+    content='files',
+    content_rowid='id'
+);
+
+CREATE TRIGGER IF NOT EXISTS files_search_fts_insert AFTER INSERT ON files BEGIN
+    INSERT INTO files_search_fts(rowid, file_name, file_type, status, source, email_subject, email_sender, document_date)
+    VALUES (new.id, new.file_name, new.file_type, new.status, new.source, new.email_subject, new.email_sender, new.document_date);
+END;
+
+CREATE TRIGGER IF NOT EXISTS files_search_fts_delete AFTER DELETE ON files BEGIN
+    INSERT INTO files_search_fts(files_search_fts, rowid, file_name, file_type, status, source, email_subject, email_sender, document_date)
+    VALUES ('delete', old.id, old.file_name, old.file_type, old.status, old.source, old.email_subject, old.email_sender, old.document_date);
+END;
+
+CREATE TRIGGER IF NOT EXISTS files_search_fts_update AFTER UPDATE ON files BEGIN
+    INSERT INTO files_search_fts(files_search_fts, rowid, file_name, file_type, status, source, email_subject, email_sender, document_date)
+    VALUES ('delete', old.id, old.file_name, old.file_type, old.status, old.source, old.email_subject, old.email_sender, old.document_date);
+    INSERT INTO files_search_fts(rowid, file_name, file_type, status, source, email_subject, email_sender, document_date)
+    VALUES (new.id, new.file_name, new.file_type, new.status, new.source, new.email_subject, new.email_sender, new.document_date);
+END;
+
 -- Memories table: stores processed document chunks with embeddings
 CREATE TABLE IF NOT EXISTS memories (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -512,6 +542,31 @@ def init_db(sqlite_path: str) -> None:
         conn.execute("PRAGMA busy_timeout=30000;")
         conn.execute("PRAGMA foreign_keys = ON;")
         migrate_add_user_id_to_chat_sessions(sqlite_path, conn=conn)
+        existing_tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        if "files" in existing_tables:
+            existing_file_cols = {
+                row[1] for row in conn.execute("PRAGMA table_info(files)").fetchall()
+            }
+            for name, ddl in (
+                ("vault_id", "INTEGER NOT NULL DEFAULT 1"),
+                ("file_size", "INTEGER DEFAULT 0"),
+                ("file_type", "TEXT"),
+                ("source", "TEXT NOT NULL DEFAULT 'upload'"),
+                ("email_subject", "TEXT"),
+                ("email_sender", "TEXT"),
+                ("modified_at", "TIMESTAMP DEFAULT NULL"),
+                ("document_date", "TEXT"),
+                ("supersedes_file_id", "INTEGER"),
+                ("ingestion_version", "INTEGER DEFAULT 1"),
+                ("wiki_pending", "INTEGER NOT NULL DEFAULT 0"),
+            ):
+                if name not in existing_file_cols:
+                    conn.execute(f"ALTER TABLE files ADD COLUMN {name} {ddl}")
         conn.executescript(SCHEMA)
         # Ensure default vault exists
         conn.execute(
@@ -599,6 +654,7 @@ def run_migrations(sqlite_path: str) -> None:
     migrate_add_wiki_jobs_retry_count(sqlite_path)
     migrate_add_files_parsed_text(sqlite_path)
     migrate_add_files_processing_progress(sqlite_path)
+    migrate_add_files_search_fts(sqlite_path)
     migrate_add_curator_claim_support(sqlite_path)
 
     # Add partial unique index for duplicate hash detection (HIGH-10)
@@ -1629,6 +1685,87 @@ def migrate_add_files_processing_progress(sqlite_path: str) -> None:
             "ON files(file_hash, vault_id, status)"
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def migrate_add_files_search_fts(sqlite_path: str) -> None:
+    """Create and backfill the document-list metadata FTS index."""
+    conn = sqlite3.connect(sqlite_path)
+    try:
+        def _drop_files_search_fts() -> None:
+            for trigger in (
+                "files_search_fts_insert",
+                "files_search_fts_delete",
+                "files_search_fts_update",
+            ):
+                conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+            conn.execute("DROP TABLE IF EXISTS files_search_fts")
+
+        existing_cols = {
+            row[1] for row in conn.execute("PRAGMA table_info(files)").fetchall()
+        }
+        # init_db() may have created FTS triggers before a legacy files table
+        # gained newer metadata columns. Drop them before ALTER TABLE so SQLite
+        # never has to compile triggers that reference missing OLD/NEW columns.
+        if not {
+            "file_type",
+            "source",
+            "email_subject",
+            "email_sender",
+            "document_date",
+        }.issubset(existing_cols):
+            _drop_files_search_fts()
+
+        for name, ddl in (
+            ("file_type", "TEXT"),
+            ("source", "TEXT NOT NULL DEFAULT 'upload'"),
+            ("email_subject", "TEXT"),
+            ("email_sender", "TEXT"),
+            ("document_date", "TEXT"),
+            ("supersedes_file_id", "INTEGER"),
+            ("ingestion_version", "INTEGER DEFAULT 1"),
+        ):
+            if name not in existing_cols:
+                conn.execute(f"ALTER TABLE files ADD COLUMN {name} {ddl}")
+
+        conn.executescript(
+            """
+            CREATE VIRTUAL TABLE IF NOT EXISTS files_search_fts USING fts5(
+                file_name,
+                file_type,
+                status,
+                source,
+                email_subject,
+                email_sender,
+                document_date,
+                content='files',
+                content_rowid='id'
+            );
+
+            CREATE TRIGGER IF NOT EXISTS files_search_fts_insert AFTER INSERT ON files BEGIN
+                INSERT INTO files_search_fts(rowid, file_name, file_type, status, source, email_subject, email_sender, document_date)
+                VALUES (new.id, new.file_name, new.file_type, new.status, new.source, new.email_subject, new.email_sender, new.document_date);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS files_search_fts_delete AFTER DELETE ON files BEGIN
+                INSERT INTO files_search_fts(files_search_fts, rowid, file_name, file_type, status, source, email_subject, email_sender, document_date)
+                VALUES ('delete', old.id, old.file_name, old.file_type, old.status, old.source, old.email_subject, old.email_sender, old.document_date);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS files_search_fts_update AFTER UPDATE ON files BEGIN
+                INSERT INTO files_search_fts(files_search_fts, rowid, file_name, file_type, status, source, email_subject, email_sender, document_date)
+                VALUES ('delete', old.id, old.file_name, old.file_type, old.status, old.source, old.email_subject, old.email_sender, old.document_date);
+                INSERT INTO files_search_fts(rowid, file_name, file_type, status, source, email_subject, email_sender, document_date)
+                VALUES (new.id, new.file_name, new.file_type, new.status, new.source, new.email_subject, new.email_sender, new.document_date);
+            END;
+            """
+        )
+        conn.execute("INSERT INTO files_search_fts(files_search_fts) VALUES('rebuild')")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 

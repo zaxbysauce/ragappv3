@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { FileText, Table, Code, ExternalLink, BookOpen, Layers } from "lucide-react";
+import { FileText, Table, Code, ExternalLink, BookOpen, Layers, Loader2 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -16,7 +16,7 @@ import {
   parseCompletedAssistantIds,
 } from "@/stores/useChatStore";
 import { useChatShellStore } from "@/stores/useChatShellStore";
-import type { Source } from "@/lib/api";
+import { getChunkContext, type ChunkContextResponse, type Source } from "@/lib/api";
 import { WikiCards } from "./WikiCards";
 import { getRelevanceLabel, type ScoreType } from "@/lib/relevance";
 import { EmptyState } from "@/components/shared/EmptyState";
@@ -263,11 +263,40 @@ interface SourcePreviewProps {
 }
 
 function SourcePreview({ source, query, onJumpToAnswer }: SourcePreviewProps) {
-  const content = source.snippet || "";
+  const [chunkContext, setChunkContext] = useState<ChunkContextResponse | null>(null);
+  const [isLoadingContext, setIsLoadingContext] = useState(false);
+  const [contextError, setContextError] = useState<string | null>(null);
+  const previewContent = chunkContext?.context_text || source.snippet || "";
   const highlightedContent = useMemo(
-    () => highlightQueryTerms(content, query),
-    [content, query]
+    () => highlightQueryTerms(previewContent, query),
+    [previewContent, query]
   );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    setChunkContext(null);
+    setContextError(null);
+    if (!source.id) return;
+
+    setIsLoadingContext(true);
+    getChunkContext(source.id)
+      .then((context) => {
+        if (!cancelled) setChunkContext(context);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setContextError(err instanceof Error ? err.message : "Could not load source context");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingContext(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [source.id]);
 
   return (
     <div className="flex flex-col h-full min-h-0 gap-4">
@@ -282,9 +311,27 @@ function SourcePreview({ source, query, onJumpToAnswer }: SourcePreviewProps) {
         </Button>
       </div>
 
-      {source.snippet && (
-        <div className="text-xs text-muted-foreground italic truncate flex-shrink-0">
-          {source.snippet}
+      {(source.snippet || chunkContext?.context_source || isLoadingContext || contextError) && (
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground flex-shrink-0">
+          {isLoadingContext && (
+            <span className="inline-flex items-center gap-1">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Loading context
+            </span>
+          )}
+          {chunkContext?.context_source && (
+            <span className="rounded border border-border px-1.5 py-0.5">
+              {chunkContext.context_source === "parent_window" ? "Document context" : "Chunk context"}
+            </span>
+          )}
+          {contextError && (
+            <span className="text-warning-foreground">{contextError}</span>
+          )}
+          {source.snippet && (
+            <span className="min-w-0 flex-1 truncate italic">
+              {source.snippet}
+            </span>
+          )}
         </div>
       )}
 
@@ -299,7 +346,7 @@ function SourcePreview({ source, query, onJumpToAnswer }: SourcePreviewProps) {
 
       <ScrollArea className="flex-1 min-h-0 rounded-md border p-4">
         <div className="text-sm leading-relaxed whitespace-pre-wrap">
-          {highlightedContent}
+          {previewContent ? highlightedContent : "No preview content available."}
         </div>
       </ScrollArea>
     </div>

@@ -6,6 +6,7 @@ import { render, screen, fireEvent, waitFor, act } from "@testing-library/react"
 import { RightPane } from "./RightPane";
 import * as useChatStoreModule from "@/stores/useChatStore";
 import * as useChatShellStoreModule from "@/stores/useChatStore";
+import { getChunkContext } from "@/lib/api";
 
 // Mock the stores
 vi.mock("@/stores/useChatStore", () => {
@@ -80,6 +81,18 @@ vi.mock("@/stores/useChatShellStore", () => ({
   })),
 }));
 
+vi.mock("@/lib/api", () => ({
+  getChunkContext: vi.fn().mockResolvedValue({
+    id: "src-1",
+    file_id: "1",
+    filename: "doc.pdf",
+    chunk_index: 0,
+    chunk_text: "Snippet content",
+    context_text: "Expanded source context",
+    context_source: "parent_window",
+  }),
+}));
+
 // Mock UI components with proper interactivity
 const mockOnValueChange = vi.fn();
 
@@ -152,6 +165,15 @@ describe("RightPane", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockOnValueChange.mockClear();
+    vi.mocked(getChunkContext).mockResolvedValue({
+      id: "src-1",
+      file_id: "1",
+      filename: "doc.pdf",
+      chunk_index: 0,
+      chunk_text: "Snippet content",
+      context_text: "Expanded source context",
+      context_source: "parent_window",
+    });
   });
 
   // =============================================================================
@@ -982,6 +1004,41 @@ print("hello")
       // After selection, preview tab would show source content
       await waitFor(() => {
         expect(screen.getByTestId("tab-preview")).toBeInTheDocument();
+      });
+    });
+
+    it("fetches expanded context only after selecting a source", async () => {
+      const sources = [
+        createMockSource({
+          id: "src-1",
+          filename: "doc.pdf",
+          snippet: "Short snippet",
+        }),
+      ];
+
+      mockUseChatStore.mockReturnValue({
+        messages: [
+          createMockMessage({ role: "user", content: "test" }),
+          createMockMessage({ role: "assistant", content: "response", sources }),
+        ],
+        expandedSources: new Set(),
+      });
+
+      render(<RightPane />);
+
+      expect(getChunkContext).not.toHaveBeenCalled();
+
+      const sourceButton = screen.getAllByRole("button").find(btn =>
+        btn.textContent?.includes("doc.pdf")
+      );
+      expect(sourceButton).toBeInTheDocument();
+      fireEvent.click(sourceButton!);
+
+      await waitFor(() => {
+        expect(getChunkContext).toHaveBeenCalledWith("src-1");
+      });
+      await waitFor(() => {
+        expect(screen.getByText("Expanded source context")).toBeInTheDocument();
       });
     });
 
