@@ -1,4 +1,4 @@
-import { memo, useMemo, useEffect, useState } from "react";
+import { isValidElement, memo, useMemo, useEffect, useState } from "react";
 import type { ReactNode, HTMLAttributes } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -15,6 +15,27 @@ type HighlightFn = (code: string, lang: string) => Promise<string>;
 
 let _highlightFn: HighlightFn | null = null;
 let _highlightPromise: Promise<HighlightFn> | null = null;
+
+function escapeCodeHtml(code: string) {
+  return code
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function renderPlainCodeHtml(code: string) {
+  return `<pre><code>${escapeCodeHtml(code)}</code></pre>`;
+}
+
+function codeChildrenToText(children: ReactNode): string {
+  if (Array.isArray(children)) {
+    return children.map(codeChildrenToText).join("");
+  }
+  if (children === null || children === undefined || typeof children === "boolean") {
+    return "";
+  }
+  return String(children);
+}
 
 function loadHighlighter(): Promise<HighlightFn> {
   if (_highlightFn) return Promise.resolve(_highlightFn);
@@ -52,7 +73,7 @@ function loadHighlighter(): Promise<HighlightFn> {
       return fn;
     } catch {
       // Shiki unavailable — return no-op so code still renders as plain text
-      const fn: HighlightFn = (code) => Promise.resolve(`<pre><code>${code}</code></pre>`);
+      const fn: HighlightFn = (code) => Promise.resolve(renderPlainCodeHtml(code));
       _highlightFn = fn;
       return fn;
     }
@@ -111,6 +132,11 @@ const CodeBlock = memo(function CodeBlock({ language, code }: CodeBlockProps) {
     </div>
   );
 });
+
+export const MarkdownMessageTestInternals = {
+  codeChildrenToText,
+  renderPlainCodeHtml,
+};
 
 // =============================================================================
 // Citation-aware markdown renderer
@@ -475,20 +501,29 @@ export const MarkdownMessage = memo(function MarkdownMessage({
             }
             return <span {...props} />;
           },
-          code: ({ className, children }) => {
-            const isBlock = Boolean(className?.startsWith("language-"));
-            if (!isBlock) {
-              return (
-                <code className="bg-muted px-1 py-0.5 rounded text-[0.85em] font-mono">
-                  {children}
-                </code>
-              );
+          code: ({ className, children }) => (
+            <code
+              className={
+                className?.startsWith("language-")
+                  ? className
+                  : "bg-muted px-1 py-0.5 rounded text-[0.85em] font-mono"
+              }
+            >
+              {children}
+            </code>
+          ),
+          pre: ({ children }) => {
+            const codeElement = Array.isArray(children) ? children[0] : children;
+            if (!isValidElement<{ className?: string; children?: ReactNode }>(codeElement)) {
+              return <pre>{children}</pre>;
             }
-            const lang = className?.replace("language-", "") ?? "";
-            const codeText = String(children).replace(/\n$/, "");
+            const className = codeElement.props.className;
+            const lang = className?.startsWith("language-")
+              ? className.replace("language-", "")
+              : "";
+            const codeText = codeChildrenToText(codeElement.props.children).replace(/\n$/, "");
             return <CodeBlock language={lang} code={codeText} />;
           },
-          pre: ({ children }) => <>{children}</>,
           table: ({ children }) => (
             <div className="overflow-x-auto my-3">
               <table className="border-collapse border border-border text-sm w-full">{children}</table>
