@@ -686,6 +686,29 @@ groups:
 
 ## Release Notes
 
+### Version 0.3.0 (PDF/document viewer - Issue #54)
+
+#### New Features
+
+- Added an authenticated raw-document endpoint for users with vault read access.
+- Added a code-split PDF preview panel that can open cited source documents at the referenced page.
+- Added a non-PDF fallback that downloads original files instead of rendering active content inline.
+
+#### Security
+
+- Raw document responses now validate stored file paths against configured document roots before serving bytes.
+- Non-PDF raw responses are served as attachments with `X-Content-Type-Options: nosniff`.
+
+#### Migration Steps
+
+No database or configuration migration is required.
+
+#### Breaking Changes
+
+None.
+
+---
+
 ### Version 0.2.1 (PR1 performance quick wins — Issue #20)
 
 #### Performance Improvements

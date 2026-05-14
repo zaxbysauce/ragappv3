@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect, useRef } from "react";
+import { lazy, Suspense, useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { FileText, Table, Code, ExternalLink, BookOpen, Layers, Loader2 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -16,10 +16,12 @@ import {
   parseCompletedAssistantIds,
 } from "@/stores/useChatStore";
 import { useChatShellStore } from "@/stores/useChatShellStore";
-import { getChunkContext, type ChunkContextResponse, type Source } from "@/lib/api";
+import { getChunkContext, getDocumentRawBlob, type ChunkContextResponse, type Source } from "@/lib/api";
 import { WikiCards } from "./WikiCards";
 import { getRelevanceLabel, type ScoreType } from "@/lib/relevance";
 import { EmptyState } from "@/components/shared/EmptyState";
+
+const PdfPreview = lazy(() => import("@/components/preview/PdfPreview"));
 
 interface StructuredOutput {
   id: string;
@@ -266,11 +268,26 @@ function SourcePreview({ source, query, onJumpToAnswer }: SourcePreviewProps) {
   const [chunkContext, setChunkContext] = useState<ChunkContextResponse | null>(null);
   const [isLoadingContext, setIsLoadingContext] = useState(false);
   const [contextError, setContextError] = useState<string | null>(null);
+  const [documentPreview, setDocumentPreview] = useState<{
+    url: string;
+    isPdf: boolean;
+    filename: string;
+  } | null>(null);
+  const [isLoadingDocument, setIsLoadingDocument] = useState(false);
+  const [documentError, setDocumentError] = useState<string | null>(null);
+  const documentAbortRef = useRef<AbortController | null>(null);
   const previewContent = chunkContext?.context_text || source.snippet || "";
   const highlightedContent = useMemo(
     () => highlightQueryTerms(previewContent, query),
     [previewContent, query]
   );
+  const sourceFileId = source.file_id;
+  const sourcePageNumber =
+    typeof source.page_number === "number"
+      ? source.page_number
+      : typeof source.metadata?.page_number === "number"
+        ? source.metadata.page_number
+        : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -298,6 +315,57 @@ function SourcePreview({ source, query, onJumpToAnswer }: SourcePreviewProps) {
     };
   }, [source.id]);
 
+  useEffect(() => {
+    setDocumentError(null);
+    setIsLoadingDocument(false);
+    documentAbortRef.current?.abort();
+    documentAbortRef.current = null;
+    setDocumentPreview((current) => {
+      if (current) URL.revokeObjectURL(current.url);
+      return null;
+    });
+  }, [source.id]);
+
+  useEffect(() => {
+    return () => {
+      documentAbortRef.current?.abort();
+      if (documentPreview) URL.revokeObjectURL(documentPreview.url);
+    };
+  }, [documentPreview]);
+
+  const handleOpenDocument = useCallback(async () => {
+    if (!sourceFileId) return;
+
+    documentAbortRef.current?.abort();
+    const controller = new AbortController();
+    documentAbortRef.current = controller;
+    setIsLoadingDocument(true);
+    setDocumentError(null);
+
+    try {
+      const blob = await getDocumentRawBlob(sourceFileId, controller.signal);
+      if (controller.signal.aborted || documentAbortRef.current !== controller) return;
+      const nextUrl = URL.createObjectURL(blob);
+      const contentType = blob.type.toLowerCase();
+      const isPdf =
+        contentType.includes("pdf") || source.filename.toLowerCase().endsWith(".pdf");
+      setDocumentPreview((current) => {
+        if (current) URL.revokeObjectURL(current.url);
+        return { url: nextUrl, isPdf, filename: source.filename };
+      });
+    } catch (err) {
+      if (controller.signal.aborted) return;
+      setDocumentError(
+        err instanceof Error ? err.message : "Could not open original document"
+      );
+    } finally {
+      if (!controller.signal.aborted) {
+        setIsLoadingDocument(false);
+        documentAbortRef.current = null;
+      }
+    }
+  }, [source.filename, sourceFileId]);
+
   return (
     <div className="flex flex-col h-full min-h-0 gap-4">
       <div className="flex items-center justify-between flex-shrink-0">
@@ -305,13 +373,30 @@ function SourcePreview({ source, query, onJumpToAnswer }: SourcePreviewProps) {
           <FileText className="h-4 w-4 text-primary" />
           <h3 className="font-semibold">{source.filename}</h3>
         </div>
-        <Button variant="ghost" size="sm" onClick={onJumpToAnswer}>
-          <ExternalLink className="h-3.5 w-3.5 mr-1" />
-          Jump to answer
-        </Button>
+        <div className="flex items-center gap-1">
+          {sourceFileId && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleOpenDocument}
+              disabled={isLoadingDocument}
+            >
+              {isLoadingDocument ? (
+                <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+              ) : (
+                <FileText className="h-3.5 w-3.5 mr-1" />
+              )}
+              Open document
+            </Button>
+          )}
+          <Button variant="ghost" size="sm" onClick={onJumpToAnswer}>
+            <ExternalLink className="h-3.5 w-3.5 mr-1" />
+            Jump to answer
+          </Button>
+        </div>
       </div>
 
-      {(source.snippet || chunkContext?.context_source || isLoadingContext || contextError) && (
+      {(source.snippet || chunkContext?.context_source || isLoadingContext || contextError || documentError) && (
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground flex-shrink-0">
           {isLoadingContext && (
             <span className="inline-flex items-center gap-1">
@@ -326,6 +411,9 @@ function SourcePreview({ source, query, onJumpToAnswer }: SourcePreviewProps) {
           )}
           {contextError && (
             <span className="text-warning-foreground">{contextError}</span>
+          )}
+          {documentError && (
+            <span className="text-warning-foreground">{documentError}</span>
           )}
           {source.snippet && (
             <span className="min-w-0 flex-1 truncate italic">
@@ -344,11 +432,31 @@ function SourcePreview({ source, query, onJumpToAnswer }: SourcePreviewProps) {
         </div>
       )}
 
-      <ScrollArea className="flex-1 min-h-0 rounded-md border p-4">
-        <div className="text-sm leading-relaxed whitespace-pre-wrap">
-          {previewContent ? highlightedContent : "No preview content available."}
+      {documentPreview ? (
+        <div className="flex-1 min-h-0">
+          <Suspense
+            fallback={
+              <div className="flex h-full items-center justify-center rounded-md border text-sm text-muted-foreground">
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Loading viewer
+              </div>
+            }
+          >
+            <PdfPreview
+              blobUrl={documentPreview.url}
+              filename={documentPreview.filename}
+              isPdf={documentPreview.isPdf}
+              pageNumber={sourcePageNumber}
+            />
+          </Suspense>
         </div>
-      </ScrollArea>
+      ) : (
+        <ScrollArea className="flex-1 min-h-0 rounded-md border p-4">
+          <div className="text-sm leading-relaxed whitespace-pre-wrap">
+            {previewContent ? highlightedContent : "No preview content available."}
+          </div>
+        </ScrollArea>
+      )}
     </div>
   );
 }

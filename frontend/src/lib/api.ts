@@ -576,9 +576,11 @@ export interface Source {
   section?: string;
   source_label?: string;
   evidence_type?: "primary" | "supporting";
+  page_number?: number | null;
   snippet?: string;
   score?: number;
   score_type?: "distance" | "rerank" | "rrf";
+  metadata?: Record<string, unknown>;
 }
 
 export interface ChunkContextResponse {
@@ -935,6 +937,20 @@ export async function getDocumentStatus(
 ): Promise<DocumentStatusResponse> {
   const response = await apiClient.get<DocumentStatusResponse>(
     `/documents/${fileId}/status`
+  );
+  return response.data;
+}
+
+export async function getDocumentRawBlob(
+  fileId: string | number,
+  signal?: AbortSignal
+): Promise<Blob> {
+  const response = await apiClient.get<Blob>(
+    `/documents/${fileId}/raw`,
+    {
+      responseType: "blob",
+      signal,
+    }
   );
   return response.data;
 }
