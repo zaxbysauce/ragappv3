@@ -133,6 +133,15 @@ class TestVaultEndpoints(unittest.TestCase):
         init_db(db_path)
         self._connection_pool = SimpleConnectionPool(db_path)
 
+        # Insert a test user for FK constraints on vault_members
+        conn = self._connection_pool.get_connection()
+        conn.execute(
+            "INSERT INTO users (id, username, hashed_password, role, is_active) VALUES (?, ?, ?, ?, ?)",
+            (1, "admin", "abc123", "superadmin", 1),
+        )
+        conn.commit()
+        self._connection_pool.release_connection(conn)
+
         def override_get_db():
             conn = self._connection_pool.get_connection()
             try:
@@ -146,11 +155,20 @@ class TestVaultEndpoints(unittest.TestCase):
 
         app.dependency_overrides[get_db] = override_get_db
         app.dependency_overrides[get_vector_store] = lambda: self._mock_vector_store
+        app.dependency_overrides[get_current_active_user] = lambda: {
+            "id": 1,
+            "username": "admin",
+            "full_name": "Admin",
+            "role": "superadmin",
+            "is_active": True,
+            "must_change_password": False,
+        }
         self._db_path = db_path
 
     def tearDown(self):
         app.dependency_overrides.pop(get_db, None)
         app.dependency_overrides.pop(get_vector_store, None)
+        app.dependency_overrides.pop(get_current_active_user, None)
         if hasattr(self, '_connection_pool'):
             self._connection_pool.close_all()
         import shutil

@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { Vault } from "@/lib/api";
-import { listVaults, createVault, updateVault, deleteVault } from "@/lib/api";
+import { listAccessibleVaults, createVault, updateVault, deleteVault } from "@/lib/api";
 import type { VaultCreateRequest, VaultUpdateRequest } from "@/lib/api";
 
 // Defer localStorage access to avoid errors in test environments where setup hasn't run yet
@@ -37,7 +37,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   fetchVaults: async () => {
     set({ loading: true, error: null });
     try {
-      const data = await listVaults();
+      const data = await listAccessibleVaults();
       const vaults = data.vaults ?? [];
       set((state) => {
         // Validate that the persisted activeVaultId is still accessible.
