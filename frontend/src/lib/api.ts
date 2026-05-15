@@ -808,6 +808,11 @@ export async function listVaults(): Promise<VaultListResponse> {
   return response.data;
 }
 
+export async function listAccessibleVaults(): Promise<VaultListResponse> {
+  const response = await apiClient.get<VaultListResponse>("/vaults/accessible");
+  return response.data;
+}
+
 export async function getVault(id: number): Promise<Vault> {
   const response = await apiClient.get<Vault>(`/vaults/${id}`);
   return response.data;

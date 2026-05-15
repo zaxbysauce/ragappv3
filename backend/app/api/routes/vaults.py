@@ -21,6 +21,7 @@ from app.api.deps import (
     get_effective_vault_permissions,
     get_evaluate_policy,
     get_vector_store,
+    require_role,
     require_vault_permission,
 )
 from app.services.vector_store import VectorStore
@@ -121,6 +122,7 @@ def _row_to_vault_response(row, current_user_permission: Optional[str] = None) -
         memory_count=row[6] or 0,
         session_count=row[7] or 0,
         org_id=row[8],
+        visibility=row[9] if len(row) > 9 else None,
         is_default=(vault_id == 1),
         current_user_permission=current_user_permission,
     )
@@ -131,7 +133,8 @@ _VAULT_WITH_COUNTS_SQL = """
            COUNT(DISTINCT f.id) as file_count,
            COUNT(DISTINCT m.id) as memory_count,
            COUNT(DISTINCT cs.id) as session_count,
-           v.org_id
+           v.org_id,
+           v.visibility
     FROM vaults v
     LEFT JOIN files f ON f.vault_id = v.id
     LEFT JOIN memories m ON m.vault_id = v.id
@@ -186,12 +189,11 @@ async def _fetch_all_vaults(
 
 @router.get("/vaults", response_model=VaultListResponse)
 async def list_vaults(
-    user: dict = Depends(get_current_active_user),
+    user: dict = Depends(require_role("admin")),
     conn: sqlite3.Connection = Depends(get_db),
 ):
-    """List all vaults with document/memory/session counts."""
+    """List all vaults with document/memory/session counts and permission info. Admin/superadmin only. Regular users should use the /vaults/accessible endpoint."""
     vaults = await _fetch_all_vaults(conn, user)
-    vaults = [v for v in vaults if v.current_user_permission is not None]
 
     return VaultListResponse(vaults=vaults)
 
@@ -290,8 +292,8 @@ async def create_vault(
     try:
         cursor = await asyncio.to_thread(
             conn.execute,
-            "INSERT INTO vaults (name, description, org_id, visibility) VALUES (?, ?, ?, ?)",
-            (request.name, request.description, target_org_id, request.visibility),
+            "INSERT INTO vaults (name, description, org_id, visibility, owner_id) VALUES (?, ?, ?, ?, ?)",
+            (request.name, request.description, target_org_id, request.visibility, user["id"]),
         )
     except sqlite3.IntegrityError:
         raise HTTPException(

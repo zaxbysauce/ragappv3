@@ -223,7 +223,7 @@ export function useSendMessage(
             }
           },
         },
-        activeVaultId ?? undefined,
+        activeVaultId ?? 1,
         effectiveMode,
       );
 

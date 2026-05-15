@@ -23,6 +23,9 @@ CREATE TABLE IF NOT EXISTS vaults (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
     description TEXT DEFAULT '',
+    owner_id INTEGER,
+    org_id INTEGER,
+    visibility TEXT DEFAULT 'private' CHECK (visibility IN ('private', 'org', 'public')),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -291,6 +294,7 @@ CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
 CREATE INDEX IF NOT EXISTS idx_org_members_org_id ON org_members(org_id);
 CREATE INDEX IF NOT EXISTS idx_org_members_user_id ON org_members(user_id);
+CREATE INDEX IF NOT EXISTS idx_org_members_org_user ON org_members(org_id, user_id);
 CREATE INDEX IF NOT EXISTS idx_group_members_group_id ON group_members(group_id);
 CREATE INDEX IF NOT EXISTS idx_group_members_user_id ON group_members(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions(user_id);

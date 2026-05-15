@@ -7,6 +7,7 @@ import { useChatMessages, useChatStore, type Message } from "@/stores/useChatSto
 import { SessionRail } from "@/components/chat/SessionRail";
 import { TranscriptPane } from "@/components/chat/TranscriptPane";
 import { RightPane } from "@/components/chat/RightPane";
+import { VaultSelector } from "@/components/vault/VaultSelector";
 import { Button } from "@/components/ui/button";
 import {
   useKeyboardShortcuts,
@@ -287,6 +288,7 @@ export default function ChatShell() {
             </span>
           )}
           {!activeSessionTitle && <div className="flex-1" />}
+          <VaultSelector />
           <Button variant="ghost" size="icon" onClick={handleExportChat}
             disabled={messages.length === 0}
             aria-label="Export chat">

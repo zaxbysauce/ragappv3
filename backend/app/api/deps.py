@@ -347,6 +347,21 @@ def get_effective_vault_permissions(
             VAULT_PERMISSION_LEVELS["read"],
         )
 
+    cursor = db.execute(
+        f"""SELECT v.id FROM vaults v
+            WHERE v.visibility = 'org' AND v.id IN ({placeholders})
+            AND v.org_id IS NOT NULL
+            AND EXISTS (
+                SELECT 1 FROM org_members WHERE org_id = v.org_id AND user_id = ?
+            )""",
+        (*normalized_ids, user_id),
+    )
+    for (vault_id,) in cursor.fetchall():
+        effective_levels[vault_id] = max(
+            effective_levels[vault_id],
+            VAULT_PERMISSION_LEVELS["read"],
+        )
+
     return {
         vault_id: VAULT_PERMISSION_NAMES.get(effective_levels[vault_id])
         for vault_id in normalized_ids
@@ -421,11 +436,12 @@ async def evaluate_policy(
 
     Resolution order (vault resources):
     1. superadmin -> True for all actions
-    2. admin -> True for read/write, False for vault delete
-    3. vault_members row -> use permission column
+    2. admin -> baseline level from admin role (read/write), then membership and group permissions layered on top
+    3. vault_members row -> use permission column (highest of baseline and explicit)
     4. vault_group_access (user in group) -> highest permission wins
-    5. vault.visibility == 'public' AND action == 'read' -> True (org-scoped for non-null org_id)
-    6. Otherwise -> False
+    5. vault.visibility == 'public' -> True (org-scoped for vaults with org_id)
+    6. vault.visibility == 'org' -> True only if user is a member of the vault's org
+    7. Otherwise -> False
     """
     pool = get_pool(str(settings.sqlite_path))
     conn = pool.get_connection()
