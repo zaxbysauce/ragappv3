@@ -430,7 +430,7 @@ class VectorStore:
 
         Args:
             records: List of records with keys: id, text, file_id, chunk_index,
-                     metadata, embedding, vault_id (optional, defaults to "1").
+                     metadata, embedding, vault_id (required, caller must provide).
 
         Raises:
             RuntimeError: If table is not initialized.
@@ -481,7 +481,7 @@ class VectorStore:
                 "id": record["id"],
                 "text": record["text"],
                 "file_id": record["file_id"],
-                "vault_id": record.get("vault_id", "1"),  # Default to vault "1"
+                "vault_id": record["vault_id"],  # Caller must provide vault_id
                 "chunk_index": record["chunk_index"],
                 "chunk_scale": record.get("chunk_scale", "default"),  # Scale label
                 "sparse_embedding": record.get(
@@ -1055,7 +1055,7 @@ class VectorStore:
 
     async def migrate_add_vault_id(self) -> int:
         """
-        Migration: Backfill vault_id='1' on existing chunks that lack it.
+        Migration: Assign vault_id to legacy chunks that lack it.
 
         LanceDB doesn't support ALTER TABLE or UPDATE, so this reads all data,
         adds the vault_id field, and rewrites the table. This is idempotent —
@@ -1100,8 +1100,8 @@ class VectorStore:
                     logger.info("LanceDB vault_id migration: no migration needed")
                     return 0  # All records already have vault_id
 
-                # Backfill null vault_ids with "1"
-                df["vault_id"] = df["vault_id"].fillna("1")
+                # Backfill null vault_ids with empty string (truly unassigned)
+                df["vault_id"] = df["vault_id"].fillna("")
                 count = int(null_count)
 
                 # Drop and recreate table with updated data
@@ -1151,8 +1151,8 @@ class VectorStore:
                     )
                     return 0
 
-                # Add vault_id column with default "1"
-                df["vault_id"] = "1"
+                # Add vault_id column — legacy chunks are unassigned (vault unknown)
+                df["vault_id"] = ""
                 migrated_count = len(df)
 
                 # Drop and recreate table with updated data

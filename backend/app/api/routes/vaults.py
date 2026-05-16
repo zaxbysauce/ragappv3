@@ -95,8 +95,6 @@ class VaultResponse(BaseModel):
     memory_count: int = 0
     session_count: int = 0
     org_id: Optional[int] = None
-    is_default: bool = False
-    """True when this vault is the system default and cannot be renamed or deleted."""
     current_user_permission: Optional[str] = None
     visibility: Optional[str] = None
 
@@ -123,7 +121,6 @@ def _row_to_vault_response(row, current_user_permission: Optional[str] = None) -
         session_count=row[7] or 0,
         org_id=row[8],
         visibility=row[9] if len(row) > 9 else None,
-        is_default=(vault_id == 1),
         current_user_permission=current_user_permission,
     )
 
@@ -337,7 +334,6 @@ async def update_vault(
 
     Updates the name and/or description of the vault with the given id.
     Returns 404 if not found.
-    Returns 400 if trying to rename vault id=1 (the Default vault).
     Returns 409 if new name conflicts with an existing vault.
     """
     # Check if vault exists
@@ -349,12 +345,6 @@ async def update_vault(
     if row is None:
         raise HTTPException(
             status_code=404, detail=f"Vault with id {vault_id} not found"
-        )
-
-    # Prevent renaming Default vault (id=1)
-    if vault_id == 1 and request.name is not None:
-        raise HTTPException(
-            status_code=400, detail="Cannot rename the Default vault (id=1)"
         )
 
     # Build update query dynamically based on provided fields
@@ -405,7 +395,7 @@ async def update_vault(
             old_name = row[1]  # Original vault name from line 194
             new_name = request.name
             if old_name != new_name:
-                await asyncio.to_thread(_rename_vault_folder, old_name, new_name)
+                await asyncio.to_thread(_rename_vault_folder, vault_id, old_name, new_name)
         except (OSError, shutil.Error) as e:
             # Log but don't fail the rename - folder rename is not critical
             logging.getLogger(__name__).warning(f"Failed to rename vault folder: {e}")
@@ -438,15 +428,8 @@ async def delete_vault(
     - Vector chunks for this vault
     - Memories: reassign to global (SET vault_id = NULL)
 
-    Returns 400 if trying to delete vault id=1 (the Default vault).
     Returns 404 if not found.
     """
-    # Prevent deleting Default vault (id=1)
-    if vault_id == 1:
-        raise HTTPException(
-            status_code=400, detail="Cannot delete the Default vault (id=1)"
-        )
-
     # Check if vault exists
     cursor = await asyncio.to_thread(
         conn.execute, "SELECT id, name FROM vaults WHERE id = ?", (vault_id,)

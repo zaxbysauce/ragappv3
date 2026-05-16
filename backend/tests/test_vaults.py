@@ -212,18 +212,19 @@ class TestVaultEndpoints(unittest.TestCase):
     # 1. List vaults tests
 
     def test_list_vaults_default(self):
-        """GET /api/vaults returns list with Default vault (id=1, name='Default')."""
+        """GET /api/vaults returns list with explicitly created vault (no Default vault auto-created)."""
+        # Create a vault explicitly - no Default vault is auto-created anymore
+        vault_id = self._create_vault_via_api("MyVault", "Test description")
         resp = self.client.get("/api/vaults")
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
         self.assertIn("vaults", data)
         vaults = data["vaults"]
-        self.assertEqual(len(vaults), 1)
-        self.assertEqual(vaults[0]["id"], 1)
-        self.assertEqual(vaults[0]["name"], "Default")
-        self.assertEqual(vaults[0]["file_count"], 0)
-        self.assertEqual(vaults[0]["memory_count"], 0)
-        self.assertEqual(vaults[0]["session_count"], 0)
+        self.assertGreaterEqual(len(vaults), 1)
+        my_vault = next((v for v in vaults if v["name"] == "MyVault"), None)
+        self.assertIsNotNone(my_vault)
+        self.assertEqual(my_vault["id"], vault_id)
+        self.assertEqual(my_vault["description"], "Test description")
 
     # 2. Create vault tests
 
@@ -270,12 +271,13 @@ class TestVaultEndpoints(unittest.TestCase):
     # 3. Get single vault tests
 
     def test_get_vault(self):
-        """GET /api/vaults/1 returns Default vault."""
-        resp = self.client.get("/api/vaults/1")
+        """GET /api/vaults/{id} returns the vault."""
+        vault_id = self._create_vault_via_api("Research")
+        resp = self.client.get(f"/api/vaults/{vault_id}")
         self.assertEqual(resp.status_code, 200)
         vault = resp.json()
-        self.assertEqual(vault["id"], 1)
-        self.assertEqual(vault["name"], "Default")
+        self.assertEqual(vault["id"], vault_id)
+        self.assertEqual(vault["name"], "Research")
 
     def test_get_vault_not_found(self):
         """GET /api/vaults/999 returns 404."""
@@ -312,18 +314,20 @@ class TestVaultEndpoints(unittest.TestCase):
         resp = self.client.put("/api/vaults/999", json={"description": "Updated"})
         self.assertEqual(resp.status_code, 404)
 
-    def test_update_default_vault_rename_blocked(self):
-        """PUT /api/vaults/1 with name returns 400."""
-        resp = self.client.put("/api/vaults/1", json={"name": "NewName"})
-        self.assertEqual(resp.status_code, 400)
-        self.assertIn("Cannot rename", resp.json()["detail"])
+    def test_update_vault_rename_succeeds(self):
+        """PUT /api/vaults/{id} with name returns 200 (no rename guard)."""
+        vault_id = self._create_vault_via_api("Original")
+        resp = self.client.put(f"/api/vaults/{vault_id}", json={"name": "NewName"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["name"], "NewName")
 
     def test_update_default_vault_description_allowed(self):
-        """PUT /api/vaults/1 with description returns 200."""
-        resp = self.client.put("/api/vaults/1", json={"description": "Updated"})
+        """PUT /api/vaults/{id} with description returns 200."""
+        vault_id = self._create_vault_via_api("Research")
+        resp = self.client.put(f"/api/vaults/{vault_id}", json={"description": "Updated"})
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["description"], "Updated")
-        self.assertEqual(resp.json()["name"], "Default")  # Name unchanged
+        self.assertEqual(resp.json()["name"], "Research")  # Name unchanged
 
     def test_update_vault_duplicate_name(self):
         """Create 2 vaults, rename one to other's name -> 409."""
@@ -357,11 +361,12 @@ class TestVaultEndpoints(unittest.TestCase):
         resp = self.client.get(f"/api/vaults/{vault_id}")
         self.assertEqual(resp.status_code, 404)
 
-    def test_delete_default_vault_blocked(self):
-        """DELETE /api/vaults/1 returns 400."""
-        resp = self.client.delete("/api/vaults/1")
-        self.assertEqual(resp.status_code, 400)
-        self.assertIn("Cannot delete", resp.json()["detail"])
+    def test_delete_vault_succeeds(self):
+        """DELETE /api/vaults/{id} returns 200 (no delete guard)."""
+        vault_id = self._create_vault_via_api("ToDelete")
+        resp = self.client.delete(f"/api/vaults/{vault_id}")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("deleted successfully", resp.json()["message"])
 
     def test_delete_vault_not_found(self):
         """DELETE /api/vaults/999 returns 404."""
@@ -480,12 +485,9 @@ class TestVaultEndpoints(unittest.TestCase):
         self.assertEqual(research_vault["memory_count"], 3)
         self.assertEqual(research_vault["session_count"], 1)
 
-        # Default vault should have 0 counts
+        # No Default vault exists unless explicitly created
         default_vault = next((v for v in vaults if v["name"] == "Default"), None)
-        self.assertIsNotNone(default_vault)
-        self.assertEqual(default_vault["file_count"], 0)
-        self.assertEqual(default_vault["memory_count"], 0)
-        self.assertEqual(default_vault["session_count"], 0)
+        self.assertIsNone(default_vault)
 
     def test_get_vault_with_counts(self):
         """Create vault with data, GET /api/vaults/{id} -> verify counts."""
@@ -542,12 +544,11 @@ class TestVaultEndpoints(unittest.TestCase):
         resp = self.client.get("/api/vaults")
         vaults = resp.json()["vaults"]
 
-        # First should be Default (id=1), then Alpha, Beta, Gamma
-        self.assertGreater(len(vaults), 3)
-        self.assertEqual(vaults[0]["id"], 1)  # Default
+        # Vaults are ordered by created_at; only explicitly created vaults exist
+        self.assertEqual(len(vaults), 3)
 
-        # Extract non-default vault names in order
-        names = [v["name"] for v in vaults if v["name"] != "Default"]
+        # Extract vault names in order
+        names = [v["name"] for v in vaults]
         self.assertEqual(names, ["Alpha", "Beta", "Gamma"])
 
     def test_delete_vault_vector_store_failure_continues(self):

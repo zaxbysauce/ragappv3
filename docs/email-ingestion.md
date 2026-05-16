@@ -82,9 +82,9 @@ This feature is ideal for:
    - Skips invalid/non-document attachments
 
 4. **Vault Resolution**
-   - Extracts vault name from subject using `[VaultName]` or `#vaultname` tags
-   - Case-insensitive vault lookup in database
-   - Falls back to default vault (id=1) if vault not found or no tag present
+    - Extracts vault name from subject using `[VaultName]` or `#vaultname` tags
+    - Case-insensitive vault lookup in database
+    - Raises ValueError if vault not found or no tag present — email is rejected
 
 5. **Background Processing**
     - Saves attachments to vault-specific upload directory based on target vault
@@ -374,8 +374,7 @@ Attachment: meeting_notes.txt
 ```
 
 **Result:**
-- Document is routed to **default vault** (vault_id=1)
-- This is the main vault in your KnowledgeVault instance
+- Document is rejected with error if vault cannot be resolved
 
 #### Email With No Attachments
 
@@ -499,10 +498,10 @@ Email Subject: "[Engineering] #marketing API Documentation [HR] Employee Handboo
     in Engineering vault    exists
                                   ↓
                              ┌────┴────┐
-                         YES │        │ NO
-                             ↓        ↓
-                      Use vault_id  Use default vault
-                      from marketing  (vault_id=1)
+                          YES │        │ NO
+                              ↓        ↓
+                       Use vault_id  Email rejected
+                       from marketing  (no fallback)
 ```
 
 ### Examples
@@ -540,8 +539,7 @@ Vaults in database:
   - Marketing (id=4)
   - Default (id=1)
 
-Result: Document → Default vault (id=1)
-Warning logged: "Vault 'Sales' not found, using default vault (id=1)"
+Result: Email rejected with error: vault not found
 ```
 
 #### Example 4: Multiple Tags (First Match Wins)
@@ -577,7 +575,7 @@ Vaults can be created via:
 2. **API:** `POST /api/vaults` with `name` parameter
 3. **Admin API:** Requires admin scope
 
-Ensure vaults exist before using them in email tags. Non-existent vaults will fall back to default vault.
+Ensure vaults exist before using them in email tags. Non-existent vaults cause the email to be rejected.
 
 ### Vault Naming Best Practices
 
@@ -1004,8 +1002,7 @@ sqlite3 /data/knowledgevault/app.db "SELECT id, filename, source, status FROM fi
 #### Issue 3: Vault Routing Not Working
 
 **Symptoms:**
-- Documents go to default vault instead of specified vault
-- Warning logs: `"Vault '<name>' not found, using default vault"`
+- Emails with unresolvable vault tags are rejected with ValueError
 
 **Possible Causes:**
 
@@ -1386,9 +1383,8 @@ Attachments:
 ```
 
 **Result:**
-- Document routed to default vault (vault_id=1)
-- Warning logged: `"Vault tag not found in subject, using default vault"`
-- Document still searchable (in wrong vault)
+- Email rejected: vault tag must resolve to an existing vault
+- Log: `"ValueError: Vault tag not found - email rejected"`
 
 **Correction:** User should use correct tag format:
 ```

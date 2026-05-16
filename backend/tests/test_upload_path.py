@@ -15,6 +15,7 @@ class TestUploadPathProvider:
     def test_get_upload_dir(self, mock_settings):
         """Test vault-specific directory generation."""
         mock_settings.vaults_dir = Path("/data/vaults")
+        mock_settings.vault_uploads_dir.return_value = Path("/data/vaults/5/uploads")
 
         provider = UploadPathProvider()
         result = provider.get_upload_dir(5)
@@ -25,6 +26,7 @@ class TestUploadPathProvider:
     def test_resolve(self, mock_settings):
         """Test file path resolution."""
         mock_settings.vaults_dir = Path("/data/vaults")
+        mock_settings.vault_uploads_dir.return_value = Path("/data/vaults/3/uploads")
 
         provider = UploadPathProvider()
         result = provider.resolve("test.pdf", 3)
@@ -40,24 +42,6 @@ class TestUploadPathProvider:
         result = provider.get_legacy("test.pdf")
 
         assert result == Path("/data/uploads/test.pdf")
-
-    @patch("app.services.upload_path.settings")
-    def test_orphan_vault_id_fallback(self, mock_settings):
-        """Test orphan vault ID configuration."""
-        mock_settings.orphan_vault_id = 1
-        mock_settings.vaults_dir = Path("/data/vaults")
-
-        provider = UploadPathProvider()
-
-        # Test that is_migrated returns False when file doesn't exist
-        # (since we're not actually creating files on disk in unit tests)
-        result = provider.is_migrated("test.pdf", 1)
-        assert not result
-
-        # Test that resolve returns correct path for vault_id=1
-        result = provider.resolve("test.pdf", 1)
-        assert result == Path("/data/vaults/1/uploads/test.pdf")
-
 
 class TestMigrationResult:
     """Tests for MigrationResult dataclass."""

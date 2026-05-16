@@ -411,6 +411,33 @@ describe('DocumentsPage - Drag to Resize Filename Column', () => {
       ).toBeInTheDocument();
     });
 
+    it('shows the "No vaults available" state when vaults list is empty', async () => {
+      vi.mocked(useVaultStore).mockReturnValue({
+        activeVaultId: null,
+        vaults: [],
+      } as ReturnType<typeof useVaultStore>);
+      vi.mocked(listDocuments).mockResolvedValueOnce({ documents: [], total: 0 });
+      vi.mocked(getDocumentStats).mockResolvedValueOnce({
+        total_documents: 0,
+        total_chunks: 0,
+        total_size_bytes: 0,
+        documents_by_status: {},
+      });
+
+      await act(async () => {
+        const result = render(<DocumentsPage />);
+        container = result.container;
+        unmount = result.unmount;
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText('No vaults available')).toBeInTheDocument();
+      });
+      expect(
+        screen.getByText('Create a vault or ask an admin to grant you access to start uploading documents.')
+      ).toBeInTheDocument();
+    });
+
     it('does not show the no-documents state for active search while stats are unavailable', async () => {
       vi.mocked(useVaultStore).mockReturnValue({
         activeVaultId: 2,

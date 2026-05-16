@@ -88,17 +88,18 @@ class TaskItem:
 
     Attributes:
         file_path: Path to the file to process
+        vault_id: Vault to associate the file with
         attempt: Current attempt count (starts at 1)
         source: Source of the file ('upload', 'scan', 'email')
         email_subject: Subject line for email-sourced files
         email_sender: Sender address for email-sourced files
     """
     file_path: str
+    vault_id: int
     attempt: int = 1
     source: str = 'upload'
     email_subject: Optional[str] = None
     email_sender: Optional[str] = None
-    vault_id: int = 1
     # When set, the worker calls DocumentProcessor.process_existing_file
     # against this row id instead of process_file. The async upload route
     # populates this so the worker does NOT re-run duplicate detection or
@@ -294,10 +295,10 @@ class BackgroundProcessor:
     async def enqueue(
         self,
         file_path: str,
+        vault_id: int,
         source: str = 'upload',
         email_subject: Optional[str] = None,
         email_sender: Optional[str] = None,
-        vault_id: int = 1,
         file_id: Optional[int] = None,
     ) -> None:
         """
@@ -305,10 +306,10 @@ class BackgroundProcessor:
 
         Args:
             file_path: Path to the file to process
+            vault_id: Vault to associate the file with
             source: Source of the file ('upload', 'scan', 'email')
             email_subject: Subject line for email-sourced files
             email_sender: Sender address for email-sourced files
-            vault_id: Vault to associate the file with
             file_id: When provided, the worker calls
                 ``DocumentProcessor.process_existing_file`` against this row
                 instead of ``process_file``. Used by the async upload route

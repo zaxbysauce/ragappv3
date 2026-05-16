@@ -546,22 +546,27 @@ export default function DocumentsPage() {
   const hasStats = stats !== null;
   const totalVaultDocuments = stats?.total_documents ?? 0;
   const isResolvingSearchEmptyState = hasSelectedVault && hasActiveSearch && !hasStats;
-  const emptyState = !hasSelectedVault
+  const emptyState = vaults.length === 0
     ? {
-        title: "Select a vault to view documents",
-        description: "Documents are scoped to the active vault.",
+        title: "No vaults available",
+        description: "Create a vault or ask an admin to grant you access to start uploading documents.",
       }
-    : hasActiveSearch && totalVaultDocuments > 0
+    : !hasSelectedVault
       ? {
-          title: "No documents match your search",
-          description: "Search checks filename, type, status, source, sender, subject, and document date.",
+          title: "Select a vault to view documents",
+          description: "Documents are scoped to the active vault.",
         }
-      : {
-          title: "No documents yet",
-          description: canWriteActiveVault
-            ? "Upload files to get started."
-            : "Documents will appear here when this vault has indexed files.",
-        };
+      : hasActiveSearch && totalVaultDocuments > 0
+        ? {
+            title: "No documents match your search",
+            description: "Search checks filename, type, status, source, sender, subject, and document date.",
+          }
+        : {
+            title: "No documents yet",
+            description: canWriteActiveVault
+              ? "Upload files to get started."
+              : "Documents will appear here when this vault has indexed files.",
+          };
 
   const tableVirtualizer = useVirtualizer({
     count: filteredDocuments.length,
@@ -580,6 +585,7 @@ export default function DocumentsPage() {
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
+
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Documents</h1>
@@ -658,6 +664,11 @@ export default function DocumentsPage() {
         } ${!hasSelectedVault || !canWriteActiveVault ? "opacity-60 cursor-not-allowed" : ""}`}
       >
         <input {...getInputProps()} />
+        {!activeVaultId && (
+          <div className="text-muted-foreground text-sm p-4 text-center">
+            Select a vault to upload documents.
+          </div>
+        )}
         <CardContent className="py-8">
           <div className="flex flex-col items-center justify-center text-center">
             <Badge variant="secondary" className="mb-3 gap-1.5 text-xs font-medium">

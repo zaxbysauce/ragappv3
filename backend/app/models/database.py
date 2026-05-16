@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS vaults (
 -- Files table: stores uploaded file metadata
 CREATE TABLE IF NOT EXISTS files (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    vault_id INTEGER NOT NULL DEFAULT 1,
+    vault_id INTEGER NOT NULL,
     file_path TEXT NOT NULL,
     file_name TEXT NOT NULL,
     file_hash TEXT,
@@ -134,7 +134,7 @@ END;
 -- Chat sessions table: stores conversation sessions
 CREATE TABLE IF NOT EXISTS chat_sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    vault_id INTEGER NOT NULL DEFAULT 1,
+    vault_id INTEGER NOT NULL,
     user_id INTEGER,
     title TEXT,
     forked_from_session_id INTEGER,
@@ -572,10 +572,6 @@ def init_db(sqlite_path: str) -> None:
                 if name not in existing_file_cols:
                     conn.execute(f"ALTER TABLE files ADD COLUMN {name} {ddl}")
         conn.executescript(SCHEMA)
-        # Ensure default vault exists
-        conn.execute(
-            "INSERT OR IGNORE INTO vaults (id, name, description) VALUES (1, 'Default', 'Default vault')"
-        )
         conn.commit()
     finally:
         conn.close()
@@ -652,7 +648,6 @@ def run_migrations(sqlite_path: str) -> None:
     migrate_add_chat_mode_column(sqlite_path)
     migrate_add_memory_embedding_column(sqlite_path)
     migrate_sanitize_existing_chat_messages(sqlite_path)
-    migrate_backfill_default_vault_org(sqlite_path)
     migrate_add_wiki_tables(sqlite_path)
     migrate_add_wiki_refs_and_job_input(sqlite_path)
     migrate_add_wiki_jobs_retry_count(sqlite_path)
@@ -688,9 +683,12 @@ def migrate_add_vaults(sqlite_path: str) -> None:
     Migration: Add vaults table and vault_id columns to existing databases.
 
     This migration is idempotent — safe to run multiple times.
-    It creates the vaults table, inserts a default vault, adds vault_id
-    columns to files/memories/chat_sessions if missing, and backfills
-    existing rows with the default vault.
+    It creates the vaults table, adds vault_id columns to files/memories/
+    chat_sessions if missing.  The ALTER TABLE ADD COLUMN statements use
+    DEFAULT 1 because SQLite requires a DEFAULT when adding a NOT NULL
+    column to a table that may already contain rows.  This is the ONLY
+    code path that references vault_id=1 for legacy table upgrades — it
+    does NOT create a Default vault row or INSERT any data.
 
     Args:
         sqlite_path: Path to the SQLite database file.
@@ -710,12 +708,7 @@ def migrate_add_vaults(sqlite_path: str) -> None:
             )
         """)
 
-        # 2. Insert default vault
-        conn.execute(
-            "INSERT OR IGNORE INTO vaults (id, name, description) VALUES (1, 'Default', 'Default vault')"
-        )
-
-        # 3. Add vault_id columns if missing (SQLite doesn't support IF NOT EXISTS for columns)
+        # 2. Add vault_id columns if missing (SQLite doesn't support IF NOT EXISTS for columns)
         def _column_exists(table: str, column: str) -> bool:
             cursor = conn.execute(f"PRAGMA table_info({table})")
             return any(row[1] == column for row in cursor.fetchall())
@@ -741,11 +734,6 @@ def migrate_add_vaults(sqlite_path: str) -> None:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_chat_sessions_vault_id ON chat_sessions(vault_id)"
             )
-
-        # 4. Backfill existing rows with default vault
-        conn.execute("UPDATE files SET vault_id = 1 WHERE vault_id IS NULL")
-        conn.execute("UPDATE chat_sessions SET vault_id = 1 WHERE vault_id IS NULL")
-        # memories: NULL vault_id is intentional (global), no backfill needed
 
         conn.commit()
     finally:
@@ -1140,46 +1128,6 @@ def migrate_add_memory_embedding_column(sqlite_path: str) -> None:
         if "embedding_model" not in existing_cols:
             conn.execute("ALTER TABLE memories ADD COLUMN embedding_model TEXT")
         conn.commit()
-    finally:
-        conn.close()
-
-
-def migrate_backfill_default_vault_org(sqlite_path: str) -> None:
-    """Migration: assign the Default vault (id=1) to the Default organization.
-
-    Vaults created before org scoping was added have a NULL org_id.  This
-    migration links vault id=1 to the Default organization so group-vault
-    assignment and org-scoped listing work correctly.  Other NULL-org vaults
-    are left alone — they remain accessible as global vaults.
-    """
-    conn = sqlite3.connect(sqlite_path)
-    try:
-        # Find the Default organization
-        org_row = conn.execute(
-            "SELECT id FROM organizations WHERE name = 'Default' LIMIT 1"
-        ).fetchone()
-        if org_row is None:
-            # No Default org yet (fresh install or test), nothing to do
-            return
-        default_org_id = org_row[0]
-
-        # Check if vault id=1 exists and has NULL org_id
-        vault_row = conn.execute(
-            "SELECT id, org_id FROM vaults WHERE id = 1"
-        ).fetchone()
-        if vault_row is None or vault_row[1] is not None:
-            # Vault doesn't exist or already has an org assigned
-            return
-
-        conn.execute(
-            "UPDATE vaults SET org_id = ? WHERE id = 1 AND org_id IS NULL",
-            (default_org_id,),
-        )
-        conn.commit()
-        logging.getLogger(__name__).info(
-            "Backfilled Default vault (id=1) to Default organization (id=%d)",
-            default_org_id,
-        )
     finally:
         conn.close()
 

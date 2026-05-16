@@ -96,7 +96,12 @@ def migrate_uploads(dry_run: bool = False) -> MigrationResult:
             continue
 
         # Lookup vault_id from database
-        vault_id = _lookup_vault_id(f.name)
+        try:
+            vault_id = _lookup_vault_id(f.name)
+        except ValueError as e:
+            failed.append(f.name)
+            logger.warning(str(e))
+            continue
 
         # Determine destination
         dest_dir = provider.get_upload_dir(vault_id)
@@ -139,30 +144,18 @@ def migrate_uploads(dry_run: bool = False) -> MigrationResult:
 
 
 def _lookup_vault_id(filename: str) -> int:
-    """
-    Lookup vault_id for a file from the database.
-
-    Returns vault_id if found, falls back to orphan vault (default vault).
-    """
+    from app.models.database import get_pool
+    pool = get_pool(str(settings.sqlite_path))
+    conn = pool.get_connection()
     try:
-        from app.models.database import get_pool
-
-        pool = get_pool(str(settings.sqlite_path))
-        conn = pool.get_connection()
-        try:
-            # Try to find by file_name
-            row = conn.execute(
-                "SELECT vault_id FROM files WHERE file_name = ?", (filename,)
-            ).fetchone()
-            if row:
-                return row[0]
-        finally:
-            pool.release_connection(conn)
-    except Exception as e:
-        logger.warning(f"Failed to lookup vault_id for {filename}: {e}")
-
-    # Fallback to default vault
-    return settings.orphan_vault_id
+        row = conn.execute(
+            "SELECT vault_id FROM files WHERE file_name = ?", (filename,)
+        ).fetchone()
+        if row:
+            return row[0]
+        raise ValueError(f"Could not determine vault_id for file: {filename}")
+    finally:
+        pool.release_connection(conn)
 
 
 def rollback_migration() -> dict:
@@ -217,42 +210,18 @@ def rollback_migration() -> dict:
     return results
 
 
-def _rename_vault_folder(old_name: str, new_name: str) -> bool:
+def _rename_vault_folder(vault_id: int, old_name: str, new_name: str) -> bool:
     """
     Rename vault upload folder when vault is renamed.
 
-    Returns True if renamed, False if old folder doesn't exist.
+    Vault directories are ID-based (data/vaults/{vault_id}/), so the
+    directory path does not change when the vault name changes. This
+    function is a no-op and exists only for future name-based schemes.
+
+    Returns True (directory identity is preserved).
     """
-    try:
-        # Sanitize names the same way as get_upload_dir
-        safe_old = "".join(c if c.isalnum() or c in "-_" else "_" for c in old_name)
-        safe_new = "".join(c if c.isalnum() or c in "-_" else "_" for c in new_name)
-
-        old_path = settings.vaults_dir / safe_old
-        new_path = settings.vaults_dir / safe_new
-
-        if not old_path.exists():
-            return False
-
-        # Handle case where new folder already exists
-        if new_path.exists():
-            # Move contents from old to new, rename conflicts with suffix
-            for item in old_path.glob("*"):
-                dest = new_path / item.name
-                if dest.exists():
-                    # Rename with suffix to avoid conflict
-                    stem = item.stem
-                    suffix = item.suffix
-                    counter = 1
-                    while dest.exists():
-                        dest = new_path / f"{stem}_{counter}{suffix}"
-                        counter += 1
-                shutil.move(str(item), str(dest))
-            old_path.rmdir()
-        else:
-            old_path.rename(new_path)
-
-        return True
-    except (OSError, PermissionError, shutil.Error) as e:
-        logger.error(f"Failed to rename vault folder: {e}")
-        return False
+    logger.debug(
+        "Vault %d renamed from '%s' to '%s' — directory path unchanged (ID-based scheme)",
+        vault_id, old_name, new_name,
+    )
+    return True

@@ -289,6 +289,73 @@ class TestVectorStoreAddChunks(TestVectorStoreAsync):
 
         self.assertIn("valid json", str(ctx.exception).lower())
 
+    # ─────────────────────────────────────────────────────────────────
+    # 6.2 vault_id fallback removal — regression tests
+    # ─────────────────────────────────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_add_chunks_missing_vault_id_raises_key_error(self):
+        """Missing vault_id must raise KeyError, not default to '1'.
+
+        Previously add_chunks used record.get('vault_id', '1') which silently
+        masked missing vault_id.  After the fallback removal it uses direct
+        dict access record['vault_id'], so a missing vault_id now raises
+        KeyError.
+        """
+        store = self.create_vector_store()
+        await store.init_table(embedding_dim=self.embedding_dim)
+
+        # Record missing vault_id but otherwise valid
+        record_without_vault_id = {
+            "id": "file1_0",
+            "text": "Test text",
+            "file_id": "file1",
+            "chunk_index": 0,
+            "embedding": np.random.randn(self.embedding_dim).tolist(),
+            # vault_id intentionally omitted
+        }
+
+        with self.assertRaises(KeyError):
+            await store.add_chunks([record_without_vault_id])
+
+    @pytest.mark.asyncio
+    async def test_add_chunks_uses_direct_vault_id_access_not_get(self):
+        """vault_id must be read via record['vault_id'], not record.get().
+
+        This is a behavioural contract: the caller is responsible for
+        providing vault_id.  No implicit default of '1' is applied inside
+        add_chunks.
+        """
+        store = self.create_vector_store()
+        await store.init_table(embedding_dim=self.embedding_dim)
+
+        # Record with an explicit non-default vault_id value
+        explicit_vault_id = "explicit-vault-42"
+        record = {
+            "id": "file1_0",
+            "text": "Test text",
+            "file_id": "file1",
+            "vault_id": explicit_vault_id,  # intentionally non-default
+            "chunk_index": 0,
+            "metadata": "{}",
+            "embedding": np.random.randn(self.embedding_dim).tolist(),
+        }
+
+        await store.add_chunks([record])
+
+        # Verify the stored vault_id is exactly what we passed, not "1"
+        rows = await store.table.search(
+            np.random.randn(self.embedding_dim).tolist()
+        ).limit(10).to_list()
+
+        stored = next((r for r in rows if r["id"] == "file1_0"), None)
+        self.assertIsNotNone(stored, "Record was not stored")
+        self.assertEqual(
+            stored["vault_id"],
+            explicit_vault_id,
+            "vault_id should be the explicit value, not defaulted to '1'",
+        )
+
     @pytest.mark.asyncio
     async def test_add_chunks_before_init_table(self):
         """Test that add_chunks raises if table not initialized."""
