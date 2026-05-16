@@ -10,7 +10,6 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from app.api.deps import get_current_active_user, get_db
-from app.api.routes.users import _auto_assign_user_to_defaults
 from app.limiter import limiter
 from app.security import csrf_protect, get_csrf_manager, issue_csrf_token
 from app.services.auth_service import (
@@ -96,8 +95,7 @@ async def register(
         )
         user_id = cursor.lastrowid
 
-        # Keep user creation and default access grants in one transaction.
-        _auto_assign_user_to_defaults(db, user_id)
+        # Keep user creation in one transaction.
         db.commit()
     except Exception:
         db.rollback()

@@ -21,7 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Database, Plus, Pencil, Trash2, FileText, Brain, MessageSquare, Loader2, Shield } from "lucide-react";
+import { Database, Plus, Pencil, Trash2, FileText, Brain, MessageSquare, Loader2 } from "lucide-react";
 import { useVaultStore } from "@/stores/useVaultStore";
 import { listOrganizations } from "@/lib/api";
 import type { Vault, Organization } from "@/lib/api";
@@ -150,7 +150,6 @@ export default function VaultsPage() {
     );
   }
 
-  const isDefaultVault = (vault: Vault) => vault.is_default === true;
   const canAdminVault = (vault: Vault) => vault.current_user_permission === "admin";
 
   return (
@@ -176,10 +175,8 @@ export default function VaultsPage() {
       )}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {vaults.map(vault => {
-          const canEditVault = canAdminVault(vault) && !isDefaultVault(vault);
-          const unavailableReason = isDefaultVault(vault)
-            ? "Default vault cannot be modified"
-            : "Vault admin permission is required";
+          const canEditVault = canAdminVault(vault);
+          const unavailableReason = "Vault admin permission is required";
 
           return (
           <Card key={vault.id}>
@@ -214,15 +211,6 @@ export default function VaultsPage() {
                     <span>{vault.session_count} sessions</span>
                   </div>
                 </div>
-
-                {/* Default Vault Badge */}
-                {isDefaultVault(vault) && (
-                  <div className="flex items-center gap-1 text-sm text-muted-foreground">
-                    <Shield className="h-3 w-3" />
-                    <Badge variant="outline" className="text-xs">Default</Badge>
-                    <span className="text-xs ml-1">Cannot be modified</span>
-                  </div>
-                )}
 
                 {/* Action Buttons */}
                 <div className="flex items-center gap-2 pt-2">

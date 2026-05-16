@@ -237,8 +237,8 @@ data/
 ├── knowledgevault/       # Root data directory
 │   ├── uploads/          # [LEGACY] Legacy flat uploads directory (deprecated)
 │   ├── vaults/           # Vault-specific data directories
-│   │   ├── 1/            # Vault 1 (default/orphan vault)
-│   │   │   └── uploads/  # Uploads for vault 1
+│   │   ├── 1/            # Vault directory (ID-based)
+│   │   │   └── uploads/  # Per-vault upload directory
 │   │   ├── 2/            # Vault 2
 │   │   │   └── uploads/  # Uploads for vault 2
 │   │   └── ...           # Additional vaults
@@ -251,7 +251,7 @@ data/
 │       └── app.log
 ```
 
-**Note:** The system now stores uploads in vault-specific directories (`/data/knowledgevault/vaults/{vault_id}/uploads/`). On first startup, the system automatically migrates files from the legacy flat `uploads/` directory to the appropriate vault-specific directories. Files are renamed with `.migrated` suffix to create a safe backup. If a file cannot be associated with a specific vault, it defaults to the orphan vault (vault 1).
+**Note:** The system stores uploads in vault-specific directories (`/data/knowledgevault/vaults/{vault_id}/uploads/`). On first startup, the system automatically migrates files from the legacy flat `uploads/` directory to vault-specific directories. Files are renamed with `.migrated` suffix to create a safe backup. If a file cannot be associated with a specific vault, the migration logs a warning and skips the file — vault_id must always be explicit.
 
 ## Ollama Models
 

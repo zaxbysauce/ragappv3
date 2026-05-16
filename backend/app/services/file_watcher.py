@@ -107,7 +107,7 @@ class FileWatcher:
         enqueued_count = 0
         # Scan vault-specific upload directories + library
         UploadPathProvider()
-        dir_vault_map: Dict[Path, int] = {settings.library_dir: 1}
+        dir_vault_map: Dict[Path, int] = {}
 
         # Add each vault's upload directory
         try:
@@ -127,6 +127,15 @@ class FileWatcher:
                 pool.release_connection(conn)
         except Exception as e:
             logger.warning(f"Failed to get vault directories: {e}")
+
+        # Add library_dir only if configured
+        if settings.library_vault_id is not None:
+            if settings.library_dir.exists():
+                dir_vault_map[settings.library_dir] = settings.library_vault_id
+            else:
+                logger.info("library_vault_id is configured but library directory does not exist, skipping library directory scan")
+        else:
+            logger.info("library_vault_id is not configured, skipping library directory scan")
 
         for directory, vault_id in dir_vault_map.items():
             if not directory.exists():

@@ -12,7 +12,6 @@ import email.policy
 import logging
 import os
 import re
-import sqlite3
 import tempfile
 from datetime import datetime
 from email.header import decode_header
@@ -616,39 +615,30 @@ class EmailIngestionService:
         """
         Resolve vault ID from vault name (case-insensitive).
 
-        Queries database for vault by name (case-insensitive LIKE).
-        Returns vault_id=1 (default vault) if not found or vault_name is None.
-
-        Args:
-            vault_name: Vault name to resolve, or None for default
-
-        Returns:
-            Vault ID (1 if not found or vault_name is None)
+        Raises ValueError if vault_name is None or vault is not found.
         """
         if vault_name is None:
-            return 1
+            raise ValueError(
+                "Email has no vault tag. Configure a [VaultName] subject prefix or reject the email."
+            )
 
+        conn = self.pool.get_connection()
         try:
-            conn = self.pool.get_connection()
-            try:
-                # Case-insensitive search
-                cursor = conn.execute(
-                    "SELECT id FROM vaults WHERE LOWER(name) = LOWER(?)",
-                    (vault_name,)
-                )
-                row = cursor.fetchone()
-                if row:
-                    vault_id = row["id"]
-                    logger.debug(f"Resolved vault '{vault_name}' to id={vault_id}")
-                    return vault_id
-                else:
-                    logger.warning(f"Vault '{vault_name}' not found, using default vault (id=1)")
-                    return 1
-            finally:
-                self.pool.release_connection(conn)
-        except (sqlite3.Error, OSError, RuntimeError) as e:
-            logger.error(f"Error resolving vault ID for '{vault_name}': {e}")
-            return 1
+            cursor = conn.execute(
+                "SELECT id FROM vaults WHERE LOWER(name) = LOWER(?)",
+                (vault_name,)
+            )
+            row = cursor.fetchone()
+            if row:
+                vault_id = row["id"]
+                logger.debug(f"Resolved vault '{vault_name}' to id={vault_id}")
+                return vault_id
+
+            raise ValueError(
+                f"Email references vault '{vault_name}' which does not exist in the database. Rejecting email."
+            )
+        finally:
+            self.pool.release_connection(conn)
 
     def _decode_header_value(self, value: str) -> str:
         """

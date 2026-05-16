@@ -87,8 +87,8 @@ describe("useSendMessage", () => {
     expect(useChatShellStore.getState().sessionListRefreshToken).toBe(1);
   });
 
-  describe("vault_id defaulting — regression (F#)", () => {
-    it("createChatSession uses vault_id=1 when activeVaultId is null", async () => {
+  describe("vault null guard", () => {
+    it("shows error and returns early when activeVaultId is null with no activeChatId", async () => {
       const refreshHistory = vi.fn().mockResolvedValue(undefined);
       useChatStore.setState({ input: "Hello" });
 
@@ -99,11 +99,51 @@ describe("useSendMessage", () => {
       });
 
       await waitFor(() => {
-        expect(apiMocks.createChatSession).toHaveBeenCalledWith({ vault_id: 1 });
+        expect(useChatStore.getState().inputError).toBe(
+          "Please select a vault before starting a chat."
+        );
+      });
+      expect(apiMocks.createChatSession).not.toHaveBeenCalled();
+      expect(refreshHistory).not.toHaveBeenCalled();
+    });
+
+    it("allows send when activeVaultId is null but activeChatId exists", async () => {
+      const refreshHistory = vi.fn().mockResolvedValue(undefined);
+      useChatStore.setState({ activeChatId: "42", input: "Follow up" });
+
+      const { result } = renderHook(() => useSendMessage(null, refreshHistory));
+
+      await act(async () => {
+        await result.current.handleSend();
+      });
+
+      await waitFor(() => {
+        expect(useChatStore.getState().inputError).toBeNull();
+      });
+      expect(apiMocks.createChatSession).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("vault_id defaulting — regression (F#)", () => {
+    it("createChatSession not called and error shown when activeVaultId is null with no activeChatId", async () => {
+      const refreshHistory = vi.fn().mockResolvedValue(undefined);
+      useChatStore.setState({ input: "Hello" });
+
+      const { result } = renderHook(() => useSendMessage(null, refreshHistory));
+
+      await act(async () => {
+        await result.current.handleSend();
+      });
+
+      await waitFor(() => {
+        expect(apiMocks.createChatSession).not.toHaveBeenCalled();
+        expect(useChatStore.getState().inputError).toBe(
+          "Please select a vault before starting a chat."
+        );
       });
     });
 
-    it("chatStream receives vault_id=1 when activeVaultId is null", async () => {
+    it("chatStream not called when activeVaultId is null with no activeChatId", async () => {
       const refreshHistory = vi.fn().mockResolvedValue(undefined);
       useChatStore.setState({ input: "Hello" });
 
@@ -114,11 +154,7 @@ describe("useSendMessage", () => {
       });
 
       await waitFor(() => {
-        // chatStream is called with: (messages, handlers, vault_id, effectiveMode)
-        // vault_id is the 3rd argument (index 2)
-        expect(apiMocks.chatStream).toHaveBeenCalled();
-        const callArgs = apiMocks.chatStream.mock.calls[0];
-        expect(callArgs[2]).toBe(1);
+        expect(apiMocks.chatStream).not.toHaveBeenCalled();
       });
     });
 

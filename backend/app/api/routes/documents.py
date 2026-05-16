@@ -892,7 +892,7 @@ async def _do_upload(
 
     # Ensure uploads directory exists
     provider = UploadPathProvider()
-    upload_dir = provider.get_upload_dir(vault_id or settings.orphan_vault_id)
+    upload_dir = provider.get_upload_dir(vault_id)
     upload_dir.mkdir(parents=True, exist_ok=True)
 
     # Sanitize filename
@@ -1117,7 +1117,7 @@ async def scan_directories(
     request: Request,
     background_processor: BackgroundProcessor = Depends(get_background_processor),
     db_pool: SQLiteConnectionPool = Depends(get_db_pool),
-    user: dict = Depends(require_vault_permission("write")),
+    user: dict = Depends(require_admin_role),
 ):
     """
     Trigger a scan of configured directories for new files.

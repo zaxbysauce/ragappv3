@@ -62,8 +62,14 @@ export function useSendMessage(
       if (currentState.activeChatId) {
         sessionId = parseInt(currentState.activeChatId);
       } else {
+        if (!activeVaultId) {
+          setInputError("Please select a vault before starting a chat.");
+          setIsStreaming(false);
+          sendingRef.current = false;
+          return;
+        }
         try {
-          const newSession = await createChatSession({ vault_id: activeVaultId ?? 1 });
+          const newSession = await createChatSession({ vault_id: activeVaultId });
           sessionId = newSession.id;
           useChatStore.setState({ activeChatId: newSession.id.toString() });
         } catch (err) {
@@ -223,7 +229,7 @@ export function useSendMessage(
             }
           },
         },
-        activeVaultId ?? 1,
+        activeVaultId ?? undefined,
         effectiveMode,
       );
 

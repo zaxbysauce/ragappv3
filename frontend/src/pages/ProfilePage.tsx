@@ -227,7 +227,6 @@ function ProfilePageContent() {
                 <li key={vault.id} className="flex items-center gap-2 text-sm">
                   <Database className="w-4 h-4 text-muted-foreground flex-shrink-0" />
                   <span className="font-medium">{vault.name}</span>
-                  {vault.is_default && <Badge variant="outline" className="text-xs">Default</Badge>}
                   {vault.file_count > 0 && (
                     <span className="text-xs text-muted-foreground">{vault.file_count} docs</span>
                   )}

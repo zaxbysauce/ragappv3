@@ -102,7 +102,7 @@ class CreateSessionRequest(BaseModel):
     """Request model for creating a new chat session."""
 
     title: Optional[str] = None
-    vault_id: int = 1
+    vault_id: int  # Remove default — make required
 
 
 class AddMessageRequest(BaseModel):

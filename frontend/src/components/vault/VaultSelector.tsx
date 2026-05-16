@@ -74,7 +74,14 @@ export function VaultSelector({ className }: VaultSelectorProps) {
           >
             <Database className="mr-2 h-4 w-4" aria-hidden="true" />
             <div className="flex flex-1 items-center justify-between min-w-0">
-              <span className="truncate">{vault.name}</span>
+              <div className="flex items-center gap-2 truncate">
+                <span className="truncate">{vault.name}</span>
+                {vault.current_user_permission && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full border text-muted-foreground">
+                    {vault.current_user_permission}
+                  </span>
+                )}
+              </div>
               <span className="text-xs text-muted-foreground ml-2 flex-shrink-0">
                 {vault.file_count} {vault.file_count === 1 ? "file" : "files"}
               </span>

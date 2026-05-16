@@ -1,6 +1,8 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
+import * as fs from "fs";
+import * as path from "path";
 
 vi.mock("@/lib/api", () => ({
   listOrganizations: vi.fn().mockResolvedValue([]),
@@ -11,12 +13,11 @@ vi.mock("@/stores/useVaultStore", () => ({
     vaults: [
       {
         id: 1,
-        name: "Default",
+        name: "Research",
         description: "",
         file_count: 0,
         memory_count: 0,
         session_count: 0,
-        is_default: true,
         current_user_permission: "admin",
       },
       {
@@ -124,8 +125,7 @@ vi.mock("lucide-react", () => ({
   MessageSquare: () => <span />,
   Pencil: () => <span>Edit icon</span>,
   Plus: () => <span />,
-  Shield: () => <span />,
-  Trash2: () => <span>Delete icon</span>,
+    Trash2: () => <span>Delete icon</span>,
 }));
 
 import VaultsPage from "@/pages/VaultsPage";
@@ -140,13 +140,55 @@ describe("VaultsPage permission gating", () => {
 
     expect(await screen.findByText("Admin Vault")).toBeInTheDocument();
 
-    expect(screen.getByTitle("Edit vault")).not.toBeDisabled();
-    expect(screen.getByTitle("Delete vault")).not.toBeDisabled();
+    // There are two admin vaults (Research and Admin Vault), so check all Edit/Delete buttons
+    const editButtons = screen.getAllByTitle("Edit vault");
+    const deleteButtons = screen.getAllByTitle("Delete vault");
+    expect(editButtons.length).toBe(2);
+    expect(deleteButtons.length).toBe(2);
 
-    for (const button of screen.getAllByTitle("Default vault cannot be modified")) {
+    for (const button of editButtons) {
+      expect(button).not.toBeDisabled();
+    }
+    for (const button of deleteButtons) {
+      expect(button).not.toBeDisabled();
+    }
+
+    for (const button of screen.getAllByTitle("Vault admin permission is required")) {
       expect(button).toBeDisabled();
     }
-    for (const button of screen.getAllByTitle("Vault admin permission is required")) {
+  });
+});
+
+describe("VaultsPage isDefaultVault removal (5.4)", () => {
+  const vaultsPagePath = path.resolve(__dirname, "VaultsPage.tsx");
+
+  it("does NOT reference isDefaultVault in source code", () => {
+    const sourceCode = fs.readFileSync(vaultsPagePath, "utf-8");
+    expect(sourceCode).not.toMatch(/isDefaultVault/);
+  });
+
+  it("does NOT reference is_default in source code", () => {
+    const sourceCode = fs.readFileSync(vaultsPagePath, "utf-8");
+    expect(sourceCode).not.toMatch(/is_default/);
+  });
+
+  it("does NOT render 'Default' badge for any vault", async () => {
+    render(<VaultsPage />);
+    await screen.findByText("Admin Vault");
+
+    // Use queryAllByText which returns [] instead of throwing when no elements found
+    const badges = screen.queryAllByText("Default");
+    expect(badges).toHaveLength(0);
+  });
+
+  it("shows 'Vault admin permission is required' title for non-admin vaults", async () => {
+    render(<VaultsPage />);
+    await screen.findByText("Admin Vault");
+
+    const permissionRequiredButtons = screen.getAllByTitle("Vault admin permission is required");
+    expect(permissionRequiredButtons.length).toBeGreaterThan(0);
+
+    for (const button of permissionRequiredButtons) {
       expect(button).toBeDisabled();
     }
   });

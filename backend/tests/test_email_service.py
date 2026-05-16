@@ -864,14 +864,14 @@ class TestEmailServiceIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resolved_id, vault_id)
 
     async def test_resolve_vault_id_not_found(self):
-        """Test resolving vault ID returns default (1) when not found."""
-        vault_id = await self.service._resolve_vault_id("NonExistentVault")
-        self.assertEqual(vault_id, 1)
+        with self.assertRaises(ValueError) as ctx:
+            await self.service._resolve_vault_id("NonExistentVault")
+        self.assertIn("NonExistentVault", str(ctx.exception))
 
     async def test_resolve_vault_id_none(self):
-        """Test resolving vault ID returns default (1) when vault_name is None."""
-        vault_id = await self.service._resolve_vault_id(None)
-        self.assertEqual(vault_id, 1)
+        with self.assertRaises(ValueError) as ctx:
+            await self.service._resolve_vault_id(None)
+        self.assertIn("no vault tag", str(ctx.exception))
 
     async def test_resolve_vault_id_case_insensitive(self):
         """Test vault resolution is case-insensitive."""

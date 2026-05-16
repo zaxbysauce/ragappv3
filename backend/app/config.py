@@ -5,6 +5,7 @@ Application configuration using Pydantic Settings.
 import logging
 import warnings
 from pathlib import Path
+from typing import Optional
 
 from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -43,6 +44,9 @@ class Settings(BaseSettings):
     instant_reranker_top_n: int = 4
     instant_memory_context_top_k: int = 2
     instant_max_tokens: int = 4096
+
+    # Library vault mapping for file watcher
+    library_vault_id: Optional[int] = None
 
     # Embedding dimension (auto-detected from model, but can be overridden)
     embedding_dim: int = 1024
@@ -646,6 +650,14 @@ class Settings(BaseSettings):
             raise ValueError("instant-mode numeric settings must be >= 1")
         return v
 
+    @field_validator("library_vault_id", mode="after")
+    @classmethod
+    def validate_library_vault_id(cls, v: Optional[int]) -> Optional[int]:
+        """Validate library_vault_id is positive when set."""
+        if v is not None and v <= 0:
+            raise ValueError("library_vault_id must be > 0 when set")
+        return v
+
     @model_validator(mode="after")
     def validate_rrf_weight_sanity(self) -> "Settings":
         """Validate at least one RRF arm weight is > 0.0 to prevent silent retrieval outage."""
@@ -732,10 +744,6 @@ class Settings(BaseSettings):
         path = self.vault_dir(vault_id) / "documents"
         path.mkdir(parents=True, exist_ok=True)
         return path
-
-    @property
-    def orphan_vault_id(self) -> int:
-        return 1
 
     @property
     def library_dir(self) -> Path:
