@@ -10,14 +10,14 @@ import logging
 from dataclasses import dataclass
 from typing import List, Optional
 
+from app.config import settings
+
 from ..models.database import SQLiteConnectionPool
 from .document_processor import DocumentProcessingError, DocumentProcessor
 from .embeddings import EmbeddingService
 from .llm_client import LLMClient
 from .maintenance import MaintenanceService
 from .vector_store import VectorStore
-
-from app.config import settings
 
 logger = logging.getLogger(__name__)
 

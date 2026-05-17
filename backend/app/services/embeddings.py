@@ -6,7 +6,7 @@ import asyncio
 import hashlib
 import logging
 from collections import OrderedDict
-from typing import List, Optional, Tuple
+from typing import List, Optional
 from urllib.parse import urlparse
 
 import httpx

@@ -17,7 +17,6 @@ from pydantic import ValidationError
 
 from app.config import Settings
 
-
 # =============================================================================
 # ingestion_worker_count: int (1-16) — boundary + type confusion attacks
 # =============================================================================

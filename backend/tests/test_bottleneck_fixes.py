@@ -7,9 +7,10 @@ Covers:
 - Task 2.3: stranded processing row recovery
 """
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
 from datetime import datetime, timedelta
+from unittest.mock import MagicMock, PropertyMock, patch
+
+import pytest
 
 
 class AsyncMock(MagicMock):
@@ -251,8 +252,9 @@ class TestValidateSchemaAsync:
     @pytest.mark.asyncio
     async def test_validate_schema_is_coroutine_function(self):
         """validate_schema is defined as an async function."""
-        from app.services.vector_store import VectorStore
         import inspect
+
+        from app.services.vector_store import VectorStore
 
         vs = VectorStore()
         assert inspect.iscoroutinefunction(vs.validate_schema)
@@ -288,7 +290,10 @@ class TestProcessorStartStop:
     @pytest.mark.asyncio
     async def test_start_sets_running_flag(self):
         """BackgroundProcessor.start sets _running to True."""
-        from app.services.background_tasks import BackgroundProcessor, reset_background_processor
+        from app.services.background_tasks import (
+            BackgroundProcessor,
+            reset_background_processor,
+        )
 
         # Clean slate
         reset_background_processor()
@@ -306,7 +311,10 @@ class TestProcessorStartStop:
     @pytest.mark.asyncio
     async def test_start_idempotent(self):
         """Calling start twice doesn't create duplicate workers."""
-        from app.services.background_tasks import BackgroundProcessor, reset_background_processor
+        from app.services.background_tasks import (
+            BackgroundProcessor,
+            reset_background_processor,
+        )
 
         reset_background_processor()
 
@@ -325,7 +333,10 @@ class TestProcessorStartStop:
     @pytest.mark.asyncio
     async def test_stop_clears_running_flag(self):
         """BackgroundProcessor.stop sets _running to False."""
-        from app.services.background_tasks import BackgroundProcessor, reset_background_processor
+        from app.services.background_tasks import (
+            BackgroundProcessor,
+            reset_background_processor,
+        )
 
         reset_background_processor()
 
