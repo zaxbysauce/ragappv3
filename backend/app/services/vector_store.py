@@ -79,8 +79,11 @@ class VectorStore:
         self._fts_exceptions: int = 0
         # Track the row count at last IVF_PQ build to detect post-delete churn (Issue #13)
         self._last_index_build_row_count: int = 0
+        self._index_mutation_generation: int = 0
+        self._last_index_build_generation: int = 0
         # Track chunk count between optimize calls when mode is 'periodic'
         self._optimize_counter: int = 0
+        self._write_lock = asyncio.Lock()
         # Shared semaphore limiting concurrent LanceDB search operations across all callers.
         # Lazily initialised on first use to avoid event-loop binding issues.
         self._search_semaphore: Optional[asyncio.Semaphore] = None
@@ -170,6 +173,9 @@ class VectorStore:
                         )
                         if has_ivfpq:
                             self._last_index_build_row_count = await self.table.count_rows()
+                            self._last_index_build_generation = (
+                                self._index_mutation_generation
+                            )
                             logger.debug(
                                 "Seeded _last_index_build_row_count=%d from existing IVF_PQ index",
                                 self._last_index_build_row_count,
@@ -293,21 +299,12 @@ class VectorStore:
         """Conditionally create vector ANN index if conditions are met.
 
         Checks:
-        1. Skip if embedding_idx already exists (fast path)
-        2. Skip if row count < VECTOR_INDEX_MIN_ROWS (256)
+        1. Skip if row count < VECTOR_INDEX_MIN_ROWS (256)
+        2. Skip only when embedding_idx exists and was built for the current row count
         3. Create index with num_partitions=256, num_sub_vectors=embedding_dim//8
         """
         if self.table is None:
             return
-
-        # Fast path: check if index already exists
-        try:
-            indices = await self.table.list_indices()
-            if any(idx.name == "embedding_idx" for idx in indices):
-                logger.debug("Vector index already exists, skipping creation")
-                return
-        except (OSError, RuntimeError, ValueError) as e:
-            logger.debug("Could not check existing indices: %s", e)
 
         # Check row count
         try:
@@ -321,6 +318,25 @@ class VectorStore:
                 "Vector index deferred: %d rows < %d threshold",
                 row_count,
                 VECTOR_INDEX_MIN_ROWS,
+            )
+            return
+
+        has_embedding_idx = False
+        try:
+            indices = await self.table.list_indices()
+            has_embedding_idx = any(idx.name == "embedding_idx" for idx in indices)
+        except (OSError, RuntimeError, ValueError) as e:
+            logger.debug("Could not check existing indices: %s", e)
+
+        if (
+            has_embedding_idx
+            and self._last_index_build_row_count == row_count
+            and self._last_index_build_generation == self._index_mutation_generation
+        ):
+            logger.debug(
+                "Vector index already fresh for %d rows at generation %d, skipping creation",
+                row_count,
+                self._index_mutation_generation,
             )
             return
 
@@ -340,6 +356,7 @@ class VectorStore:
                 replace=True,
             )
             self._last_index_build_row_count = row_count  # Track for post-delete churn check
+            self._last_index_build_generation = self._index_mutation_generation
             logger.info(
                 "Vector index creation completed in %.2fs", time.monotonic() - t0
             )
@@ -389,6 +406,7 @@ class VectorStore:
             try:
                 await self.table.drop_index("embedding_idx")
                 self._last_index_build_row_count = 0
+                self._last_index_build_generation = self._index_mutation_generation
                 logger.info(
                     "Dropped IVF_PQ index: row count (%d) fell below %d threshold; "
                     "falling back to brute-force search.",
@@ -418,6 +436,9 @@ class VectorStore:
                         replace=True,
                     )
                     self._last_index_build_row_count = current_rows
+                    self._last_index_build_generation = (
+                        self._index_mutation_generation
+                    )
                     logger.info(
                         "IVF_PQ index rebuilt after %.0f%% row churn (%d deleted, %d remaining) "
                         "in %.2fs",
@@ -426,10 +447,29 @@ class VectorStore:
                         current_rows,
                         time.monotonic() - t0,
                     )
+                    return
                 except (OSError, RuntimeError, ValueError) as e:
                     logger.warning("IVF_PQ index rebuild after delete churn failed: %s", e)
+                    return
+
+            # Below-threshold churn: keep the existing IVF_PQ index by design.
+            # Record that decision so the next search() does not force a rebuild
+            # solely because the mutation generation changed.
+            self._last_index_build_row_count = current_rows
+            self._last_index_build_generation = self._index_mutation_generation
+            logger.debug(
+                "Kept existing IVF_PQ index after %.2f%% row churn (%d deleted, %d remaining)",
+                churn * 100,
+                deleted_count,
+                current_rows,
+            )
 
     async def add_chunks(self, records: List[Dict[str, Any]]) -> None:
+        """Serialize chunk writes and related LanceDB maintenance."""
+        async with self._write_lock:
+            return await self._add_chunks_unlocked(records)
+
+    async def _add_chunks_unlocked(self, records: List[Dict[str, Any]]) -> None:
         """
         Add chunk records to the vector store.
 
@@ -513,6 +553,7 @@ class VectorStore:
             processed_records.append(processed_record)
 
         await self.table.add(processed_records)
+        self._index_mutation_generation += 1
 
         # Compact the table per configured optimize_mode
         optimize_mode = settings.optimize_mode
@@ -538,6 +579,11 @@ class VectorStore:
         await self._maybe_create_vector_index()
 
     async def flush_optimize(self) -> None:
+        """Serialize an explicit LanceDB optimize call."""
+        async with self._write_lock:
+            return await self._flush_optimize_unlocked()
+
+    async def _flush_optimize_unlocked(self) -> None:
         """
         Force an immediate table.optimize() for final compaction.
 
@@ -553,6 +599,38 @@ class VectorStore:
         except Exception as e:
             logger.warning("flush_optimize failed (non-fatal): %s", e)
 
+    async def count_by_file(self, file_id: str) -> int:
+        """Return the number of visible LanceDB rows for a file_id."""
+        if self.db is None:
+            await self.connect()
+
+        if self.db is None:
+            raise VectorStoreConnectionError("Database connection is not available.")
+
+        if self.table is None:
+            try:
+                table_names = await self.db.table_names()
+            except (OSError, RuntimeError, ValueError) as e:
+                raise VectorStoreConnectionError(
+                    f"Failed to list table names: {e}"
+                ) from e
+
+            if "chunks" not in table_names:
+                return 0
+
+            try:
+                self.table = await self.db.open_table("chunks")
+            except (OSError, RuntimeError, ValueError) as e:
+                raise VectorStoreConnectionError(
+                    f"Failed to open 'chunks' table: {e}"
+                ) from e
+
+        if self.table is None:
+            return 0
+
+        safe_file_id = _lance_escape(file_id)
+        return await self.table.count_rows(f"file_id = '{safe_file_id}'")
+
     async def _search_single_scale(
         self,
         embedding: List[float],
@@ -563,6 +641,7 @@ class VectorStore:
         query_text: str = "",
         hybrid: bool = True,
         hybrid_alpha: float = 0.5,
+        bypass_vector_index: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         Search within a single chunk scale.
@@ -606,6 +685,8 @@ class VectorStore:
         # which can cause UnboundLocalError when embedding_conf is None
         embedding_np = np.array(embedding, dtype=np.float32)
         query = await self.table.search(embedding_np, query_type="vector")
+        if bypass_vector_index and hasattr(query, "bypass_vector_index"):
+            query = query.bypass_vector_index()
         if combined_filter:
             query = query.where(combined_filter)
         dense_results = await query.limit(fetch_k).to_list()
@@ -665,6 +746,7 @@ class VectorStore:
         query_text: str = "",
         hybrid: bool = True,
         hybrid_alpha: float = 0.5,
+        bypass_vector_index: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         Search for similar chunks by embedding.
@@ -678,6 +760,8 @@ class VectorStore:
             query_text: Raw query text for BM25 FTS search (used in hybrid search).
             hybrid: If True, combine dense vector search with BM25 FTS using RRF.
             hybrid_alpha: Weight for dense vs BM25 scores in RRF (0.0 = pure BM25, 1.0 = pure dense).
+            bypass_vector_index: If True and the LanceDB query API supports it,
+                run the dense search as a flat scan instead of using ANN.
 
         Returns:
             List of matching records with similarity scores. Each record includes:
@@ -730,8 +814,11 @@ class VectorStore:
                     # If we can't determine embedding_dim, leave it as None
                     pass
 
-        # Check if vector index should be created (deferred index creation)
-        await self._maybe_create_vector_index()
+        # Check if vector index should be created (deferred index creation).
+        # This can mutate LanceDB even on a read path, so serialize it with
+        # ingestion/delete maintenance.
+        async with self._write_lock:
+            await self._maybe_create_vector_index()
 
         # Check for multi-scale search
         fetch_k = limit * 2
@@ -761,6 +848,7 @@ class VectorStore:
                             query_text=query_text,
                             hybrid=hybrid,
                             hybrid_alpha=hybrid_alpha,
+                            bypass_vector_index=bypass_vector_index,
                         )
 
                 # Create tasks for parallel execution (concurrency limited by semaphore)
@@ -813,6 +901,8 @@ class VectorStore:
             # which can cause UnboundLocalError when embedding_conf is None
             embedding_np = np.array(embedding, dtype=np.float32)
             query = await self.table.search(embedding_np, query_type="vector")
+            if bypass_vector_index and hasattr(query, "bypass_vector_index"):
+                query = query.bypass_vector_index()
 
             # Apply vault filter if specified
             _filter_expr = filter_expr
@@ -874,7 +964,73 @@ class VectorStore:
                 record["_fts_status"] = fts_status
             return fused
 
+    async def vector_search_bypass_index_diagnostic(
+        self,
+        embedding: List[float],
+        limit: int = 10,
+        filter_expr: Optional[str] = None,
+        vault_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Compare normal dense search with a flat-scan bypass when supported.
+
+        LanceDB exposes ``bypass_vector_index()`` on vector queries in versions
+        that support flat-scan ANN recall diagnostics. Older installed versions
+        may not have that method, so this helper reports support explicitly.
+        """
+        normal = await self.search(
+            embedding=embedding,
+            limit=limit,
+            filter_expr=filter_expr,
+            vault_id=vault_id,
+            hybrid=False,
+            bypass_vector_index=False,
+        )
+        bypass = await self.search(
+            embedding=embedding,
+            limit=limit,
+            filter_expr=filter_expr,
+            vault_id=vault_id,
+            hybrid=False,
+            bypass_vector_index=True,
+        )
+
+        def _ids(rows: List[Dict[str, Any]]) -> List[str]:
+            return [str(row.get("id", "")) for row in rows]
+
+        normal_ids = _ids(normal)
+        bypass_ids = _ids(bypass)
+        overlap = len(set(normal_ids) & set(bypass_ids))
+
+        return {
+            "supported": await self._supports_bypass_vector_index(),
+            "normal_results": normal,
+            "bypass_results": bypass,
+            "normal_ids": normal_ids,
+            "bypass_ids": bypass_ids,
+            "overlap_count": overlap,
+            "limit": limit,
+        }
+
+    async def _supports_bypass_vector_index(self) -> bool:
+        """Best-effort check for LanceDB flat-scan bypass support."""
+        if self.table is None:
+            return False
+        try:
+            expected_dim = await self._get_expected_embedding_dim()
+            if expected_dim is None:
+                return False
+            probe = np.zeros(expected_dim, dtype=np.float32)
+            query = await self.table.search(probe, query_type="vector")
+            return hasattr(query, "bypass_vector_index")
+        except Exception:
+            return False
+
     async def delete_by_file(self, file_id: str) -> int:
+        """Serialize deletion of all chunks for a file."""
+        async with self._write_lock:
+            return await self._delete_by_file_unlocked(file_id)
+
+    async def _delete_by_file_unlocked(self, file_id: str) -> int:
         """
         Delete all chunks for a given file_id.
 
@@ -934,6 +1090,8 @@ class VectorStore:
 
         # LanceDB delete using filter expression
         await self.table.delete(f"file_id = '{safe_file_id}'")
+        if count_before > 0:
+            self._index_mutation_generation += 1
 
         # Manage ANN index lifecycle after delete (Issue #13)
         await self._maybe_rebuild_or_drop_vector_index(count_before)
@@ -941,6 +1099,11 @@ class VectorStore:
         return count_before
 
     async def delete_by_vault(self, vault_id: str) -> int:
+        """Serialize deletion of all chunks for a vault."""
+        async with self._write_lock:
+            return await self._delete_by_vault_unlocked(vault_id)
+
+    async def _delete_by_vault_unlocked(self, vault_id: str) -> int:
         """
         Delete all chunks for a given vault_id.
 
@@ -983,6 +1146,8 @@ class VectorStore:
             count_before = 0
 
         await self.table.delete(f"vault_id = '{safe_vault_id}'")
+        if count_before > 0:
+            self._index_mutation_generation += 1
 
         # Manage ANN index lifecycle after delete (Issue #13)
         await self._maybe_rebuild_or_drop_vector_index(count_before)
@@ -990,6 +1155,15 @@ class VectorStore:
         return count_before
 
     async def delete_old_generation_by_file(
+        self, file_id: str, new_hash_short: str
+    ) -> int:
+        """Serialize stale-generation cleanup for a safe re-upload."""
+        async with self._write_lock:
+            return await self._delete_old_generation_by_file_unlocked(
+                file_id, new_hash_short
+            )
+
+    async def _delete_old_generation_by_file_unlocked(
         self, file_id: str, new_hash_short: str
     ) -> int:
         """Delete stale-generation chunks for a file after a safe re-upload (Issue #13).
@@ -1045,6 +1219,7 @@ class VectorStore:
             await self.table.delete(
                 f"file_id = '{safe_file_id}' AND NOT (id LIKE '{new_prefix}%')"
             )
+            self._index_mutation_generation += 1
             # Manage ANN index lifecycle after delete (Issue #13)
             await self._maybe_rebuild_or_drop_vector_index(old_count)
             return old_count
@@ -1424,6 +1599,8 @@ class VectorStore:
                     ),
                     replace=True,
                 )
+                self._last_index_build_row_count = migrated_count
+                self._last_index_build_generation = self._index_mutation_generation
                 logger.info(
                     f"Vector index recreated with metric={settings.vector_metric}"
                 )
@@ -1569,6 +1746,9 @@ class VectorStore:
                         replace=True,
                     )
                     self._last_index_build_row_count = migrated_count
+                    self._last_index_build_generation = (
+                        self._index_mutation_generation
+                    )
             except (OSError, RuntimeError, ValueError) as create_err:
                 logger.critical(
                     "parent_window migration: table dropped but recreate failed: %s. "

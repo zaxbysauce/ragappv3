@@ -180,6 +180,7 @@ class TestAddChunksCallsOptimize:
         ]
 
         with patch("app.services.vector_store.settings") as mock_settings:
+            mock_settings.optimize_mode = "after_every_write"
             mock_settings.embedding_dim = 4
             mock_settings.vector_metric = "cosine"
             # Bypass dimension validation by mocking _get_expected_embedding_dim
@@ -211,6 +212,155 @@ class TestAddChunksCallsOptimize:
             await store.add_chunks(records)
 
         mock_table.add.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_existing_embedding_index_is_refreshed_after_new_rows(self):
+        """Existing embedding_idx must not skip freshness handling after inserts."""
+        store = VectorStore(db_path=Path("/tmp/opt_test"))
+        mock_table = _make_mock_table(row_count=300, has_ivfpq=True)
+        store.table = mock_table
+        store._embedding_dim = 4
+        store._last_index_build_row_count = 256
+
+        records = [{
+            "id": "f1_0", "text": "hello", "file_id": "1",
+            "chunk_index": 0, "vault_id": "1", "chunk_scale": "default",
+            "embedding": [0.1, 0.2, 0.3, 0.4],
+        }]
+
+        with patch("app.services.vector_store.settings") as mock_settings, \
+             patch("app.services.vector_store.IvfPq") as mock_ivfpq:
+            mock_settings.optimize_mode = "manual"
+            mock_settings.embedding_dim = 4
+            mock_settings.vector_metric = "cosine"
+            mock_ivfpq.return_value = MagicMock()
+            store._get_expected_embedding_dim = AsyncMock(return_value=4)
+
+            await store.add_chunks(records)
+
+        mock_table.create_index.assert_awaited_once()
+        assert store._last_index_build_row_count == 300
+
+    @pytest.mark.asyncio
+    async def test_delete_then_add_same_row_count_still_refreshes_existing_index(self):
+        """Row count alone must not prove ANN freshness after content changes."""
+        store = VectorStore(db_path=Path("/tmp/opt_test"))
+        store.db = MagicMock()
+        store._embedding_dim = 4
+        store._last_index_build_row_count = 300
+        store._last_index_build_generation = 0
+        store._index_mutation_generation = 0
+        row_state = {"total": 300}
+
+        async def mock_count_rows(filter_expr=""):
+            if filter_expr:
+                return 10
+            return row_state["total"]
+
+        async def mock_delete(_filter_expr):
+            row_state["total"] -= 10
+
+        async def mock_add(records):
+            row_state["total"] += len(records)
+
+        mock_table = _make_mock_table(row_count=300, has_ivfpq=True)
+        mock_table.count_rows = AsyncMock(side_effect=mock_count_rows)
+        mock_table.delete = AsyncMock(side_effect=mock_delete)
+        mock_table.add = AsyncMock(side_effect=mock_add)
+        store.table = mock_table
+
+        records = [
+            {
+                "id": f"f1_{i}",
+                "text": f"replacement {i}",
+                "file_id": "1",
+                "chunk_index": i,
+                "vault_id": "1",
+                "chunk_scale": "default",
+                "embedding": [0.1, 0.2, 0.3, 0.4],
+            }
+            for i in range(10)
+        ]
+
+        with patch("app.services.vector_store.settings") as mock_settings, \
+             patch("app.services.vector_store.IvfPq") as mock_ivfpq:
+            mock_settings.optimize_mode = "manual"
+            mock_settings.embedding_dim = 4
+            mock_settings.vector_metric = "cosine"
+            mock_settings.index_rebuild_delta = 0.2
+            mock_ivfpq.return_value = MagicMock()
+            store._get_expected_embedding_dim = AsyncMock(return_value=4)
+
+            deleted = await store.delete_by_file("1")
+            await store.add_chunks(records)
+
+        assert deleted == 10
+        assert row_state["total"] == 300
+        mock_table.create_index.assert_awaited_once()
+        assert store._last_index_build_row_count == 300
+        assert store._last_index_build_generation == store._index_mutation_generation
+
+    @pytest.mark.asyncio
+    async def test_small_delete_marks_existing_index_accepted_without_rebuild(self):
+        """Below-threshold delete churn should not force rebuild on next search."""
+        store = VectorStore(db_path=Path("/tmp/opt_test"))
+        store.db = MagicMock()
+        store._embedding_dim = 4
+        store._last_index_build_row_count = 1000
+        store._last_index_build_generation = 0
+        store._index_mutation_generation = 0
+
+        query = MagicMock()
+        query.limit.return_value.to_list = AsyncMock(return_value=[])
+
+        mock_table = _make_mock_table(row_count=999, has_ivfpq=True)
+        mock_table.count_rows = AsyncMock(side_effect=[1, 999, 999])
+        mock_table.search = AsyncMock(return_value=query)
+        store.table = mock_table
+
+        with patch("app.services.vector_store.settings") as mock_settings:
+            mock_settings.index_rebuild_delta = 0.2
+            mock_settings.multi_scale_indexing_enabled = False
+            mock_settings.multi_scale_chunk_sizes = ""
+
+            deleted = await store.delete_by_file("1")
+            await store.search([0.1, 0.2, 0.3, 0.4], hybrid=False)
+
+        assert deleted == 1
+        mock_table.create_index.assert_not_awaited()
+        assert store._last_index_build_row_count == 999
+        assert store._last_index_build_generation == store._index_mutation_generation
+
+    @pytest.mark.asyncio
+    async def test_bypass_vector_index_option_uses_lancedb_flat_scan_hook(self):
+        """Dense diagnostic search calls LanceDB bypass_vector_index when present."""
+        store = VectorStore(db_path=Path("/tmp/search_test"))
+        store.db = MagicMock()
+        store._embedding_dim = 4
+
+        query = MagicMock()
+        query.bypass_vector_index = MagicMock(return_value=query)
+        query.limit.return_value.to_list = AsyncMock(
+            return_value=[{"id": "doc_b_0", "file_id": "doc_b"}]
+        )
+
+        table = _make_mock_table(row_count=1, has_ivfpq=False)
+        table.search = AsyncMock(return_value=query)
+        store.table = table
+
+        with patch("app.services.vector_store.settings") as mock_settings:
+            mock_settings.multi_scale_indexing_enabled = False
+            mock_settings.multi_scale_chunk_sizes = ""
+
+            results = await store.search(
+                embedding=[0.1, 0.2, 0.3, 0.4],
+                limit=1,
+                hybrid=False,
+                bypass_vector_index=True,
+            )
+
+        query.bypass_vector_index.assert_called_once()
+        assert results[0]["id"] == "doc_b_0"
 
 
 # ---------------------------------------------------------------------------

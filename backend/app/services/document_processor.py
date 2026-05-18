@@ -617,6 +617,17 @@ class DocumentProcessor:
             )
         return self._chunk_enrichment_service
 
+    async def _verify_vector_rows_visible(self, file_id: int) -> None:
+        """Ensure a vector-enabled ingest has visible LanceDB rows before indexing."""
+        if self.vector_store is None:
+            return
+
+        visible_rows = await self.vector_store.count_by_file(str(file_id))
+        if visible_rows <= 0:
+            raise DocumentProcessingError(
+                f"Vector store visibility check failed: file_id={file_id} has zero LanceDB rows"
+            )
+
     @staticmethod
     def _build_chunk_uid(file_id: int, chunk: ProcessedChunk) -> str:
         """Build a chunk_uid consistent with vector store record construction."""
@@ -1444,6 +1455,8 @@ class DocumentProcessor:
                         # Legacy: delete-then-insert (not crash-safe, kept for compat)
                         await self.vector_store.delete_by_file(str(file_id))
                         await self.vector_store.add_chunks(records)
+
+                    await self._verify_vector_rows_visible(file_id)
         except Exception as e:
             # Phase 3: Update status to error on failure
             # Get connection again to update error status
@@ -1895,6 +1908,8 @@ class DocumentProcessor:
                     else:
                         await self.vector_store.delete_by_file(str(file_id))
                         await self.vector_store.add_chunks(records)
+
+                    await self._verify_vector_rows_visible(file_id)
         except Exception as e:
             if self._write_semaphore:
                 await self._write_semaphore.acquire()
