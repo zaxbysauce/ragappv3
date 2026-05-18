@@ -190,7 +190,7 @@ class TestMaybeCreateVectorIndex(unittest.IsolatedAsyncioTestCase):
 
     async def test_skips_when_embedding_idx_already_exists(self):
         """
-        Test that _maybe_create_vector_index skips when 'embedding_idx' already exists.
+        Test that _maybe_create_vector_index skips when 'embedding_idx' is fresh.
         """
         # Mock table with existing embedding_idx
         existing_index = MagicMock()
@@ -198,15 +198,16 @@ class TestMaybeCreateVectorIndex(unittest.IsolatedAsyncioTestCase):
 
         mock_table = MagicMock()
         mock_table.list_indices = AsyncMock(return_value=[existing_index])
-        mock_table.count_rows = AsyncMock()  # Should NOT be called
+        mock_table.count_rows = AsyncMock(return_value=300)
         mock_table.create_index = AsyncMock()
 
         self.store.table = mock_table
+        self.store._last_index_build_row_count = 300
 
         await self.store._maybe_create_vector_index()
 
-        # Verify count_rows was NOT called (fast path skip)
-        mock_table.count_rows.assert_not_called()
+        # Verify row count was checked before treating the index as fresh.
+        mock_table.count_rows.assert_awaited_once()
 
         # Verify create_index was NOT called
         mock_table.create_index.assert_not_called()
@@ -373,23 +374,27 @@ class TestMaybeCreateVectorIndexLogging(unittest.IsolatedAsyncioTestCase):
 
     async def test_logs_debug_when_index_already_exists(self):
         """
-        Test that debug log is emitted when embedding_idx already exists.
+        Test that debug log is emitted when embedding_idx is already fresh.
         """
         existing_index = MagicMock()
         existing_index.name = "embedding_idx"
 
         mock_table = MagicMock()
         mock_table.list_indices = AsyncMock(return_value=[existing_index])
-        mock_table.count_rows = AsyncMock()
+        mock_table.count_rows = AsyncMock(return_value=300)
         mock_table.create_index = AsyncMock()
 
         self.store.table = mock_table
+        self.store._last_index_build_row_count = 300
 
         with patch("app.services.vector_store.logger") as mock_logger:
             await self.store._maybe_create_vector_index()
 
-            # Verify debug log was called
-            mock_logger.debug.assert_called()
+            mock_logger.debug.assert_any_call(
+                "Vector index already fresh for %d rows at generation %d, skipping creation",
+                300,
+                0,
+            )
 
     async def test_logs_info_when_index_created(self):
         """

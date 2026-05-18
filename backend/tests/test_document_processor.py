@@ -53,6 +53,7 @@ except ImportError:
 from app.config import settings
 from app.models.database import SQLiteConnectionPool, init_db
 from app.services.document_processor import (
+    DocumentProcessingError,
     DocumentProcessor,
     DuplicateFileError,
     ProcessedDocument,
@@ -72,6 +73,12 @@ class TestDocumentProcessor(unittest.TestCase):
 
         # Initialize the database
         init_db(self.temp_db_path)
+        conn = sqlite3.connect(self.temp_db_path)
+        conn.execute(
+            "INSERT OR IGNORE INTO vaults (id, name, description) VALUES (1, 'Default', '')"
+        )
+        conn.commit()
+        conn.close()
 
         # Create temp .sql file with CREATE TABLE statement
         self.sql_file_path = os.path.join(self.temp_dir, 'test_schema.sql')
@@ -122,7 +129,9 @@ CREATE TABLE posts (
     def test_process_file_returns_valid_result(self):
         """Test that process_file returns valid ProcessedDocument with SQL file."""
         # Process the SQL file
-        result = asyncio.run(self.processor.process_file(self.sql_file_path))
+        result = asyncio.run(
+            self.processor.process_file(self.sql_file_path, vault_id=1)
+        )
 
         # Assert result is ProcessedDocument
         self.assertIsInstance(result, ProcessedDocument)
@@ -138,7 +147,9 @@ CREATE TABLE posts (
     def test_process_file_updates_db_status(self):
         """Test that process_file updates DB status to indexed with chunk_count."""
         # Process the SQL file
-        result = asyncio.run(self.processor.process_file(self.sql_file_path))
+        result = asyncio.run(
+            self.processor.process_file(self.sql_file_path, vault_id=1)
+        )
 
         # Query database to verify status
         conn = sqlite3.connect(self.temp_db_path)
@@ -160,16 +171,18 @@ CREATE TABLE posts (
     def test_process_file_raises_duplicate_error_on_second_call(self):
         """Test that second call with same file raises DuplicateFileError."""
         # Process the SQL file first time
-        asyncio.run(self.processor.process_file(self.sql_file_path))
+        asyncio.run(self.processor.process_file(self.sql_file_path, vault_id=1))
 
         # Second call should raise DuplicateFileError
         with self.assertRaises(DuplicateFileError):
-            asyncio.run(self.processor.process_file(self.sql_file_path))
+            asyncio.run(self.processor.process_file(self.sql_file_path, vault_id=1))
 
     def test_process_file_extracts_correct_chunks(self):
         """Test that SQL file is correctly parsed into chunks."""
         # Process the SQL file
-        result = asyncio.run(self.processor.process_file(self.sql_file_path))
+        result = asyncio.run(
+            self.processor.process_file(self.sql_file_path, vault_id=1)
+        )
 
         # Should have 2 chunks (users table and posts table)
         self.assertEqual(len(result.chunks), 2)
@@ -184,6 +197,60 @@ CREATE TABLE posts (
             any('posts' in text for text in chunk_texts),
             "Expected one chunk to contain 'posts' table"
         )
+
+    def test_process_file_marks_error_when_vector_rows_not_visible(self):
+        """Visibility failure after vector writes must not mark SQLite indexed."""
+
+        class FakeEmbeddingService:
+            MAX_TEXT_LENGTH = 8192
+            embedding_doc_prefix = ""
+
+            async def embed_batch(self, texts, fail_fast=False):
+                return ([[0.1, 0.2, 0.3, 0.4] for _ in texts], [])
+
+        class FakeVectorStore:
+            def __init__(self):
+                self.records = []
+
+            async def init_table(self, embedding_dim):
+                self.embedding_dim = embedding_dim
+
+            async def add_chunks(self, records):
+                self.records.extend(records)
+
+            async def delete_old_generation_by_file(self, file_id, new_hash_short):
+                return 0
+
+            async def delete_by_file(self, file_id):
+                return 0
+
+            async def count_by_file(self, file_id):
+                return 0
+
+        original_reupload_safe_order = settings.reupload_safe_order
+        settings.reupload_safe_order = True
+        self.processor.embedding_service = FakeEmbeddingService()
+        self.processor.vector_store = FakeVectorStore()
+
+        try:
+            with self.assertRaises(DocumentProcessingError) as ctx:
+                asyncio.run(self.processor.process_file(self.sql_file_path, vault_id=1))
+        finally:
+            settings.reupload_safe_order = original_reupload_safe_order
+
+        self.assertIn("zero LanceDB rows", str(ctx.exception))
+
+        conn = sqlite3.connect(self.temp_db_path)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT status, error_message FROM files WHERE file_path = ?",
+            (self.sql_file_path,),
+        ).fetchone()
+        conn.close()
+
+        self.assertIsNotNone(row)
+        self.assertEqual(row["status"], "error")
+        self.assertIn("zero LanceDB rows", row["error_message"])
 
 
 class TestSpreadsheetAdaptiveChunking(unittest.TestCase):

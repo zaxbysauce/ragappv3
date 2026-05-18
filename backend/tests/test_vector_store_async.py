@@ -10,6 +10,7 @@ This module tests the async methods of the VectorStore class:
 - delete_by_vault: Delete all chunks for a given vault_id
 """
 
+import asyncio
 import json
 import os
 import shutil
@@ -17,6 +18,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any, Dict, List
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
 import pytest
@@ -177,6 +179,185 @@ class TestVectorStoreAddChunks(TestVectorStoreAsync):
         # Verify records were added by counting
         count = await store.table.count_rows()
         self.assertEqual(count, 3)
+
+    def test_add_chunks_count_by_file_sees_inserted_rows(self):
+        """count_by_file must observe rows after a successful add_chunks call."""
+        async def run_test():
+            store = self.create_vector_store()
+            rows = []
+            table = MagicMock()
+
+            async def add_records(records):
+                rows.extend(records)
+
+            async def count_rows(filter_expr=""):
+                if "file1" in filter_expr:
+                    return sum(row["file_id"] == "file1" for row in rows)
+                if "file2" in filter_expr:
+                    return sum(row["file_id"] == "file2" for row in rows)
+                if "missing" in filter_expr:
+                    return 0
+                return len(rows)
+
+            table.add = AsyncMock(side_effect=add_records)
+            table.count_rows = AsyncMock(side_effect=count_rows)
+            table.list_indices = AsyncMock(return_value=[])
+            store.db = MagicMock()
+            store.table = table
+            store._get_expected_embedding_dim = AsyncMock(
+                return_value=self.embedding_dim
+            )
+
+            records = self.create_test_records(count=3)
+            records.append({
+                "id": "file2_0",
+                "text": "This is another file",
+                "file_id": "file2",
+                "vault_id": "1",
+                "chunk_index": 0,
+                "chunk_scale": "default",
+                "metadata": json.dumps({"source": "test"}),
+                "embedding": np.random.randn(self.embedding_dim).tolist(),
+            })
+
+            with patch("app.services.vector_store.settings") as mock_settings:
+                mock_settings.optimize_mode = "manual"
+                mock_settings.embedding_dim = self.embedding_dim
+                mock_settings.vector_metric = "cosine"
+                await store.add_chunks(records)
+
+            self.assertEqual(await store.count_by_file("file1"), 3)
+            self.assertEqual(await store.count_by_file("file2"), 1)
+            self.assertEqual(await store.count_by_file("missing"), 0)
+
+        asyncio.run(run_test())
+
+    def test_periodic_optimize_mode_still_exposes_inserted_rows(self):
+        """Periodic optimize must not hide newly added rows from count_by_file."""
+        async def run_test():
+            store = self.create_vector_store()
+            rows = []
+            table = MagicMock()
+
+            async def add_records(records):
+                rows.extend(records)
+
+            async def count_rows(filter_expr=""):
+                if "file1" in filter_expr:
+                    return sum(row["file_id"] == "file1" for row in rows)
+                return len(rows)
+
+            table.add = AsyncMock(side_effect=add_records)
+            table.count_rows = AsyncMock(side_effect=count_rows)
+            table.list_indices = AsyncMock(return_value=[])
+            table.optimize = AsyncMock(return_value=None)
+            store.db = MagicMock()
+            store.table = table
+            store._get_expected_embedding_dim = AsyncMock(
+                return_value=self.embedding_dim
+            )
+
+            with patch("app.services.vector_store.settings") as mock_settings:
+                mock_settings.optimize_mode = "periodic"
+                mock_settings.optimize_interval_chunks = 5000
+                mock_settings.embedding_dim = self.embedding_dim
+                mock_settings.vector_metric = "cosine"
+
+                await store.add_chunks(self.create_test_records(count=2))
+
+            self.assertEqual(await store.count_by_file("file1"), 2)
+            table.optimize.assert_not_awaited()
+
+        asyncio.run(run_test())
+
+    def test_existing_index_search_finds_new_insert(self):
+        """A post-index insert remains discoverable by normal search."""
+        async def run_test():
+            embedding_dim = 8
+            store = self.create_vector_store()
+            rows = []
+            table = MagicMock()
+
+            async def add_records(records):
+                rows.extend(records)
+
+            async def count_rows(filter_expr=""):
+                if "doc_b" in filter_expr:
+                    return sum(row["file_id"] == "doc_b" for row in rows)
+                return len(rows)
+
+            def search_records(_embedding, query_type="vector"):
+                query = MagicMock()
+                query.where.return_value = query
+                query.limit.return_value.to_list = AsyncMock(
+                    return_value=[row for row in rows if row["file_id"] == "doc_b"]
+                    or rows[:1]
+                )
+                return query
+
+            table.add = AsyncMock(side_effect=add_records)
+            table.count_rows = AsyncMock(side_effect=count_rows)
+            table.list_indices = AsyncMock(
+                side_effect=[
+                    [],
+                    [type("Idx", (), {"name": "embedding_idx"})()],
+                    [type("Idx", (), {"name": "embedding_idx"})()],
+                ]
+            )
+            table.create_index = AsyncMock(return_value=None)
+            table.search = AsyncMock(side_effect=search_records)
+            store.db = MagicMock()
+            store.table = table
+            store._get_expected_embedding_dim = AsyncMock(return_value=embedding_dim)
+
+            base_embedding = [1.0] + [0.0] * (embedding_dim - 1)
+            base_records = [
+                {
+                    "id": f"doc_a_{i}",
+                    "text": f"Document A filler chunk {i}",
+                    "file_id": "doc_a",
+                    "vault_id": "1",
+                    "chunk_index": i,
+                    "chunk_scale": "default",
+                    "metadata": json.dumps({"source": "test"}),
+                    "embedding": base_embedding,
+                }
+                for i in range(256)
+            ]
+            doc_b_embedding = [0.0, 1.0] + [0.0] * (embedding_dim - 2)
+            doc_b_record = {
+                "id": "doc_b_0",
+                "text": "Document B unique freshness term",
+                "file_id": "doc_b",
+                "vault_id": "1",
+                "chunk_index": 0,
+                "chunk_scale": "default",
+                "metadata": json.dumps({"source": "test"}),
+                "embedding": doc_b_embedding,
+            }
+
+            with patch("app.services.vector_store.settings") as mock_settings, \
+                 patch("app.services.vector_store.IvfPq") as mock_ivfpq:
+                mock_settings.optimize_mode = "manual"
+                mock_settings.optimize_interval_chunks = 5000
+                mock_settings.embedding_dim = embedding_dim
+                mock_settings.vector_metric = "cosine"
+                mock_settings.multi_scale_indexing_enabled = False
+                mock_settings.multi_scale_chunk_sizes = ""
+                mock_ivfpq.return_value = MagicMock()
+
+                await store.add_chunks(base_records)
+                await store.add_chunks([doc_b_record])
+                results = await store.search(
+                    embedding=doc_b_embedding,
+                    limit=5,
+                    hybrid=False,
+                )
+
+            self.assertIn("doc_b_0", [row["id"] for row in results])
+            self.assertEqual(table.create_index.await_count, 2)
+
+        asyncio.run(run_test())
 
     @pytest.mark.asyncio
     async def test_add_chunks_empty_list(self):

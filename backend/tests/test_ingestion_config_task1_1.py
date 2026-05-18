@@ -3,7 +3,7 @@ Verification tests for Task 1.1 new ingestion performance config fields.
 
 Tests the 5 new fields added to backend/app/config.py:
 1. ingestion_worker_count: int = 2  (range 1-16)
-2. optimize_mode: str = "periodic"   (after_every_write/periodic/manual)
+2. optimize_mode: str = "after_every_write"   (after_every_write/periodic/manual)
 3. optimize_interval_chunks: int = 5000  (>= 1)
 4. embedding_concurrent_batches: int = 4  (range 1-16)
 5. optimize_on_shutdown: bool = True  (no validator)
@@ -31,9 +31,9 @@ class TestNewIngestionFieldsDefaults:
         assert settings.ingestion_worker_count == 2
 
     def test_optimize_mode_default(self):
-        """optimize_mode should default to 'periodic'."""
+        """optimize_mode should default to 'after_every_write'."""
         settings = Settings()
-        assert settings.optimize_mode == "periodic"
+        assert settings.optimize_mode == "after_every_write"
 
     def test_optimize_interval_chunks_default(self):
         """optimize_interval_chunks should default to 5000."""
@@ -236,7 +236,7 @@ class TestAllFiveFieldsTogether:
         """All 5 fields have correct defaults simultaneously."""
         settings = Settings()
         assert settings.ingestion_worker_count == 2
-        assert settings.optimize_mode == "periodic"
+        assert settings.optimize_mode == "after_every_write"
         assert settings.optimize_interval_chunks == 5000
         assert settings.embedding_concurrent_batches == 4
         assert settings.optimize_on_shutdown is True
