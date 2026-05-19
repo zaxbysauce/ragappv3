@@ -266,10 +266,13 @@ async def _fetch_accessible_vaults(
     full_cursor = await asyncio.to_thread(conn.execute, full_query, tuple(vault_ids))
     full_rows = await asyncio.to_thread(full_cursor.fetchall)
 
-    # Build vault responses
+    # Build vault responses, filtering out any that resolved to None permission
+    # (safety net against TOCTOU between UNION and permission check)
     vaults = []
     for row in full_rows:
-        vaults.append(_row_to_vault_response(row, permissions.get(row[0])))
+        v = _row_to_vault_response(row, permissions.get(row[0]))
+        if v.current_user_permission is not None:
+            vaults.append(v)
 
     return vaults
 
@@ -290,7 +293,11 @@ async def list_accessible_vaults(
     user: dict = Depends(get_current_active_user),
     conn: sqlite3.Connection = Depends(get_db),
 ):
-    """Return vaults the current user has access to."""
+    """Return vaults the current user has access to.
+
+    Note: results are capped at 1000 vaults (SQL LIMIT in _fetch_accessible_vaults).
+    Pagination is not yet implemented.
+    """
     vaults = await _fetch_accessible_vaults(conn, user)
     return VaultListResponse(vaults=vaults)
 
