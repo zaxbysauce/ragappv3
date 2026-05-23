@@ -1,5 +1,7 @@
 # Stage 1: Build Frontend
 FROM node:20-alpine AS frontend-builder
+ARG VITE_APP_BASENAME=""
+ENV VITE_APP_BASENAME=$VITE_APP_BASENAME
 WORKDIR /app/frontend
 COPY frontend/package*.json ./
 RUN npm ci
@@ -34,6 +36,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy backend code
 COPY backend/app ./app
 
+# Copy and set up startup script
+COPY backend/start.sh ./start.sh
+RUN chmod +x ./start.sh
+
 # Copy built frontend
 COPY --from=frontend-builder /app/frontend/dist ./static
 
@@ -51,4 +57,4 @@ USER appuser
 
 EXPOSE 9090
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "9090"]
+CMD ["./start.sh"]

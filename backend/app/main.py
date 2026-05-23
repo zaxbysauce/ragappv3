@@ -42,6 +42,7 @@ from app.lifespan import lifespan
 from app.limiter import limiter
 from app.middleware.logging import LoggingMiddleware
 from app.middleware.maintenance import MaintenanceMiddleware
+from app.middleware.proxy_prefix import ProxyPrefixMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,7 @@ app = FastAPI(
     version="0.1.0",
     description="Self-hosted RAG Knowledge Base API",
     lifespan=lifespan,
+    root_path=settings.root_path,
 )
 
 # Security check: warn if admin_secret_token is not set or using default value
@@ -93,6 +95,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# ProxyPrefixMiddleware — detect x-forwarded-prefix for reverse proxy path prefix
+app.add_middleware(ProxyPrefixMiddleware)
 
 # Security: warn if CORS origins contain wildcard when credentials are enabled
 if "*" in settings.backend_cors_origins:
@@ -140,8 +144,10 @@ logger.info(
 if static_dir.exists():
     try:
         # Mount assets only (without html=True to avoid catch-all behavior)
+        _root = settings.root_path.rstrip("/") if settings.root_path else ""
+        assets_mount_path = f"{_root}/assets" if _root else "/assets"
         app.mount(
-            "/assets",
+            assets_mount_path,
             StaticFiles(directory=str(static_dir / "assets"), html=False),
             name="assets",
         )
@@ -149,15 +155,17 @@ if static_dir.exists():
 
         # Catch-all route for SPA client-side routing
         # Serves index.html for any unmatched frontend routes (not API routes)
+        # Use assets_mount_path without leading slash for guard comparison
+        _assets_prefix = assets_mount_path.lstrip("/").lower()
         @app.get("/{full_path:path}")
         async def serve_spa(full_path: str):
             # Return 404 for API and assets paths to avoid shadowing (case-insensitive)
             normalized_path = full_path.lower()
             if (
                 normalized_path == "api"
-                or normalized_path == "assets"
+                or normalized_path == _assets_prefix
                 or normalized_path.startswith("api/")
-                or normalized_path.startswith("assets/")
+                or normalized_path.startswith(_assets_prefix + "/")
             ):
                 raise HTTPException(status_code=404, detail="Not found")
             return FileResponse(static_dir / "index.html")

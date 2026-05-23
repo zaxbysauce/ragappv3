@@ -115,7 +115,7 @@ function App() {
 
   return (
     <ErrorBoundary>
-      <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <BrowserRouter basename={import.meta.env.VITE_APP_BASENAME || ''} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Suspense fallback={<PageLoader />}>
           <Routes>
               <Route path="/setup" element={<SetupPage />} />

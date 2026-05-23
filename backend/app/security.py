@@ -3,6 +3,7 @@
 import hashlib
 import hmac
 import logging
+import re
 import secrets
 import threading
 import time
@@ -196,8 +197,27 @@ def csrf_protect(
     return x_csrf_token
 
 
-def issue_csrf_token(response: Response, csrf_manager: CSRFManager) -> str:
+SAFE_PREFIX_RE = re.compile(r"^(?!.*\.\.)[/A-Za-z0-9._~!$&'()*+:@%-]+$")
+
+
+def issue_csrf_token(response: Response, csrf_manager: CSRFManager, request: Request | None = None) -> str:
     token = csrf_manager.generate_token()
+    path = "/api"
+    if request:
+        # Prefer middleware-validated value (task 3.4)
+        if hasattr(request.state, "forwarded_prefix"):
+            prefix = request.state.forwarded_prefix
+        else:
+            # Middleware not installed — read and validate raw header
+            prefix = request.headers.get("x-forwarded-prefix", "")
+            if not (prefix and SAFE_PREFIX_RE.match(prefix)):
+                prefix = ""
+        if prefix:
+            prefix = prefix.strip("/")
+            if prefix:
+                path = f"/{prefix}/api"
+            else:
+                path = "/api"
     response.set_cookie(
         CSRF_COOKIE_NAME,
         token,
@@ -205,6 +225,7 @@ def issue_csrf_token(response: Response, csrf_manager: CSRFManager) -> str:
         samesite="lax",
         secure=settings.csrf_cookie_secure,
         httponly=False,
+        path=path,
     )
     return token
 

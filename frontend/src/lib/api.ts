@@ -1,7 +1,8 @@
 import axios, { AxiosRequestHeaders } from "axios";
 import { setChatHistory as storageSetChatHistory, getChatHistory as storageGetChatHistory } from "./storage";
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || "/api";
+const basename = (import.meta.env.VITE_APP_BASENAME || "").replace(/\/$/, "");
+const API_BASE_URL = import.meta.env.VITE_API_URL || (basename ? `${basename}/api` : "/api");
 
 // Module-level JWT token holder - persisted via useAuthStore persist middleware
 let _jwtAccessToken: string | null = null;
@@ -247,8 +248,10 @@ apiClient.interceptors.response.use(
 
       // Clear auth state and redirect to login
       _jwtAccessToken = null;
-      if (window.location.pathname !== "/login") {
-        window.location.href = "/login";
+      const basename = (import.meta.env.VITE_APP_BASENAME || '').replace(/\/$/, '')
+      const loginPath = basename ? `${basename}/login` : '/login'
+      if (window.location.pathname !== loginPath) {
+        window.location.href = loginPath
       }
     }
 

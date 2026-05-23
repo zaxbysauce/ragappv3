@@ -53,7 +53,8 @@ export default function WikiPage() {
     // jsdom (vitest) does not provide EventSource. Skip cleanly so unit tests
     // that don't exercise the live stream still mount the page.
     if (typeof EventSource === "undefined") return;
-    const apiBase = import.meta.env.VITE_API_URL || "/api";
+    const basename = (import.meta.env.VITE_APP_BASENAME || "").replace(/\/$/, "");
+    const apiBase = import.meta.env.VITE_API_URL || (basename ? `${basename}/api` : "/api");
     const url = `${apiBase}/wiki/events?vault_id=${activeVaultId}`;
     const es = new EventSource(url, { withCredentials: true });
     eventSourceRef.current = es;

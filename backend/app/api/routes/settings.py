@@ -790,9 +790,10 @@ def put_settings(
 @router.get("/csrf-token")
 def get_csrf_token(
     response: Response,
+    request: Request,
     csrf_manager: CSRFManager = Depends(get_csrf_manager),
 ):
-    token = issue_csrf_token(response, csrf_manager)
+    token = issue_csrf_token(response, csrf_manager, request)
     return {"csrf_token": token}
 
 

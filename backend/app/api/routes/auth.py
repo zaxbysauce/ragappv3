@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from app.api.deps import get_current_active_user, get_db
 from app.limiter import limiter
-from app.security import csrf_protect, get_csrf_manager, issue_csrf_token
+from app.security import SAFE_PREFIX_RE, csrf_protect, get_csrf_manager, issue_csrf_token
 from app.services.auth_service import (
     create_access_token,
     create_refresh_token,
@@ -32,6 +32,27 @@ def _is_secure_request(request: Request) -> bool:
     """Return True if the request came in over HTTPS or a trusted proxy header."""
     forwarded = request.headers.get("x-forwarded-proto", "")
     return request.url.scheme == "https" or forwarded.lower() == "https"
+
+
+def _get_cookie_path(request: Request, suffix: str) -> str:
+    """Return a cookie path that includes any reverse-proxy path prefix."""
+    # Prefer middleware-validated value (task 3.4)
+    if hasattr(request.state, "forwarded_prefix"):
+        prefix = request.state.forwarded_prefix
+        if not isinstance(prefix, str):
+            prefix = ""
+    else:
+        # Middleware not installed — read and validate raw header
+        prefix = request.headers.get("x-forwarded-prefix", "")
+        if not (prefix and SAFE_PREFIX_RE.match(prefix)):
+            prefix = ""
+
+    if prefix:
+        prefix = prefix.rstrip("/")
+        if not suffix.startswith("/"):
+            suffix = "/" + suffix
+        return f"{prefix}{suffix}"
+    return suffix
 
 
 class RegisterRequest(BaseModel):
@@ -125,7 +146,7 @@ async def register(
         secure=_is_secure_request(request),
         samesite="lax",
         max_age=REFRESH_TOKEN_MAX_AGE_DAYS * 24 * 60 * 60,
-        path="/api/auth/refresh",
+        path=_get_cookie_path(request, "/api/auth/refresh"),
     )
 
     return {
@@ -247,11 +268,11 @@ async def login(
         secure=_is_secure_request(request),
         samesite="lax",
         max_age=REFRESH_TOKEN_MAX_AGE_DAYS * 24 * 60 * 60,
-        path="/api/auth/refresh",
+        path=_get_cookie_path(request, "/api/auth/refresh"),
     )
 
     csrf_manager = get_csrf_manager(request)
-    issue_csrf_token(response, csrf_manager)
+    issue_csrf_token(response, csrf_manager, request)
 
     return {
         "access_token": access_token,
@@ -364,11 +385,11 @@ async def refresh(
         secure=_is_secure_request(request),
         samesite="lax",
         max_age=REFRESH_TOKEN_MAX_AGE_DAYS * 24 * 60 * 60,
-        path="/api/auth/refresh",
+        path=_get_cookie_path(request, "/api/auth/refresh"),
     )
 
     csrf_manager = get_csrf_manager(request)
-    issue_csrf_token(response, csrf_manager)
+    issue_csrf_token(response, csrf_manager, request)
 
     return {
         "access_token": access_token,
@@ -379,6 +400,7 @@ async def refresh(
 
 @router.post("/logout")
 async def logout(
+    request: Request,
     response: Response,
     refresh_token: Optional[str] = Cookie(None, alias=REFRESH_TOKEN_COOKIE_NAME),
     db=Depends(get_db),
@@ -396,7 +418,7 @@ async def logout(
             db.rollback()
             logger.error("Failed to delete session during logout", exc_info=True)
 
-    response.delete_cookie(key=REFRESH_TOKEN_COOKIE_NAME, path="/api/auth/refresh")
+    response.delete_cookie(key=REFRESH_TOKEN_COOKIE_NAME, path=_get_cookie_path(request, "/api/auth/refresh"))
     return {"message": "Logged out successfully"}
 
 
@@ -557,7 +579,7 @@ async def change_password(
         secure=_is_secure_request(request),
         samesite="lax",
         max_age=REFRESH_TOKEN_MAX_AGE_DAYS * 24 * 60 * 60,
-        path="/api/auth/refresh",
+        path=_get_cookie_path(request, "/api/auth/refresh"),
     )
 
     return {
@@ -700,7 +722,7 @@ async def revoke_all_sessions(
         secure=_is_secure_request(request),
         samesite="lax",
         max_age=REFRESH_TOKEN_MAX_AGE_DAYS * 24 * 60 * 60,
-        path="/api/auth/refresh",
+        path=_get_cookie_path(request, "/api/auth/refresh"),
     )
 
     return {

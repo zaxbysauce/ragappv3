@@ -46,7 +46,8 @@ interface AuthState {
   _setLoading: (loading: boolean) => void;
 }
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || "/api";
+const basename = (import.meta.env.VITE_APP_BASENAME || "").replace(/\/$/, "");
+const API_BASE_URL = import.meta.env.VITE_API_URL || (basename ? `${basename}/api` : "/api");
 
 // Create a separate axios instance for auth calls to avoid interceptor loops
 const authClient = axios.create({

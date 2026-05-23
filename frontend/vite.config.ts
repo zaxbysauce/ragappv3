@@ -3,7 +3,12 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
 
+// VITE_APP_BASENAME: Build-time path prefix for asset URLs. Application code reads this via import.meta.env.VITE_APP_BASENAME at runtime.
+export const appBasename = process.env.VITE_APP_BASENAME || ''
+const normalizedBasename = appBasename.replace(/\/+$/, '')
+
 export default defineConfig({
+  base: normalizedBasename || '/',
   plugins: [react()],
   resolve: {
     alias: {
@@ -25,9 +30,12 @@ export default defineConfig({
     port: 3000,
     host: true,
     proxy: {
-      '/api': {
+      [normalizedBasename ? `${normalizedBasename}/api` : '/api']: {
         target: 'http://localhost:9090',
         changeOrigin: true,
+        rewrite: normalizedBasename
+          ? (path) => path.replace(new RegExp(`^${normalizedBasename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`), '')
+          : undefined,
       },
     },
   },

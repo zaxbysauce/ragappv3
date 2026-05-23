@@ -71,6 +71,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        VITE_APP_BASENAME: ${VITE_APP_BASENAME:-}
     container_name: knowledgevault
     restart: unless-stopped
     ports:
@@ -123,6 +125,8 @@ services:
       - CHUNK_ENRICHMENT_ENABLED=${CHUNK_ENRICHMENT_ENABLED:-false}
       - MULTI_SCALE_INDEXING_ENABLED=${MULTI_SCALE_INDEXING_ENABLED:-true}
       - MULTI_SCALE_CHUNK_SIZES=${MULTI_SCALE_CHUNK_SIZES:-768,1536}
+      - BACKEND_CORS_ORIGINS=${BACKEND_CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}
+      - ROOT_PATH=${ROOT_PATH:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

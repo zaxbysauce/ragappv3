@@ -17,7 +17,8 @@ function WikiCard({ wikiRef }: WikiCardProps) {
 
   const handleNavigate = () => {
     if (wikiRef.slug) {
-      window.open(`/wiki?page=${encodeURIComponent(wikiRef.slug)}`, "_blank", "noopener");
+      const basename = (import.meta.env.VITE_APP_BASENAME || "").replace(/\/$/, "");
+      window.open(`${basename}/wiki?page=${encodeURIComponent(wikiRef.slug)}`, "_blank", "noopener");
     }
   };
 

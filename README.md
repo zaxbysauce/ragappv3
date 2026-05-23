@@ -190,6 +190,8 @@ On first launch, you'll be redirected to the **Setup Wizard** (`/setup`) to crea
 | `PORT` | 9090 | Web server port |
 | `HOST_DATA_DIR` | ./data | Host path for data persistence |
 | `DATA_DIR` | /app/data | Container data path |
+| `ROOT_PATH` | "" | Base path for backend router (e.g., `/knowledgevault` for subdirectory deployment) |
+| `VITE_APP_BASENAME` | "" | Base path for frontend router and asset URLs. Must match `ROOT_PATH` without trailing slash |
 | `OLLAMA_EMBEDDING_URL` | http://harrier-embed:8080/v1/embeddings | Embedding service endpoint (TEI) |
 | `OLLAMA_CHAT_URL` | http://host.docker.internal:11434 | Thinking chat endpoint |
 | `INSTANT_CHAT_URL` | http://host.docker.internal:1234 | Instant chat endpoint |
@@ -663,6 +665,84 @@ The chat interface provides a three-zone workspace layout:
 4. Click delete icon to remove
 5. Memories are automatically used in chat context
 
+## Subdirectory Deployment
+
+When deploying KnowledgeVault behind a reverse proxy at a subdirectory path (e.g., `https://example.com/knowledgevault/`), you need to configure both the backend and frontend base paths:
+
+### Backend Configuration
+
+Set `ROOT_PATH` in your `.env` file to match the subdirectory path (without trailing slash):
+
+```bash
+# .env
+ROOT_PATH=/knowledgevault
+```
+
+This tells FastAPI to generate URLs and handle requests relative to the base path.
+
+### Frontend Configuration
+
+Build the frontend Docker image with the `VITE_APP_BASENAME` build argument:
+
+```bash
+# Build with basename for subdirectory deployment
+docker compose build --build-arg VITE_APP_BASENAME=/knowledgevault
+
+# Or in docker-compose.yml, add:
+# args:
+#   VITE_APP_BASENAME: ${VITE_APP_BASENAME:-/knowledgevault}
+```
+
+The `VITE_APP_BASENAME` is used to:
+- Configure the React Router base path
+- Set the API base URL (`${VITE_APP_BASENAME}/api`)
+- Generate correct asset URLs for the built static files
+
+### Reverse Proxy Configuration
+
+**Nginx Example:**
+
+```nginx
+location /knowledgevault/ {
+    proxy_pass http://localhost:9090/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Host $host;
+    
+    # Required for WebSocket and proper URL handling
+    proxy_redirect http://localhost:9090/ /knowledgevault/;
+}
+```
+
+**Caddy Example:**
+
+```
+knowledgevault.example.com/knowledgevault {
+    handle_path /knowledgevault/* {
+        strip_prefix /knowledgevault
+        reverse_proxy localhost:9090
+    }
+}
+```
+
+### Environment Variable Coordination
+
+| Variable | Location | Purpose |
+|----------|----------|---------|
+| `ROOT_PATH` | Backend `.env` | FastAPI base path for URL generation |
+| `VITE_APP_BASENAME` | Docker build arg | Frontend router base path and API URL prefix |
+
+**Important:** Both values must match (without trailing slashes) for proper deployment.
+
+### Verifying Subdirectory Deployment
+
+After deployment, verify:
+1. Frontend loads at `https://yourdomain.com/knowledgevault/`
+2. API calls go to `https://yourdomain.com/knowledgevault/api/*`
+3. Static assets (JS, CSS) load from `https://yourdomain.com/knowledgevault/assets/*`
+4. Browser navigation uses the History API without 404 errors
+
 ## Development
 
 ### Backend Development
@@ -718,9 +798,30 @@ The three-zone chat workspace is built from these key components:
 ### Building Production Images
 
 ```bash
+# Build with optional basename for subdirectory deployment
+# Example: docker compose build --build-arg VITE_APP_BASENAME=/knowledgevault
 docker compose -f docker-compose.yml build
 docker compose -f docker-compose.yml up -d
 ```
+
+#### Docker Build Arguments
+
+The Docker build supports the `VITE_APP_BASENAME` argument for configuring the frontend router base path at build time:
+
+```bash
+# Build for root deployment (default)
+docker compose build
+
+# Build for subdirectory deployment
+docker compose build --build-arg VITE_APP_BASENAME=/knowledgevault
+```
+
+The `VITE_APP_BASENAME` value is injected into the frontend build and used to:
+- Configure the Vite router base path
+- Set the API base URL (`${VITE_APP_BASENAME}/api`)
+- Generate correct asset URLs for static files
+
+This configuration must match the `ROOT_PATH` setting in the backend `.env` file for proper reverse proxy deployment.
 
 ## Documentation
 
@@ -744,3 +845,26 @@ No license file present. Add LICENSE file or update this section as needed.
 - Issues: Create an issue in the repository
 - Admin Guide: See `docs/admin-guide.md`
 - Non-Technical Setup: See `docs/non-technical-setup.md`
+- Release Notes: See `docs/release.md` for version history and migration guides
+
+## Recent Changes (Phase 5)
+
+### Subdirectory Deployment Support
+
+**Fixed:** Frontend and backend base path configuration for reverse proxy subdirectory deployment.
+
+**Changes:**
+- Added `VITE_APP_BASENAME` build argument to Dockerfile for build-time frontend basename injection
+- Updated `docker-compose.yml` to pass `VITE_APP_BASENAME` as build argument
+- Fixed static file mounting to use `rstrip("/")` for consistent path handling
+- Updated `start.sh` to include `--proxy-headers --forwarded-allow-ips="*"` for proper reverse proxy support
+- Fixed cookie and CSRF token path generation to handle basename prefixes correctly
+- Updated frontend API client to incorporate `VITE_APP_BASENAME` in all API requests
+- Fixed Vue/React router base path to use normalized basename (trailing slash stripped)
+
+**Configuration:**
+- Set `ROOT_PATH` in backend `.env` (e.g., `/knowledgevault`)
+- Build Docker image with `VITE_APP_BASENAME` argument matching `ROOT_PATH`
+- Configure reverse proxy to strip the base path before forwarding to backend
+
+See the [Subdirectory Deployment](#subdirectory-deployment) section above for complete setup instructions.

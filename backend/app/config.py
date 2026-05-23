@@ -457,6 +457,20 @@ class Settings(BaseSettings):
     # CORS settings
     backend_cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
 
+    @field_validator("backend_cors_origins", mode="before")
+    @classmethod
+    def parse_backend_cors_origins(cls, v):
+        """Parse backend_cors_origins from comma-separated string or pass through if already a list."""
+        if isinstance(v, list):
+            return v
+        if isinstance(v, str):
+            origins = [origin.strip() for origin in v.split(",")]
+            return [origin for origin in origins if origin]
+        return v
+
+    # Root path for reverse proxy subdirectory deployment (e.g., /knowledgevault)
+    root_path: str = ""
+
     # Helper validation functions (consolidated validators)
     @staticmethod
     def _validate_int_range(

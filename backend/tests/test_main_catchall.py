@@ -88,9 +88,9 @@ class TestMainCatchAllRoute(unittest.TestCase):
             content = f.read()
 
         # Check for case-insensitive assets blocking
-        self.assertIn('normalized_path == "assets"', content,
+        self.assertIn('normalized_path == _assets_prefix', content,
                       "Assets path check not found")
-        self.assertIn('normalized_path.startswith("assets/")', content,
+        self.assertIn('normalized_path.startswith(_assets_prefix + "/")', content,
                       "Assets prefix check not found")
 
     def test_assets_mount_configured(self):
@@ -100,7 +100,7 @@ class TestMainCatchAllRoute(unittest.TestCase):
             content = f.read()
 
         # Check for assets mount configuration
-        self.assertIn('app.mount("/assets"', content,
+        self.assertIn('app.mount(\n            assets_mount_path', content,
                       "Assets mount not found")
         self.assertIn('StaticFiles(directory=str(static_dir / "assets")', content,
                       "Assets directory configuration not found")
