@@ -81,9 +81,14 @@ Read the relevant reference before starting that phase.
    - current branch
    - remotes
    - top-level files such as `AGENTS.md`, `README*`, package manifests, test configs, CI configs
-3. If the worktree has unrelated user changes, do not overwrite them. Continue read-only until you can isolate your changes or ask the user.
-4. Create the trace directory and initialize `state.md`.
-5. Create a todo list with all phases. Mark only one step in progress at a time, and mark steps complete only after gate verification.
+3. Perform a checkout reality check before accepting external findings:
+   - verify cited files and line ranges exist in the current worktree
+   - verify whether the current checkout is the PR head, base branch, detached HEAD, or another branch
+   - classify supplied findings as `confirmed`, `not present in checkout`, `pre-existing`, `out of scope`, or `needs upstream branch`
+   - do not fix findings that only exist on a different branch until the correct branch is checked out
+4. If the worktree has unrelated user changes, do not overwrite them. Continue read-only until you can isolate your changes or ask the user.
+5. Create the trace directory and initialize `state.md`.
+6. Create a todo list with all phases. Mark only one step in progress at a time, and mark steps complete only after gate verification.
 
 ### Phase 0 Gate
 

@@ -703,7 +703,9 @@ ollama serve
 curl http://localhost:9090/api/health
 
 # Check CORS settings in backend
-# Verify VITE_API_URL in frontend/.env
+# Verify VITE_API_URL in frontend/.env points at the backend API base:
+# - Same-origin/proxied frontend: VITE_API_URL=/api
+# - Separate dev backend: VITE_API_URL=http://localhost:9090/api
 
 # Restart both services
 ```

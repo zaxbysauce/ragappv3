@@ -1,13 +1,18 @@
 import { describe, it, expect } from "vitest";
 import { parseSSEStream, type ChatStreamCallbacks } from "./api";
 
-function makeReader(events: object[]): ReadableStreamDefaultReader<Uint8Array> {
+function makeReader(
+  events: object[],
+  appendDoneMarker = true
+): ReadableStreamDefaultReader<Uint8Array> {
   const encoder = new TextEncoder();
   const sseBody = events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("");
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       controller.enqueue(encoder.encode(sseBody));
-      controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+      if (appendDoneMarker) {
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+      }
       controller.close();
     },
   });
@@ -139,5 +144,24 @@ describe("parseSSEStream — citation_validation", () => {
     const cv = out.validationCalls[0] as { valid: string[]; invalid: string[] };
     expect(cv.invalid).toContain("S99");
     expect(cv.valid).toContain("S1");
+  });
+});
+
+describe("parseSSEStream - regression: backend done completes once (F-001)", () => {
+  it("calls onComplete once for the backend JSON done event without requiring [DONE]", async () => {
+    let completeCalls = 0;
+    const callbacks: ChatStreamCallbacks = {
+      onMessage: () => {},
+      onComplete: () => {
+        completeCalls += 1;
+      },
+    };
+
+    await parseSSEStream(
+      makeReader([{ type: "content", content: "ok" }, { type: "done" }], false),
+      callbacks
+    );
+
+    expect(completeCalls).toBe(1);
   });
 });

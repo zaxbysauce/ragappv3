@@ -59,6 +59,14 @@ Build a map of:
 - debt surface
 - public/risky surfaces
 
+For RAGAPPv3 PR-time checks, run the lightweight `ci-compatibility-audit` first. Use this deeper skill when that first pass finds structural risk or when the user requests a broad CI/debt audit.
+
+RAGAPPv3 current CI anchors:
+- `.github/workflows/ci.yml`
+- frontend: `npm ci --engine-strict`, toolchain graph check, `npm run typecheck`, `npm run lint`, targeted API smoke tests, `npm test`, root build, subpath build
+- backend: install `requirements-ci.txt` and `requirements-dev.txt`, `ruff check .`, `pytest --tb=short -v`, informational coverage
+- quality contracts: `python scripts/check_config_contract.py`, `python scripts/check_pr_scope_drift.py`
+
 ### Phase 1 — Parallel exploration
 Use subagents for breadth so the main context stays clean.
 Split the repo into disjoint scopes and/or audit families.

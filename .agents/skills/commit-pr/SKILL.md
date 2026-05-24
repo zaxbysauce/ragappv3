@@ -56,6 +56,9 @@ and the current change touches them.
 
 5. Handle external review findings.
    - Use this protocol whenever the user provides external-agent, reviewer, CI, or audit findings for an existing PR.
+   - Load `review-finding-validator` for finding bundles before deciding what is true.
+   - Load `config-env-contract-check` when findings or changes touch env vars, Docker, Compose, settings, CORS, root paths, or deployment docs.
+   - Load `ci-compatibility-audit` when findings or changes touch workflows, package manifests, requirements, test commands, lint, build, or dependency installation.
    - Refresh current state before judging findings: fetch the target branch, inspect the current branch or PR head, and compare against the current diff.
    - Treat every finding as a claim until verified against source, diff, config, or focused runtime/test evidence.
    - Classify each finding as `confirmed`, `partially valid`, `not reproduced`, `pre-existing`, or `out of scope`, and keep brief evidence for the classification.
