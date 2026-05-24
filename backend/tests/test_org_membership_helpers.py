@@ -124,7 +124,7 @@ def setup_db(monkeypatch):
         _pool_cache.clear()
 
     # Initialize schema manually with valid SQL
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA foreign_keys = ON;")
     conn.executescript(TEST_SCHEMA)
@@ -140,7 +140,7 @@ def setup_db(monkeypatch):
     monkeypatch.setattr("app.config.settings.users_enabled", True)
 
     # Seed test users
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute(
         "INSERT INTO users (id, username, hashed_password, full_name, role, is_active) VALUES (?, ?, ?, ?, ?, 1)",
@@ -174,7 +174,7 @@ def _get_db_conn():
     """Get a direct connection to the test database."""
     from app.config import settings
 
-    return sqlite3.connect(str(settings.sqlite_path))
+    return sqlite3.connect(str(settings.sqlite_path), check_same_thread=False)
 
 
 def _create_org(name: str, owner_user_id: int):
@@ -215,29 +215,29 @@ def _add_org_member(org_id: int, user_id: int, role: str = "member"):
 class TestGetUserOrgs:
     """Tests for get_user_orgs function."""
 
-    def test_get_user_orgs_returns_empty_list_for_user_with_no_orgs(self):
+    async def test_get_user_orgs_returns_empty_list_for_user_with_no_orgs(self):
         """get_user_orgs returns empty list for user with no org memberships."""
         conn = _get_db_conn()
         try:
             # User 1 has no org memberships
-            result = get_user_orgs(1, conn)
+            result = await get_user_orgs(1, conn)
             assert result == []
         finally:
             conn.close()
 
-    def test_get_user_orgs_returns_single_org_id_for_user_with_one_org(self):
+    async def test_get_user_orgs_returns_single_org_id_for_user_with_one_org(self):
         """get_user_orgs returns list with single org ID for user in one org."""
         conn = _get_db_conn()
         try:
             # Create org and add user 1 as member
             org_id = _create_org("Single Org", 1)
 
-            result = get_user_orgs(1, conn)
+            result = await get_user_orgs(1, conn)
             assert result == [org_id]
         finally:
             conn.close()
 
-    def test_get_user_orgs_returns_multiple_org_ids_for_user_with_multiple_orgs(self):
+    async def test_get_user_orgs_returns_multiple_org_ids_for_user_with_multiple_orgs(self):
         """get_user_orgs returns list of all org IDs for user in multiple orgs."""
         conn = _get_db_conn()
         try:
@@ -250,17 +250,17 @@ class TestGetUserOrgs:
             _add_org_member(org2_id, 1, "member")
             _add_org_member(org3_id, 1, "member")
 
-            result = get_user_orgs(1, conn)
+            result = await get_user_orgs(1, conn)
             assert len(result) == 3
             assert set(result) == {org1_id, org2_id, org3_id}
         finally:
             conn.close()
 
-    def test_get_user_orgs_returns_empty_list_for_nonexistent_user(self):
+    async def test_get_user_orgs_returns_empty_list_for_nonexistent_user(self):
         """get_user_orgs returns empty list for non-existent user ID."""
         conn = _get_db_conn()
         try:
-            result = get_user_orgs(9999, conn)
+            result = await get_user_orgs(9999, conn)
             assert result == []
         finally:
             conn.close()
@@ -274,29 +274,29 @@ class TestGetUserOrgs:
 class TestGetUserPrimaryOrg:
     """Tests for get_user_primary_org function."""
 
-    def test_get_user_primary_org_returns_none_for_user_with_no_orgs(self):
+    async def test_get_user_primary_org_returns_none_for_user_with_no_orgs(self):
         """get_user_primary_org returns None for user with no org memberships."""
         conn = _get_db_conn()
         try:
             # User 1 has no org memberships
-            result = get_user_primary_org(1, conn)
+            result = await get_user_primary_org(1, conn)
             assert result is None
         finally:
             conn.close()
 
-    def test_get_user_primary_org_returns_org_id_for_user_with_one_org(self):
+    async def test_get_user_primary_org_returns_org_id_for_user_with_one_org(self):
         """get_user_primary_org returns org ID for user in exactly one org."""
         conn = _get_db_conn()
         try:
             # Create org and add user 1 as member
             org_id = _create_org("Primary Org Test", 1)
 
-            result = get_user_primary_org(1, conn)
+            result = await get_user_primary_org(1, conn)
             assert result == org_id
         finally:
             conn.close()
 
-    def test_get_user_primary_org_raises_multiple_org_error_for_user_with_multiple_orgs(
+    async def test_get_user_primary_org_raises_multiple_org_error_for_user_with_multiple_orgs(
         self,
     ):
         """get_user_primary_org raises MultipleOrgError for user in multiple orgs."""
@@ -310,7 +310,7 @@ class TestGetUserPrimaryOrg:
             _add_org_member(org2_id, 1, "member")
 
             with pytest.raises(MultipleOrgError) as exc_info:
-                get_user_primary_org(1, conn)
+                await get_user_primary_org(1, conn)
 
             # Verify error message contains user ID and org IDs
             assert "User 1" in str(exc_info.value)
@@ -318,11 +318,11 @@ class TestGetUserPrimaryOrg:
         finally:
             conn.close()
 
-    def test_get_user_primary_org_returns_none_for_nonexistent_user(self):
+    async def test_get_user_primary_org_returns_none_for_nonexistent_user(self):
         """get_user_primary_org returns None for non-existent user ID."""
         conn = _get_db_conn()
         try:
-            result = get_user_primary_org(9999, conn)
+            result = await get_user_primary_org(9999, conn)
             assert result is None
         finally:
             conn.close()
@@ -336,7 +336,7 @@ class TestGetUserPrimaryOrg:
 class TestMultipleOrgError:
     """Tests for MultipleOrgError exception."""
 
-    def test_multiple_org_error_is_raised_with_message(self):
+    async def test_multiple_org_error_is_raised_with_message(self):
         """MultipleOrgError is raised with descriptive message."""
         conn = _get_db_conn()
         try:
@@ -349,7 +349,7 @@ class TestMultipleOrgError:
             _add_org_member(org3_id, 1, "member")
 
             with pytest.raises(MultipleOrgError) as exc_info:
-                get_user_primary_org(1, conn)
+                await get_user_primary_org(1, conn)
 
             error_message = str(exc_info.value)
             assert "User 1" in error_message
@@ -365,7 +365,7 @@ class TestMultipleOrgError:
         """MultipleOrgError is a subclass of Exception."""
         assert issubclass(MultipleOrgError, Exception)
 
-    def test_multiple_org_error_can_be_caught_as_exception(self):
+    async def test_multiple_org_error_can_be_caught_as_exception(self):
         """MultipleOrgError can be caught as general Exception."""
         conn = _get_db_conn()
         try:
@@ -376,7 +376,7 @@ class TestMultipleOrgError:
 
             # Catch as general Exception
             try:
-                get_user_primary_org(1, conn)
+                await get_user_primary_org(1, conn)
                 assert False, "Should have raised MultipleOrgError"
             except Exception as e:
                 assert isinstance(e, MultipleOrgError)

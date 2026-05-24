@@ -565,3 +565,8 @@ async def lifespan(app: FastAPI):
         app.state.db_pool.close_all()
     except Exception:
         pass
+    try:
+        from app.services.auth_service import _auth_executor
+        _auth_executor.shutdown(wait=False)
+    except Exception:
+        pass

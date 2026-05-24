@@ -11,7 +11,7 @@ import shutil
 import sqlite3
 from typing import Callable, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.api.deps import (
@@ -25,6 +25,8 @@ from app.api.deps import (
     require_vault_permission,
 )
 from app.services.vector_store import VectorStore
+from app.limiter import limiter
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -143,16 +145,16 @@ async def _fetch_vault_with_counts(
     conn: sqlite3.Connection, vault_id: int, user: Optional[dict] = None
 ) -> Optional[VaultResponse]:
     """Fetch a single vault with file/memory/session counts."""
-    cursor = await asyncio.to_thread(
-        conn.execute,
-        _VAULT_WITH_COUNTS_SQL + " WHERE v.id = ? GROUP BY v.id",
-        (vault_id,),
+    row = await asyncio.to_thread(
+        lambda: conn.execute(
+            _VAULT_WITH_COUNTS_SQL + " WHERE v.id = ? GROUP BY v.id",
+            (vault_id,),
+        ).fetchone()
     )
-    row = await asyncio.to_thread(cursor.fetchone)
     if not row:
         return None
     permission = (
-        await asyncio.to_thread(get_effective_vault_permission, conn, user, vault_id)
+        await get_effective_vault_permission(conn, user, vault_id)
         if user
         else None
     )
@@ -163,18 +165,13 @@ async def _fetch_all_vaults(
     conn: sqlite3.Connection, user: Optional[dict] = None
 ) -> List[VaultResponse]:
     """Fetch all vaults with counts, ordered by creation date."""
-    cursor = await asyncio.to_thread(
-        conn.execute,
-        _VAULT_WITH_COUNTS_SQL + " GROUP BY v.id ORDER BY v.created_at ASC LIMIT 1000",
+    rows = await asyncio.to_thread(
+        lambda: conn.execute(
+            _VAULT_WITH_COUNTS_SQL + " GROUP BY v.id ORDER BY v.created_at ASC LIMIT 1000"
+        ).fetchall()
     )
-    rows = await asyncio.to_thread(cursor.fetchall)
     permissions = (
-        await asyncio.to_thread(
-            get_effective_vault_permissions,
-            conn,
-            user,
-            [row[0] for row in rows],
-        )
+        await get_effective_vault_permissions(conn, user, [row[0] for row in rows])
         if user
         else {}
     )
@@ -237,8 +234,9 @@ async def _fetch_accessible_vaults(
         )
     """
 
-    cursor = await asyncio.to_thread(conn.execute, union_query, (user_id, user_id, user_id, user_id))
-    rows = await asyncio.to_thread(cursor.fetchall)
+    rows = await asyncio.to_thread(
+        lambda: conn.execute(union_query, (user_id, user_id, user_id, user_id)).fetchall()
+    )
 
     # Extract vault IDs from rows
     vault_ids = [row[0] for row in rows]
@@ -247,12 +245,7 @@ async def _fetch_accessible_vaults(
         return []
 
     # Get permissions for the filtered vault set
-    permissions = await asyncio.to_thread(
-        get_effective_vault_permissions,
-        conn,
-        user,
-        vault_ids,
-    )
+    permissions = await get_effective_vault_permissions(conn, user, vault_ids)
 
     # Fetch full vault records with counts
     placeholders = ",".join("?" for _ in vault_ids)
@@ -263,8 +256,9 @@ async def _fetch_accessible_vaults(
         LIMIT 1000
     """
 
-    full_cursor = await asyncio.to_thread(conn.execute, full_query, tuple(vault_ids))
-    full_rows = await asyncio.to_thread(full_cursor.fetchall)
+    full_rows = await asyncio.to_thread(
+        lambda: conn.execute(full_query, tuple(vault_ids)).fetchall()
+    )
 
     # Build vault responses, filtering out any that resolved to None permission
     # (safety net against TOCTOU between UNION and permission check)
@@ -323,8 +317,10 @@ async def get_vault(
 
 
 @router.post("/vaults", response_model=VaultResponse, status_code=201)
+@limiter.limit(settings.vault_create_rate_limit)
 async def create_vault(
-    request: VaultCreateRequest,
+    request: Request,
+    body: VaultCreateRequest,
     conn: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_active_user),
 ):
@@ -337,7 +333,7 @@ async def create_vault(
     Returns 409 if a vault with the same name already exists.
     """
     # Resolve org_id: explicit > inferred > error
-    target_org_id = request.org_id
+    target_org_id = body.org_id
     if target_org_id is None:
         # Try to infer from caller's org memberships
         cursor = await asyncio.to_thread(
@@ -386,7 +382,7 @@ async def create_vault(
         cursor = await asyncio.to_thread(
             conn.execute,
             "INSERT INTO vaults (name, description, org_id, visibility, owner_id) VALUES (?, ?, ?, ?, ?)",
-            (request.name, request.description, target_org_id, request.visibility, user["id"]),
+            (body.name, body.description, target_org_id, body.visibility, user["id"]),
         )
         vault_id = cursor.lastrowid
     except sqlite3.IntegrityError:
@@ -395,7 +391,7 @@ async def create_vault(
         except Exception:
             pass
         raise HTTPException(
-            status_code=409, detail=f"Vault with name '{request.name}' already exists"
+            status_code=409, detail=f"Vault with name '{body.name}' already exists"
         )
     except Exception:
         try:
@@ -448,10 +444,9 @@ async def update_vault(
     Returns 409 if new name conflicts with an existing vault.
     """
     # Check if vault exists
-    cursor = await asyncio.to_thread(
-        conn.execute, "SELECT id, name FROM vaults WHERE id = ?", (vault_id,)
+    row = await asyncio.to_thread(
+        lambda: conn.execute("SELECT id, name FROM vaults WHERE id = ?", (vault_id,)).fetchone()
     )
-    row = await asyncio.to_thread(cursor.fetchone)
 
     if row is None:
         raise HTTPException(
@@ -494,6 +489,7 @@ async def update_vault(
         await asyncio.to_thread(conn.execute, sql, params)
         await asyncio.to_thread(conn.commit)
     except sqlite3.IntegrityError:
+        await asyncio.to_thread(conn.rollback)
         raise HTTPException(
             status_code=409, detail=f"Vault with name '{request.name}' already exists"
         )
@@ -542,10 +538,9 @@ async def delete_vault(
     Returns 404 if not found.
     """
     # Check if vault exists
-    cursor = await asyncio.to_thread(
-        conn.execute, "SELECT id, name FROM vaults WHERE id = ?", (vault_id,)
+    row = await asyncio.to_thread(
+        lambda: conn.execute("SELECT id, name FROM vaults WHERE id = ?", (vault_id,)).fetchone()
     )
-    row = await asyncio.to_thread(cursor.fetchone)
 
     if row is None:
         raise HTTPException(
@@ -560,9 +555,7 @@ async def delete_vault(
 
         # Delete vector chunks for this vault
         try:
-            deleted_chunks = await asyncio.to_thread(
-                vector_store.delete_by_vault, str(vault_id)
-            )
+            deleted_chunks = await vector_store.delete_by_vault(str(vault_id))
             logger.info(
                 "Deleted %d chunks from vector store for vault_id %s",
                 deleted_chunks,
@@ -672,10 +665,9 @@ async def get_vault_groups(
     Returns 404 if vault doesn't exist.
     """
     # Check if vault exists
-    cursor = await asyncio.to_thread(
-        conn.execute, "SELECT id FROM vaults WHERE id = ?", (vault_id,)
+    row = await asyncio.to_thread(
+        lambda: conn.execute("SELECT id FROM vaults WHERE id = ?", (vault_id,)).fetchone()
     )
-    row = await asyncio.to_thread(cursor.fetchone)
     if row is None:
         raise HTTPException(
             status_code=404, detail=f"Vault with id {vault_id} not found"
@@ -686,18 +678,18 @@ async def get_vault_groups(
         raise HTTPException(status_code=403, detail="No admin access to this vault")
 
     # Fetch groups with access to this vault
-    cursor = await asyncio.to_thread(
-        conn.execute,
-        """
+    rows = await asyncio.to_thread(
+        lambda: conn.execute(
+            """
             SELECT g.id, g.name, g.description
             FROM groups g
             JOIN vault_group_access vga ON g.id = vga.group_id
             WHERE vga.vault_id = ?
             ORDER BY g.name
-        """,
-        (vault_id,),
+            """,
+            (vault_id,),
+        ).fetchall()
     )
-    rows = await asyncio.to_thread(cursor.fetchall)
 
     groups = [
         VaultGroupResponse(id=row[0], name=row[1], description=row[2] or "")
@@ -724,12 +716,9 @@ async def update_vault_groups(
     Returns 404 if vault doesn't exist.
     """
     # Check if vault exists and get its org_id
-    cursor = await asyncio.to_thread(
-        conn.execute,
-        "SELECT id, org_id FROM vaults WHERE id = ?",
-        (vault_id,),
+    vault_row = await asyncio.to_thread(
+        lambda: conn.execute("SELECT id, org_id FROM vaults WHERE id = ?", (vault_id,)).fetchone()
     )
-    vault_row = await asyncio.to_thread(cursor.fetchone)
     if vault_row is None:
         raise HTTPException(
             status_code=404, detail=f"Vault with id {vault_id} not found"
@@ -752,15 +741,15 @@ async def update_vault_groups(
 
     # Validate all group_ids exist and belong to the same org as the vault
     placeholders = ",".join("?" * len(group_ids))
-    cursor = await asyncio.to_thread(
-        conn.execute,
-        f"""
+    group_rows = await asyncio.to_thread(
+        lambda: conn.execute(
+            f"""
             SELECT id, org_id FROM groups
             WHERE id IN ({placeholders})
-        """,
-        tuple(group_ids),
+            """,
+            tuple(group_ids),
+        ).fetchall()
     )
-    group_rows = await asyncio.to_thread(cursor.fetchall)
 
     found_group_ids = {row[0] for row in group_rows}
     missing_group_ids = set(group_ids) - found_group_ids
@@ -807,18 +796,18 @@ async def update_vault_groups(
         raise
 
     # Fetch and return updated groups
-    cursor = await asyncio.to_thread(
-        conn.execute,
-        """
+    rows = await asyncio.to_thread(
+        lambda: conn.execute(
+            """
             SELECT g.id, g.name, g.description
             FROM groups g
             JOIN vault_group_access vga ON g.id = vga.group_id
             WHERE vga.vault_id = ?
             ORDER BY g.name
-        """,
-        (vault_id,),
+            """,
+            (vault_id,),
+        ).fetchall()
     )
-    rows = await asyncio.to_thread(cursor.fetchall)
 
     groups = [
         VaultGroupResponse(id=row[0], name=row[1], description=row[2] or "")

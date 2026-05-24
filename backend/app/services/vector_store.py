@@ -7,6 +7,7 @@ import json
 import logging
 import threading
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, cast
 
@@ -19,9 +20,6 @@ from app.config import settings
 from app.utils.fusion import rrf_fuse
 
 logger = logging.getLogger(__name__)
-
-# Multi-scale search concurrency limit
-_MULTI_SCALE_CONCURRENCY = 4
 
 # Thread lock for FTS exceptions counter
 _fts_lock = threading.Lock()
@@ -93,8 +91,32 @@ class VectorStore:
     def _get_search_semaphore(self) -> asyncio.Semaphore:
         """Return the shared search semaphore, creating it on first call."""
         if self._search_semaphore is None:
-            self._search_semaphore = asyncio.Semaphore(_MULTI_SCALE_CONCURRENCY)
+            self._search_semaphore = asyncio.Semaphore(settings.vector_search_concurrency)
         return self._search_semaphore
+
+    @asynccontextmanager
+    async def _acquire_write_lock(self):
+        """Acquire the write lock with a configurable timeout.
+
+        Yields:
+            None
+
+        Raises:
+            VectorStoreError: If the lock acquisition times out.
+        """
+        try:
+            await asyncio.wait_for(
+                self._write_lock.acquire(),
+                timeout=settings.write_lock_timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            raise VectorStoreError(
+                f"Write lock acquisition timed out after {settings.write_lock_timeout_seconds}s"
+            )
+        try:
+            yield
+        finally:
+            self._write_lock.release()
 
     async def connect(self) -> "VectorStore":
         """Connect to LanceDB.
@@ -111,7 +133,7 @@ class VectorStore:
         return self
 
     async def init_table(self, embedding_dim: int) -> "VectorStore":
-        async with self._write_lock:
+        async with self._acquire_write_lock():
             return await self._init_table_unlocked(embedding_dim)
 
     async def _init_table_unlocked(self, embedding_dim: int) -> "VectorStore":
@@ -472,7 +494,7 @@ class VectorStore:
 
     async def add_chunks(self, records: List[Dict[str, Any]]) -> Dict[str, float]:
         """Serialize chunk writes and related LanceDB maintenance."""
-        async with self._write_lock:
+        async with self._acquire_write_lock():
             return await self._add_chunks_unlocked(records)
 
     async def add_chunks_then_delete_ids(
@@ -484,7 +506,7 @@ class VectorStore:
         remove the already-searchable base index. If cleanup fails after the add,
         callers may temporarily see duplicate rows, but not zero rows.
         """
-        async with self._write_lock:
+        async with self._acquire_write_lock():
             await self._add_chunks_unlocked(records)
             return await self._delete_ids_unlocked(old_ids)
 
@@ -638,7 +660,7 @@ class VectorStore:
 
     async def flush_optimize(self) -> None:
         """Serialize an explicit LanceDB optimize call."""
-        async with self._write_lock:
+        async with self._acquire_write_lock():
             return await self._flush_optimize_unlocked()
 
     async def _flush_optimize_unlocked(self) -> None:
@@ -875,7 +897,7 @@ class VectorStore:
         # Check if vector index should be created (deferred index creation).
         # This can mutate LanceDB even on a read path, so serialize it with
         # ingestion/delete maintenance.
-        async with self._write_lock:
+        async with self._acquire_write_lock():
             await self._maybe_create_vector_index()
 
         # Check for multi-scale search
@@ -1085,7 +1107,7 @@ class VectorStore:
 
     async def delete_by_file(self, file_id: str) -> int:
         """Serialize deletion of all chunks for a file."""
-        async with self._write_lock:
+        async with self._acquire_write_lock():
             return await self._delete_by_file_unlocked(file_id)
 
     async def _delete_by_file_unlocked(self, file_id: str) -> int:
@@ -1158,7 +1180,7 @@ class VectorStore:
 
     async def delete_by_vault(self, vault_id: str) -> int:
         """Serialize deletion of all chunks for a vault."""
-        async with self._write_lock:
+        async with self._acquire_write_lock():
             return await self._delete_by_vault_unlocked(vault_id)
 
     async def _delete_by_vault_unlocked(self, vault_id: str) -> int:
@@ -1216,7 +1238,7 @@ class VectorStore:
         self, file_id: str, new_hash_short: str
     ) -> int:
         """Serialize stale-generation cleanup for a safe re-upload."""
-        async with self._write_lock:
+        async with self._acquire_write_lock():
             return await self._delete_old_generation_by_file_unlocked(
                 file_id, new_hash_short
             )

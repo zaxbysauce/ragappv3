@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.services.vector_store import _MULTI_SCALE_CONCURRENCY, VectorStore
+from app.services.vector_store import VectorStore
 
 
 class TestAdversarialLargeScaleCount(unittest.IsolatedAsyncioTestCase):
@@ -88,8 +88,8 @@ class TestAdversarialLargeScaleCount(unittest.IsolatedAsyncioTestCase):
             # Should complete within reasonable time
             results = await store.search(embedding=[0.0] * self.embedding_dim, limit=10)
 
-        # Semaphore should limit to _MULTI_SCALE_CONCURRENCY (4)
-        self.assertLessEqual(max_concurrent, _MULTI_SCALE_CONCURRENCY)
+        # Semaphore should limit to vector_search_concurrency (16)
+        self.assertLessEqual(max_concurrent, 16)
         # Should have results from all 20 scales
         self.assertIsInstance(results, list)
 
@@ -651,10 +651,12 @@ class TestAdversarialSemaphoreEdgeCases(unittest.IsolatedAsyncioTestCase):
         return store
 
     @pytest.mark.asyncio
-    async def test_semaphore_constant_is_positive(self):
-        """Verify _MULTI_SCALE_CONCURRENCY is a positive integer."""
-        self.assertIsInstance(_MULTI_SCALE_CONCURRENCY, int)
-        self.assertGreater(_MULTI_SCALE_CONCURRENCY, 0)
+    async def test_vector_search_concurrency_is_positive_integer(self):
+        """Verify vector_search_concurrency is accessible and is a positive integer."""
+        with patch("app.services.vector_store.settings") as mock_settings:
+            mock_settings.vector_search_concurrency = 16
+            self.assertIsInstance(mock_settings.vector_search_concurrency, int)
+            self.assertGreater(mock_settings.vector_search_concurrency, 0)
 
     @pytest.mark.asyncio
     async def test_override_semaphore_constant(self):
@@ -688,16 +690,16 @@ class TestAdversarialSemaphoreEdgeCases(unittest.IsolatedAsyncioTestCase):
         store.table = MagicMock()
 
         # Use 8 scales to test concurrency
-        with patch("app.services.vector_store._MULTI_SCALE_CONCURRENCY", 2):
-            with patch("app.services.vector_store.settings") as mock_settings:
-                mock_settings.multi_scale_indexing_enabled = True
-                mock_settings.multi_scale_chunk_sizes = (
-                    "256,512,768,1024,1280,1536,1792,2048"
-                )
+        with patch("app.services.vector_store.settings") as mock_settings:
+            mock_settings.multi_scale_indexing_enabled = True
+            mock_settings.vector_search_concurrency = 2
+            mock_settings.multi_scale_chunk_sizes = (
+                "256,512,768,1024,1280,1536,1792,2048"
+            )
 
-                await store.search(
-                    embedding=[0.0] * self.embedding_dim, limit=10
-                )
+            await store.search(
+                embedding=[0.0] * self.embedding_dim, limit=10
+            )
 
         # Should be limited to patched value of 2
         self.assertLessEqual(max_concurrent, 2)

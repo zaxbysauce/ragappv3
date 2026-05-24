@@ -1,8 +1,10 @@
 """Authentication service with bcrypt and JWT."""
 
+import asyncio
 import hashlib
 import logging
 import secrets
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Tuple
 
@@ -12,6 +14,10 @@ from passlib.context import CryptContext
 logger = logging.getLogger(__name__)
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=14)
+
+# Dedicated executor for CPU-bound bcrypt operations (cost factor 14 ~400ms per hash)
+# Prevents blocking the async event loop under high concurrency
+_auth_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="auth-cpu")
 
 ACCESS_TOKEN_EXPIRE_MINUTES = 15
 REFRESH_TOKEN_EXPIRE_DAYS = 30
@@ -48,6 +54,30 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     except Exception:
         logger.error("Password verification failed", exc_info=True)
         return False
+
+
+async def async_verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Async wrapper for verify_password using a dedicated thread executor.
+
+    CPU-bound bcrypt at cost factor 14 blocks ~400ms per call, so it must
+    run on a thread pool to avoid starving the asyncio event loop.
+    """
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        _auth_executor, verify_password, plain_password, hashed_password
+    )
+
+
+async def async_hash_password(plain_password: str) -> str:
+    """Async wrapper for hash_password using a dedicated thread executor.
+
+    CPU-bound bcrypt at cost factor 14 blocks ~400ms per call, so it must
+    run on a thread pool to avoid starving the asyncio event loop.
+    """
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        _auth_executor, hash_password, plain_password
+    )
 
 
 def password_strength_check(plain_password: str) -> None:

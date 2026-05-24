@@ -10,7 +10,7 @@ import sqlite3
 from collections.abc import Callable
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.api.deps import (
@@ -22,6 +22,8 @@ from app.api.deps import (
 )
 from app.services.embeddings import EmbeddingError, EmbeddingService
 from app.services.vector_store import VectorStore, VectorStoreError
+from app.limiter import limiter
+from app.config import settings
 
 router = APIRouter()
 
@@ -98,8 +100,10 @@ def _coerce_int(value: Any) -> int | None:
 
 
 @router.post("/search", response_model=SearchResponse)
+@limiter.limit(settings.search_rate_limit)
 async def search(
-    request: SearchRequest,
+    request: Request,
+    body: SearchRequest,
     user: dict = Depends(get_current_active_user),
     db=Depends(get_db),
     embedding_service: EmbeddingService = Depends(get_embedding_service),
@@ -121,15 +125,15 @@ async def search(
         HTTPException: 500 if embedding or search operation fails
     """
     # Early check for whitespace-only query
-    if not request.query or not request.query.strip():
+    if not body.query or not body.query.strip():
         raise HTTPException(
             status_code=400, detail="Query cannot be empty or whitespace only"
         )
 
     # Vault permission scoping
-    if request.vault_id is not None:
+    if body.vault_id is not None:
         # Specific vault requested — check read access
-        if not await evaluate(user, "vault", request.vault_id, "read"):
+        if not await evaluate(user, "vault", body.vault_id, "read"):
             raise HTTPException(status_code=403, detail="No read access to this vault")
     else:
         # No vault specified — non-admins must specify a vault
@@ -140,16 +144,16 @@ async def search(
 
     try:
         # Generate embedding for the query
-        query_embedding = await embedding_service.embed_single(request.query)
+        query_embedding = await embedding_service.embed_single(body.query)
 
         # Initialize vector store table
         embedding_dim = len(query_embedding)
         await vector_store.init_table(embedding_dim)
 
         # Perform semantic search
-        vault_id_str = str(request.vault_id) if request.vault_id is not None else None
+        vault_id_str = str(body.vault_id) if body.vault_id is not None else None
         raw_results = await vector_store.search(
-            embedding=query_embedding, limit=request.limit, vault_id=vault_id_str
+            embedding=query_embedding, limit=body.limit, vault_id=vault_id_str
         )
 
         # Transform results to response model

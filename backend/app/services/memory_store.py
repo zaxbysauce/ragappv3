@@ -454,6 +454,7 @@ class MemoryStore:
         query_embedding: List[float],
         limit: int,
         vault_id: Optional[int],
+        candidate_ids: Optional[List[int]] = None,
     ) -> List[MemoryRecord]:
         """Cosine-similarity dense search across vault-scoped memories.
 
@@ -461,6 +462,10 @@ class MemoryStore:
         Memories without a stored embedding are skipped. Performs the
         comparison in Python to avoid a vector extension dependency —
         memory volume per vault is typically small (< 10k rows).
+
+        When ``candidate_ids`` is provided, only memories with those IDs
+        are considered (pre-filtered by FTS search). Otherwise all memories
+        with embeddings are considered.
         """
         if not query_embedding:
             return []
@@ -483,6 +488,17 @@ class MemoryStore:
                   AND (vault_id = ? OR vault_id IS NULL)
                 """
                 params = (vault_id,)
+            if candidate_ids:
+                placeholders = ','.join('?' * len(candidate_ids))
+                sql += f" AND id IN ({placeholders})"
+                params += tuple(candidate_ids)
+                sql += " ORDER BY id DESC LIMIT ?"
+                params += (limit * 3,)
+            else:
+                # Full scan: bounded by default 200 to prevent unbounded memory usage
+                # while still providing good recall for vaults with many memories
+                sql += " ORDER BY id DESC LIMIT ?"
+                params += (max(limit * 3, 200),)
             rows = conn.execute(sql, params).fetchall()
         finally:
             self.pool.release_connection(conn)
@@ -533,9 +549,13 @@ class MemoryStore:
         # FTS results — always run.
         fts_records = self._fts_search(query, limit, vault_id)
 
-        # Dense results — best-effort. Synchronously embed when we already
-        # have an event loop (this method is invoked via to_thread from
-        # async code). Never let dense errors break the call.
+        # Extract candidate IDs for dense search pre-filtering
+        fts_candidate_ids = [r.id for r in fts_records] if fts_records else None
+
+        # Dense results — best-effort, filtered to FTS candidates only.
+        # Synchronously embed when we already have an event loop (this method
+        # is invoked via to_thread from async code). Never let dense errors
+        # break the call.
         dense_records: List[MemoryRecord] = []
         if self.embedding_service is not None and query and query.strip():
             try:
@@ -552,7 +572,7 @@ class MemoryStore:
                 )
                 query_emb = None
             if query_emb:
-                dense_records = self._dense_search(query_emb, limit, vault_id)
+                dense_records = self._dense_search(query_emb, limit, vault_id, candidate_ids=fts_candidate_ids)
 
         # No dense path → return FTS as-is.
         if not dense_records:

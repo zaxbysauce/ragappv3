@@ -234,11 +234,12 @@ async def get_current_active_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    cursor = db.execute(
-        "SELECT id, username, full_name, role, is_active, must_change_password FROM users WHERE id = ?",
-        (user_id,),
+    row = await asyncio.to_thread(
+        lambda: db.execute(
+            "SELECT id, username, full_name, role, is_active, must_change_password FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
     )
-    row = cursor.fetchone()
 
     if not row:
         raise HTTPException(
@@ -279,7 +280,7 @@ async def get_current_active_user(
     return user
 
 
-def get_effective_vault_permission(
+async def get_effective_vault_permission(
     db: sqlite3.Connection,
     principal: dict,
     vault_id: int | None,
@@ -287,10 +288,11 @@ def get_effective_vault_permission(
     """Return the user's strongest effective permission on a vault."""
     if vault_id is None:
         return None
-    return get_effective_vault_permissions(db, principal, [vault_id]).get(vault_id)
+    result = await get_effective_vault_permissions(db, principal, [vault_id])
+    return result.get(vault_id)
 
 
-def get_effective_vault_permissions(
+async def get_effective_vault_permissions(
     db: sqlite3.Connection,
     principal: dict,
     vault_ids: list[int],
@@ -310,53 +312,61 @@ def get_effective_vault_permissions(
     effective_levels = {vault_id: baseline_level for vault_id in normalized_ids}
     placeholders = ",".join("?" for _ in normalized_ids)
 
-    cursor = db.execute(
-        f"""SELECT vault_id, permission FROM vault_members
-            WHERE user_id = ? AND vault_id IN ({placeholders})""",
-        (user_id, *normalized_ids),
+    rows = await asyncio.to_thread(
+        lambda: db.execute(
+            f"""SELECT vault_id, permission FROM vault_members
+                WHERE user_id = ? AND vault_id IN ({placeholders})""",
+            (user_id, *normalized_ids),
+        ).fetchall()
     )
-    for vault_id, permission in cursor.fetchall():
+    for vault_id, permission in rows:
         effective_levels[vault_id] = max(
             effective_levels[vault_id],
             VAULT_PERMISSION_LEVELS.get(permission, 0),
         )
 
-    cursor = db.execute(
-        f"""SELECT vga.vault_id, vga.permission FROM vault_group_access vga
-           JOIN group_members gm ON vga.group_id = gm.group_id
-           WHERE gm.user_id = ? AND vga.vault_id IN ({placeholders})""",
-        (user_id, *normalized_ids),
+    rows = await asyncio.to_thread(
+        lambda: db.execute(
+            f"""SELECT vga.vault_id, vga.permission FROM vault_group_access vga
+               JOIN group_members gm ON vga.group_id = gm.group_id
+               WHERE gm.user_id = ? AND vga.vault_id IN ({placeholders})""",
+            (user_id, *normalized_ids),
+        ).fetchall()
     )
-    for vault_id, permission in cursor.fetchall():
+    for vault_id, permission in rows:
         effective_levels[vault_id] = max(
             effective_levels[vault_id],
             VAULT_PERMISSION_LEVELS.get(permission, 0),
         )
 
-    cursor = db.execute(
-        f"""SELECT v.id FROM vaults v
-            WHERE v.visibility = 'public' AND v.id IN ({placeholders})
-            AND (v.org_id IS NULL OR EXISTS (
-                SELECT 1 FROM org_members WHERE org_id = v.org_id AND user_id = ?
-            ))""",
-        (*normalized_ids, user_id),
+    rows = await asyncio.to_thread(
+        lambda: db.execute(
+            f"""SELECT v.id FROM vaults v
+                WHERE v.visibility = 'public' AND v.id IN ({placeholders})
+                AND (v.org_id IS NULL OR EXISTS (
+                    SELECT 1 FROM org_members WHERE org_id = v.org_id AND user_id = ?
+                ))""",
+            (*normalized_ids, user_id),
+        ).fetchall()
     )
-    for (vault_id,) in cursor.fetchall():
+    for (vault_id,) in rows:
         effective_levels[vault_id] = max(
             effective_levels[vault_id],
             VAULT_PERMISSION_LEVELS["read"],
         )
 
-    cursor = db.execute(
-        f"""SELECT v.id FROM vaults v
-            WHERE v.visibility = 'org' AND v.id IN ({placeholders})
-            AND v.org_id IS NOT NULL
-            AND EXISTS (
-                SELECT 1 FROM org_members WHERE org_id = v.org_id AND user_id = ?
-            )""",
-        (*normalized_ids, user_id),
+    rows = await asyncio.to_thread(
+        lambda: db.execute(
+            f"""SELECT v.id FROM vaults v
+                WHERE v.visibility = 'org' AND v.id IN ({placeholders})
+                AND v.org_id IS NOT NULL
+                AND EXISTS (
+                    SELECT 1 FROM org_members WHERE org_id = v.org_id AND user_id = ?
+                )""",
+            (*normalized_ids, user_id),
+        ).fetchall()
     )
-    for (vault_id,) in cursor.fetchall():
+    for (vault_id,) in rows:
         effective_levels[vault_id] = max(
             effective_levels[vault_id],
             VAULT_PERMISSION_LEVELS["read"],
@@ -395,9 +405,7 @@ async def _evaluate_policy(
     if user_role == "superadmin":
         return True
 
-    effective_permission = await asyncio.to_thread(
-        get_effective_vault_permission, db, principal, resource_id
-    )
+    effective_permission = await get_effective_vault_permission(db, principal, resource_id)
     effective_level = VAULT_PERMISSION_LEVELS.get(effective_permission or "", 0)
     required_level = VAULT_ACTION_LEVELS.get(action, VAULT_ACTION_LEVELS["read"])
     return effective_level >= required_level
@@ -512,7 +520,7 @@ async def require_admin_role(user: dict = Depends(get_current_active_user)) -> d
     return user
 
 
-def get_user_accessible_vault_ids(user: dict, db) -> list:
+async def get_user_accessible_vault_ids(user: dict, db) -> list:
     """
     Get all vault IDs that a user has access to.
 
@@ -527,9 +535,9 @@ def get_user_accessible_vault_ids(user: dict, db) -> list:
     if user_role in ("superadmin", "admin"):
         return []  # Empty list means "all vaults"
 
-    cursor = db.execute("SELECT id FROM vaults")
-    vault_ids = [row[0] for row in cursor.fetchall()]
-    permissions = get_effective_vault_permissions(db, user, vault_ids)
+    rows = await asyncio.to_thread(lambda: db.execute("SELECT id FROM vaults").fetchall())
+    vault_ids = [row[0] for row in rows]
+    permissions = await get_effective_vault_permissions(db, user, vault_ids)
     return [
         vault_id
         for vault_id, permission in permissions.items()
@@ -543,7 +551,7 @@ class MultipleOrgError(Exception):
     pass
 
 
-def get_user_orgs(user_id: int, db: sqlite3.Connection) -> list[int]:
+async def get_user_orgs(user_id: int, db: sqlite3.Connection) -> list[int]:
     """Get all organization IDs for a user.
 
     Args:
@@ -553,11 +561,15 @@ def get_user_orgs(user_id: int, db: sqlite3.Connection) -> list[int]:
     Returns:
         List of organization IDs the user belongs to
     """
-    cursor = db.execute("SELECT org_id FROM org_members WHERE user_id = ?", (user_id,))
-    return [row[0] for row in cursor.fetchall()]
+    rows = await asyncio.to_thread(
+        lambda: db.execute(
+            "SELECT org_id FROM org_members WHERE user_id = ?", (user_id,)
+        ).fetchall()
+    )
+    return [row[0] for row in rows]
 
 
-def get_user_primary_org(user_id: int, db: sqlite3.Connection) -> int | None:
+async def get_user_primary_org(user_id: int, db: sqlite3.Connection) -> int | None:
     """Get the primary organization ID for a user.
 
     Args:
@@ -571,7 +583,7 @@ def get_user_primary_org(user_id: int, db: sqlite3.Connection) -> int | None:
     Raises:
         MultipleOrgError: If user belongs to multiple organizations
     """
-    orgs = get_user_orgs(user_id, db)
+    orgs = await get_user_orgs(user_id, db)
     if len(orgs) == 0:
         return None
     if len(orgs) == 1:

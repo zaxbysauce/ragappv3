@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     embedding_model: str = "microsoft/harrier-oss-v1-0.6b"
     chat_model: str = "gemma-4-26b-a4b-it-apex"
 
+    # LLM HTTP client pool configuration
+    llm_max_connections: int = 100
+    """Maximum HTTP connections in the LLM client pool (httpx.AsyncClient)."""
+    llm_max_keepalive_connections: int = 50
+    """Maximum keep-alive connections in the LLM client pool."""
+
     # Instant mode (LM Studio on local GPU)
     instant_chat_url: str = "http://host.docker.internal:1234"
     instant_chat_model: str = "nvidia/nemotron-3-nano-4b"
@@ -88,7 +94,7 @@ class Settings(BaseSettings):
     # ── Ingestion performance configuration ──────────────────────────────────
     ingestion_worker_count: int = 2
     """Number of concurrent document ingestion workers (1-16)."""
-    optimize_mode: str = "after_every_write"
+    optimize_mode: str = "periodic"
     """LanceDB table compaction mode: 'after_every_write' (current), 'periodic' (every N chunks), 'manual' (never during ingestion)."""
     optimize_interval_chunks: int = 5000
     """Number of chunks between optimize() calls when optimize_mode is 'periodic'."""
@@ -100,6 +106,10 @@ class Settings(BaseSettings):
     """When True, BackgroundProcessor.stop() calls VectorStore.flush_optimize() during graceful shutdown."""
     ingestion_llm_mode: str = "instant"
     """LLM client used for optional ingestion-time LLM work: 'instant', 'thinking', or 'disabled'."""
+    vector_search_concurrency: int = 16
+    """Maximum concurrent LanceDB search operations (1-64). Semaphore size for parallel vector searches."""
+    write_lock_timeout_seconds: float = 30.0
+    """Timeout in seconds for write lock acquisitions. Prevents indefinite deadlock if a write operation hangs."""
 
     # ── Embedding model validation configuration ───────────────────────────────────
     strict_embedding_model_check: bool = True
@@ -369,7 +379,18 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     csrf_token_ttl: int = 900
     admin_rate_limit: str = "10/minute"
-    health_check_api_key: str = "health-api-key"
+
+    # Rate limiting
+    chat_rate_limit: str = "30/minute"
+    """Rate limit for chat endpoints."""
+    search_rate_limit: str = "30/minute"
+    """Rate limit for search endpoints."""
+    vault_create_rate_limit: str = "30/minute"
+    """Rate limit for vault creation endpoints."""
+    memory_mutation_rate_limit: str = "30/minute"
+    """Rate limit for memory mutation endpoints (create, update, delete)."""
+
+    health_check_api_key: str = ""
     csrf_cookie_secure: bool = False
     """Set Secure flag on CSRF cookie. Default False for local development. Set to True in production with HTTPS."""
 
