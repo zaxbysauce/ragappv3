@@ -20,6 +20,7 @@ from app.services.auth_service import (
     create_refresh_token,
     password_strength_check,
 )
+from app.utils.paths import refresh_cookie_path
 
 logger = logging.getLogger(__name__)
 
@@ -248,7 +249,7 @@ async def register(
         secure=_is_secure_request(request),
         samesite="lax",
         max_age=REFRESH_TOKEN_MAX_AGE_DAYS * 24 * 60 * 60,
-        path="/api/auth/refresh",
+        path=refresh_cookie_path(),
     )
 
     return {
@@ -367,7 +368,7 @@ async def login(
         secure=_is_secure_request(request),
         samesite="lax",
         max_age=REFRESH_TOKEN_MAX_AGE_DAYS * 24 * 60 * 60,
-        path="/api/auth/refresh",
+        path=refresh_cookie_path(),
     )
 
     csrf_manager = get_csrf_manager(request)
@@ -451,7 +452,7 @@ async def refresh(
         secure=_is_secure_request(request),
         samesite="lax",
         max_age=REFRESH_TOKEN_MAX_AGE_DAYS * 24 * 60 * 60,
-        path="/api/auth/refresh",
+        path=refresh_cookie_path(),
     )
 
     csrf_manager = get_csrf_manager(request)
@@ -492,7 +493,7 @@ async def logout(
         except Exception:
             logger.error("Failed to delete session during logout", exc_info=True)
 
-    response.delete_cookie(key=REFRESH_TOKEN_COOKIE_NAME, path="/api/auth/refresh")
+    response.delete_cookie(key=REFRESH_TOKEN_COOKIE_NAME, path=refresh_cookie_path())
     return {"message": "Logged out successfully"}
 
 
@@ -679,7 +680,7 @@ async def change_password(
         secure=_is_secure_request(request),
         samesite="lax",
         max_age=REFRESH_TOKEN_MAX_AGE_DAYS * 24 * 60 * 60,
-        path="/api/auth/refresh",
+        path=refresh_cookie_path(),
     )
 
     return {
@@ -841,7 +842,7 @@ async def revoke_all_sessions(
         secure=_is_secure_request(request),
         samesite="lax",
         max_age=REFRESH_TOKEN_MAX_AGE_DAYS * 24 * 60 * 60,
-        path="/api/auth/refresh",
+        path=refresh_cookie_path(),
     )
 
     return {

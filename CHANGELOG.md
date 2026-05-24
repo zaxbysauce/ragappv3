@@ -14,20 +14,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+<<<<<<< HEAD
 - bcrypt password verification (cost factor 14, ~400ms) now offloaded to dedicated ThreadPoolExecutor(4) via async_verify_password(), preventing event-loop blocking during login and password-change under concurrent load
 - All authentication endpoints now use async bcrypt operations via async_verify_password() and async_hash_password()
 - VectorStore write lock now has configurable asyncio.wait_for timeout (default 30s) via @asynccontextmanager _acquire_write_lock(); all 8 write paths updated
 - VectorStore search concurrency increased from hardcoded 4 to configurable settings.vector_search_concurrency (default 16)
 - LLM HTTP client pool limits now configurable: `LLM_MAX_CONNECTIONS` (default 100) and `LLM_MAX_KEEPALIVE_CONNECTIONS` (default 50)
 - LanceDB optimize_mode default changed from "after_every_write" to "periodic" to reduce compaction blocking on every chunk write
+=======
+- Pull request CI now checks frontend toolchain compatibility, root and subpath frontend builds, configuration contract drift, and high-risk PR test-scope drift.
+>>>>>>> origin/master
 - Browser login documentation now reflects JWT-only username/password auth with httpOnly refresh cookies; the legacy frontend `kv_api_key` fallback is no longer documented as supported.
 - Settings write endpoints (`POST /api/settings` and `PUT /api/settings`) are documented as admin-protected operations, and `GET /api/settings/connection` is documented as an authenticated model connection check.
 - Auth error handling changes are documented for API consumers: expired or invalid JWTs now return HTTP 401 with structured token error details.
 - Configuration and installation docs now align with the current Harrier TEI embedding service, 9090 backend port, 3000 frontend dev port, and thinking/instant model defaults.
 - Docker Compose defaults now match runtime retrieval defaults: `PARENT_RETRIEVAL_ENABLED=true` and `PER_DOC_CHUNK_CAP=5`.
+- Docker Compose and `.env.example` CORS defaults now preserve both Vite dev (`http://localhost:5173`) and frontend dev (`http://localhost:3000`) origins.
 
 ### Fixed
 
+- Prevented successful chat SSE streams from firing the completion callback twice.
 - Declared `numpy` as a direct backend dependency and removed the unused `pybreaker` dependency.
 - Removed or rewired hardcoded local Windows paths from development helper scripts and stale sample/test output artifacts.
 - SQLite calls in `auth.py`, `deps.py`, and `vaults.py` wrapped with `asyncio.to_thread()` for async safety; fixed critical bugs where async functions were incorrectly passed to `asyncio.to_thread()`

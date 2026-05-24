@@ -17,6 +17,10 @@ This skill covers two test ecosystems found in this workspace:
 - **TypeScript (bun:test)** — used by opencode-swarm and similar projects
 - **Python (unittest/pytest)** — used by ragappv3 backend and similar projects
 
+RAGAPPv3 frontend is an npm/Vite/Vitest project under `frontend/`, not Bun. For RAGAPPv3 frontend work, follow the repo's actual `frontend/package.json` scripts: `npm run typecheck`, `npm run lint`, `npm test`, and `npm run build`. Use Vitest conventions already present in `frontend/src/**/*.test.ts*`.
+
+RAGAPPv3 CI also runs repository quality contract scripts from the repo root: `python scripts/check_config_contract.py` and `python scripts/check_pr_scope_drift.py`.
+
 Load the relevant section based on the test file's framework. Check for `import unittest` / `import pytest` (Python) vs `import from 'bun:test'` (TypeScript).
 
 ---
