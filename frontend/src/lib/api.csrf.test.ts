@@ -1039,7 +1039,7 @@ describe("CSRF Exports from @/lib/api", () => {
           body: new ReadableStream({
             start(controller) {
               controller.enqueue(new TextEncoder().encode("data: {\"content\":\"test\"}\n"));
-              controller.enqueue(new TextEncoder().encode("data: [DONE]\n"));
+              controller.enqueue(new TextEncoder().encode("data: {\"type\":\"done\"}\n"));
               controller.close();
             },
           }),
@@ -1073,6 +1073,7 @@ describe("CSRF Exports from @/lib/api", () => {
       // Verify chat stream request included CSRF token
       const chatStreamCall = mockFetch.mock.calls[1];
       expect(chatStreamCall[1].headers["X-CSRF-Token"]).toBe("test-csrf-token");
+      expect(callbacks.onComplete).toHaveBeenCalledTimes(1);
     });
 
     it("should call onError and return early when CSRF token fetch fails", async () => {
