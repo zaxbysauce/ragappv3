@@ -1920,6 +1920,18 @@ def migrate_add_files_content_fts(sqlite_path: str) -> None:
     so frequent metadata/progress writes during ingestion do not re-index the
     full document body on every row update.
 
+    **Deployment note — one-time rebuild cost:** The first time this migration
+    runs (i.e. when ``files_content_fts`` does not yet exist), it executes
+    ``INSERT INTO files_content_fts(...) VALUES('rebuild')`` which re-indexes
+    all existing ``parsed_text`` values in the files table. For databases with
+    many large documents this can take several seconds to a few minutes. The
+    migration is gated on table existence, so subsequent startups are a no-op.
+    If you need to avoid startup latency on first deploy, run the migration
+    manually before bringing up the service:
+
+        python -c "from app.models.database import migrate_add_files_content_fts; \
+migrate_add_files_content_fts('/path/to/app.db')"
+
     Idempotent — safe to run multiple times.
     """
     conn = sqlite3.connect(sqlite_path)
@@ -1930,6 +1942,17 @@ def migrate_add_files_content_fts(sqlite_path: str) -> None:
         if "parsed_text" not in existing_cols:
             # Defensive: normally added by migrate_add_files_parsed_text first.
             conn.execute("ALTER TABLE files ADD COLUMN parsed_text TEXT")
+
+        # Check before running executescript so we know whether the table is
+        # being created for the first time (rebuild needed) or already exists
+        # (no rebuild — triggers keep the index in sync at runtime).
+        table_is_new = (
+            conn.execute(
+                "SELECT COUNT(*) FROM sqlite_master"
+                " WHERE type='table' AND name='files_content_fts'"
+            ).fetchone()[0]
+            == 0
+        )
 
         conn.executescript(
             """
@@ -1958,7 +1981,12 @@ def migrate_add_files_content_fts(sqlite_path: str) -> None:
             END;
             """
         )
-        conn.execute("INSERT INTO files_content_fts(files_content_fts) VALUES('rebuild')")
+        if table_is_new:
+            # Backfill existing rows — only needed on first creation.
+            # On subsequent startups the triggers keep the index current.
+            conn.execute(
+                "INSERT INTO files_content_fts(files_content_fts) VALUES('rebuild')"
+            )
         conn.commit()
     except Exception:
         conn.rollback()

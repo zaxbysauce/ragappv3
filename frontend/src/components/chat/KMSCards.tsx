@@ -15,7 +15,7 @@ function KMSCard({ kmsRef }: KMSCardProps) {
   const statusLabel = kmsRef.status ?? "";
 
   const handleNavigate = () => {
-    window.open(`/kms/${kmsRef.entry_id}`, "_blank", "noopener");
+    window.open(`/kms/${kmsRef.entry_id}`, "_blank", "noopener,noreferrer");
   };
 
   return (
