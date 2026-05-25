@@ -197,6 +197,8 @@ On first launch, you'll be redirected to the **Setup Wizard** (`/setup`) to crea
 | `CHAT_MODEL` | gemma-4-26b-a4b-it-apex | Thinking chat model name |
 | `INSTANT_CHAT_MODEL` | nvidia/nemotron-3-nano-4b | Instant chat model name |
 | `DEFAULT_CHAT_MODE` | thinking | Default mode for new chats (`thinking` or `instant`) |
+| `LLM_MAX_CONNECTIONS` | 100 | Maximum HTTP connections in the LLM client pool (httpx.AsyncClient) |
+| `LLM_MAX_KEEPALIVE_CONNECTIONS` | 50 | Maximum keep-alive connections in the LLM client pool |
 | `INSTANT_INITIAL_RETRIEVAL_TOP_K` | 10 | Instant-mode initial retrieval candidate count |
 | `INSTANT_RERANKER_TOP_N` | 4 | Instant-mode reranked document count |
 | `INSTANT_MEMORY_CONTEXT_TOP_K` | 2 | Instant-mode memory context count |
@@ -232,6 +234,10 @@ On first launch, you'll be redirected to the **Setup Wizard** (`/setup`) to crea
 | `MEMORY_DENSE_MIN_SIMILARITY` | `0.30` | Minimum cosine similarity for dense memory retrieval. Candidates below this score are discarded before prompt injection. Raise to reduce noise; lower to surface more memories. |
 | `MEMORY_RRF_MIN_SCORE` | `0.005` | Minimum fused RRF score for hybrid memory retrieval. Candidates below this are discarded. |
 | `MEMORY_CONTEXT_TOP_K` | `3` | Maximum number of memories injected into each prompt after relevance filtering. |
+| `CHAT_RATE_LIMIT` | `30` | Maximum chat requests per minute per user (0 = unlimited) |
+| `SEARCH_RATE_LIMIT` | `60` | Maximum search requests per minute per user (0 = unlimited) |
+| `VAULT_CREATE_RATE_LIMIT` | `10` | Maximum vault creation requests per minute per user (0 = unlimited) |
+| `MEMORY_MUTATION_RATE_LIMIT` | `30` | Maximum memory create/update/delete requests per minute per user (0 = unlimited) |
 
 ### Data Directory Structure
 

@@ -1,5 +1,6 @@
 """Authentication routes."""
 
+import asyncio
 import hashlib
 import logging
 import sqlite3
@@ -13,11 +14,11 @@ from app.api.deps import get_current_active_user, get_db
 from app.limiter import limiter
 from app.security import csrf_protect, get_csrf_manager, issue_csrf_token
 from app.services.auth_service import (
+    async_hash_password,
+    async_verify_password,
     create_access_token,
     create_refresh_token,
-    hash_password,
     password_strength_check,
-    verify_password,
 )
 from app.utils.paths import refresh_cookie_path
 
@@ -27,6 +28,104 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 REFRESH_TOKEN_COOKIE_NAME = "refresh_token"
 REFRESH_TOKEN_MAX_AGE_DAYS = 30
+
+
+def _record_failed_attempt_db(
+    db,
+    user_id: int,
+    failed_attempts: int,
+) -> None:
+    """Record a failed login attempt and lock out the account if threshold reached.
+
+    Executes in a single transaction with rollback on failure.
+    """
+    try:
+        db.execute(
+            "UPDATE users SET failed_attempts = failed_attempts + 1 WHERE id = ?",
+            (user_id,),
+        )
+        if failed_attempts + 1 >= 5:
+            lockout_until = datetime.now(timezone.utc) + timedelta(minutes=15)
+            db.execute(
+                "UPDATE users SET locked_until = ? WHERE id = ?",
+                (lockout_until.isoformat(), user_id),
+            )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+
+def _rotate_refresh_token_block(
+    db,
+    session_id: int,
+    token_hash: str,
+    user_id: int,
+    new_refresh_token_hash: str,
+    new_expires_at: datetime,
+) -> None:
+    """Execute the exclusive-lock block for refresh token rotation.
+
+    Raises HTTPException on auth failure, re-raises other exceptions.
+    """
+    exclusive_started = False
+    try:
+        db.execute("BEGIN EXCLUSIVE")
+        exclusive_started = True
+    except sqlite3.OperationalError:
+        # Already in a transaction (e.g., from connection pool wrapper) — proceed without exclusive lock
+        pass
+
+    try:
+        # Re-verify the session still exists (prevents TOCTOU)
+        cursor = db.execute(
+            "SELECT id FROM user_sessions WHERE id = ? AND refresh_token_hash = ?",
+            (session_id, token_hash),
+        )
+        if not cursor.fetchone():
+            if exclusive_started:
+                db.execute("ROLLBACK")
+            raise HTTPException(status_code=401, detail="Refresh token already used", headers={"WWW-Authenticate": "Bearer"})
+
+        # Insert new session BEFORE deleting old — if INSERT fails, old session remains valid
+        db.execute(
+            "INSERT INTO user_sessions (user_id, refresh_token_hash, expires_at, last_used_at) VALUES (?, ?, ?, ?)",
+            (
+                user_id,
+                new_refresh_token_hash,
+                new_expires_at.isoformat(),
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        # Delete old session
+        db.execute("DELETE FROM user_sessions WHERE id = ?", (session_id,))
+        db.execute("COMMIT")
+    except sqlite3.IntegrityError:
+        if exclusive_started:
+            try:
+                db.execute("ROLLBACK")
+            except Exception:
+                pass
+        raise HTTPException(status_code=401, detail="Refresh token already used", headers={"WWW-Authenticate": "Bearer"})
+    except HTTPException:
+        raise
+    except Exception:
+        if exclusive_started:
+            try:
+                db.execute("ROLLBACK")
+            except Exception:
+                pass
+        raise
+
+
+def _delete_expired_session_db(db, session_id: int) -> None:
+    """Delete an expired session from the database with rollback on failure."""
+    try:
+        db.execute("DELETE FROM user_sessions WHERE id = ?", (session_id,))
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
 
 def _is_secure_request(request: Request) -> bool:
@@ -76,30 +175,40 @@ async def register(
         raise HTTPException(status_code=400, detail=str(e))
 
     # Check username uniqueness (case-insensitive)
-    cursor = db.execute(
-        "SELECT id FROM users WHERE username = ? COLLATE NOCASE", (body.username,)
+    existing = await asyncio.to_thread(
+        lambda: db.execute(
+            "SELECT id FROM users WHERE username = ? COLLATE NOCASE", (body.username,)
+        ).fetchone()
     )
-    if cursor.fetchone():
+    if existing:
         raise HTTPException(status_code=409, detail="Username already exists")
 
     # First user becomes superadmin
-    cursor = db.execute("SELECT COUNT(*) FROM users")
-    user_count = cursor.fetchone()[0]
+    user_count = await asyncio.to_thread(
+        lambda: db.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    )
     role = "superadmin" if user_count == 0 else "member"
 
-    hashed_pw = hash_password(body.password)
+    hashed_pw = await async_hash_password(body.password)
 
     try:
-        cursor = db.execute(
-            "INSERT INTO users (username, hashed_password, full_name, role, is_active) VALUES (?, ?, ?, ?, 1)",
-            (body.username, hashed_pw, body.full_name, role),
-        )
-        user_id = cursor.lastrowid
+        def _register_db():
+            try:
+                user_id = db.execute(
+                    "INSERT INTO users (username, hashed_password, full_name, role, is_active) VALUES (?, ?, ?, ?, 1)",
+                    (body.username, hashed_pw, body.full_name, role),
+                ).lastrowid
+                db.commit()
+                return user_id
+            except Exception:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                raise
 
-        # Keep user creation in one transaction.
-        db.commit()
+        user_id = await asyncio.to_thread(_register_db)
     except Exception:
-        db.rollback()
         logger.error("Failed to create user with default assignments", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again later.")
 
@@ -112,11 +221,25 @@ async def register(
     ip_address = request.client.host if request.client else None
     user_agent = request.headers.get("user-agent")
 
-    db.execute(
-        "INSERT INTO user_sessions (user_id, refresh_token_hash, expires_at, ip_address, user_agent) VALUES (?, ?, ?, ?, ?)",
-        (user_id, refresh_token_hash, expires_at.isoformat(), ip_address, user_agent),
-    )
-    db.commit()
+    try:
+        def _register_session_db():
+            try:
+                db.execute(
+                    "INSERT INTO user_sessions (user_id, refresh_token_hash, expires_at, ip_address, user_agent) VALUES (?, ?, ?, ?, ?)",
+                    (user_id, refresh_token_hash, expires_at.isoformat(), ip_address, user_agent),
+                )
+                db.commit()
+            except Exception:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                raise
+
+        await asyncio.to_thread(_register_session_db)
+    except Exception:
+        logger.error("Failed to create session", exc_info=True)
+        raise HTTPException(status_code=500, detail="An internal error occurred. Please try again later.")
 
     # Set refresh token cookie
     response.set_cookie(
@@ -151,11 +274,12 @@ async def login(
     _csrf_token: str = Depends(csrf_protect),
 ):
     """Login and receive access token + refresh cookie."""
-    cursor = db.execute(
-        "SELECT id, username, hashed_password, full_name, role, is_active, failed_attempts, locked_until FROM users WHERE username = ? COLLATE NOCASE",
-        (body.username,),
+    row = await asyncio.to_thread(
+        lambda: db.execute(
+            "SELECT id, username, hashed_password, full_name, role, is_active, failed_attempts, locked_until FROM users WHERE username = ? COLLATE NOCASE",
+            (body.username,),
+        ).fetchone()
     )
-    row = cursor.fetchone()
 
     if not row:
         raise HTTPException(status_code=401, detail="Invalid username or password")
@@ -187,26 +311,14 @@ async def login(
                 headers={"Retry-After": str(retry_after)},
             )
 
-    if not verify_password(body.password, hashed_pw):
-        # Increment failed attempts
-        db.execute(
-            "UPDATE users SET failed_attempts = failed_attempts + 1 WHERE id = ?",
-            (user_id,),
-        )
-        # Check if we should lock the account
+    if not await async_verify_password(body.password, hashed_pw):
+        await asyncio.to_thread(_record_failed_attempt_db, db, user_id, failed_attempts)
         if failed_attempts + 1 >= 5:
-            lockout_until = datetime.now(timezone.utc) + timedelta(minutes=15)
-            db.execute(
-                "UPDATE users SET locked_until = ? WHERE id = ?",
-                (lockout_until.isoformat(), user_id),
-            )
-            db.commit()
             raise HTTPException(
                 status_code=423,
                 detail="Account locked due to too many failed attempts. Try again in 15 minutes.",
                 headers={"Retry-After": "900"},
             )
-        db.commit()
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
     # Create tokens
@@ -219,24 +331,32 @@ async def login(
     user_agent = request.headers.get("user-agent")
 
     try:
-        db.execute(
-            "INSERT INTO user_sessions (user_id, refresh_token_hash, expires_at, ip_address, user_agent) VALUES (?, ?, ?, ?, ?)",
-            (
-                user_id,
-                refresh_token_hash,
-                expires_at.isoformat(),
-                ip_address,
-                user_agent,
-            ),
-        )
-        # On successful login: reset failed_attempts, clear locked_until, update last_login_at
-        db.execute(
-            "UPDATE users SET failed_attempts = 0, locked_until = NULL, last_login_at = ? WHERE id = ?",
-            (datetime.now(timezone.utc).isoformat(), user_id),
-        )
-        db.commit()
+        def _login_create_session():
+            try:
+                db.execute(
+                    "INSERT INTO user_sessions (user_id, refresh_token_hash, expires_at, ip_address, user_agent) VALUES (?, ?, ?, ?, ?)",
+                    (
+                        user_id,
+                        refresh_token_hash,
+                        expires_at.isoformat(),
+                        ip_address,
+                        user_agent,
+                    ),
+                )
+                db.execute(
+                    "UPDATE users SET failed_attempts = 0, locked_until = NULL, last_login_at = ? WHERE id = ?",
+                    (datetime.now(timezone.utc).isoformat(), user_id),
+                )
+                db.commit()
+            except Exception:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                raise
+
+        await asyncio.to_thread(_login_create_session)
     except Exception:
-        db.rollback()
         logger.error("Failed to create session", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again later.")
 
@@ -282,13 +402,15 @@ async def refresh(
 
     token_hash = hashlib.sha256(refresh_token.encode()).hexdigest()
 
-    cursor = db.execute(
-        """SELECT s.id, s.user_id, s.expires_at, u.username, u.role, u.is_active
-           FROM user_sessions s JOIN users u ON s.user_id = u.id
-           WHERE s.refresh_token_hash = ?""",
-        (token_hash,),
+    # Initial token lookup
+    row = await asyncio.to_thread(
+        lambda: db.execute(
+            """SELECT s.id, s.user_id, s.expires_at, u.username, u.role, u.is_active
+               FROM user_sessions s JOIN users u ON s.user_id = u.id
+               WHERE s.refresh_token_hash = ?""",
+            (token_hash,),
+        ).fetchone()
     )
-    row = cursor.fetchone()
 
     if not row:
         raise HTTPException(status_code=401, detail="Invalid refresh token", headers={"WWW-Authenticate": "Bearer"})
@@ -298,8 +420,7 @@ async def refresh(
     # Check expiry
     expires_at = datetime.fromisoformat(expires_at_str)
     if expires_at < datetime.now(timezone.utc):
-        db.execute("DELETE FROM user_sessions WHERE id = ?", (session_id,))
-        db.commit()
+        await asyncio.to_thread(_delete_expired_session_db, db, session_id)
         raise HTTPException(status_code=401, detail="Refresh token expired", headers={"WWW-Authenticate": "Bearer"})
 
     if not is_active:
@@ -312,47 +433,13 @@ async def refresh(
     )
 
     try:
-        db.execute("BEGIN EXCLUSIVE")
-    except sqlite3.OperationalError:
-        # Already in a transaction (e.g., from connection pool wrapper) — proceed without exclusive lock
-        pass
-
-    try:
-        # Re-verify the session still exists (prevents TOCTOU)
-        cursor = db.execute(
-            "SELECT id FROM user_sessions WHERE id = ? AND refresh_token_hash = ?",
-            (session_id, token_hash),
-        )
-        if not cursor.fetchone():
-            db.execute("ROLLBACK")
-            raise HTTPException(status_code=401, detail="Refresh token already used", headers={"WWW-Authenticate": "Bearer"})
-
-        # Insert new session BEFORE deleting old — if INSERT fails, old session remains valid
-        db.execute(
-            "INSERT INTO user_sessions (user_id, refresh_token_hash, expires_at, last_used_at) VALUES (?, ?, ?, ?)",
-            (
-                user_id,
-                new_refresh_token_hash,
-                new_expires_at.isoformat(),
-                datetime.now(timezone.utc).isoformat(),
-            ),
-        )
-        # Delete old session
-        db.execute("DELETE FROM user_sessions WHERE id = ?", (session_id,))
-        db.execute("COMMIT")
-    except sqlite3.IntegrityError:
-        try:
-            db.execute("ROLLBACK")
-        except Exception:
-            pass
-        raise HTTPException(status_code=401, detail="Refresh token already used", headers={"WWW-Authenticate": "Bearer"})
+        # Wrap entire exclusive-lock block in a single to_thread call
+        await asyncio.to_thread(lambda: _rotate_refresh_token_block(
+            db, session_id, token_hash, user_id, new_refresh_token_hash, new_expires_at
+        ))
     except HTTPException:
         raise
     except Exception:
-        try:
-            db.execute("ROLLBACK")
-        except Exception:
-            pass
         logger.error("Session rotation failed", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again later.")
 
@@ -389,12 +476,21 @@ async def logout(
     if refresh_token:
         token_hash = hashlib.sha256(refresh_token.encode()).hexdigest()
         try:
-            db.execute(
-                "DELETE FROM user_sessions WHERE refresh_token_hash = ?", (token_hash,)
-            )
-            db.commit()
+            def _logout_db(db_ref, token):
+                try:
+                    db_ref.execute(
+                        "DELETE FROM user_sessions WHERE refresh_token_hash = ?", (token,)
+                    )
+                    db_ref.commit()
+                except Exception:
+                    try:
+                        db_ref.rollback()
+                    except Exception:
+                        pass
+                    raise
+
+            await asyncio.to_thread(_logout_db, db, token_hash)
         except Exception:
-            db.rollback()
             logger.error("Failed to delete session during logout", exc_info=True)
 
     response.delete_cookie(key=REFRESH_TOKEN_COOKIE_NAME, path=refresh_cookie_path())
@@ -404,8 +500,9 @@ async def logout(
 @router.get("/setup-status")
 async def setup_status(db=Depends(get_db)):
     """Check if initial setup is needed (no users exist). No auth required."""
-    cursor = db.execute("SELECT COUNT(*) FROM users")
-    user_count = cursor.fetchone()[0]
+    user_count = await asyncio.to_thread(
+        lambda: db.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    )
     return {"needs_setup": user_count == 0}
 
 
@@ -442,7 +539,7 @@ async def update_me(
             password_strength_check(body.password)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-        hashed_pw = hash_password(body.password)
+        hashed_pw = await async_hash_password(body.password)
         updates.append("hashed_password = ?")
         params.append(hashed_pw)
 
@@ -452,18 +549,25 @@ async def update_me(
     params.append(user_id)
 
     try:
-        db.execute(f"UPDATE users SET {', '.join(updates)} WHERE id = ?", tuple(params))
-        db.commit()
+        def _update_me_db():
+            try:
+                db.execute(f"UPDATE users SET {', '.join(updates)} WHERE id = ?", tuple(params))
+                db.commit()
+                return db.execute(
+                    "SELECT id, username, full_name, role, is_active FROM users WHERE id = ?",
+                    (user_id,),
+                ).fetchone()
+            except Exception:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                raise
+
+        row = await asyncio.to_thread(_update_me_db)
     except Exception:
-        db.rollback()
         logger.error("Failed to update user", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again later.")
-
-    cursor = db.execute(
-        "SELECT id, username, full_name, role, is_active FROM users WHERE id = ?",
-        (user_id,),
-    )
-    row = cursor.fetchone()
 
     return {
         "id": row[0],
@@ -492,18 +596,19 @@ async def change_password(
     role = user["role"]
 
     # Fetch current hashed password
-    cursor = db.execute(
-        "SELECT hashed_password FROM users WHERE id = ?",
-        (user_id,),
+    row = await asyncio.to_thread(
+        lambda: db.execute(
+            "SELECT hashed_password FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
     )
-    row = cursor.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="User not found")
 
     current_hashed_pw = row[0]
 
     # Verify current password
-    if not verify_password(body.current_password, current_hashed_pw):
+    if not await async_verify_password(body.current_password, current_hashed_pw):
         raise HTTPException(status_code=400, detail="Current password is incorrect")
 
     # Validate new password strength
@@ -513,22 +618,30 @@ async def change_password(
         raise HTTPException(status_code=400, detail=str(e))
 
     # Hash new password
-    new_hashed_pw = hash_password(body.new_password)
+    new_hashed_pw = await async_hash_password(body.new_password)
 
     # Update password and revoke all sessions in a transaction
     try:
-        db.execute(
-            "UPDATE users SET hashed_password = ? WHERE id = ?",
-            (new_hashed_pw, user_id),
-        )
-        # Revoke ALL user sessions to force re-login
-        db.execute(
-            "DELETE FROM user_sessions WHERE user_id = ?",
-            (user_id,),
-        )
-        db.commit()
+        def _change_password_db():
+            try:
+                db.execute(
+                    "UPDATE users SET hashed_password = ? WHERE id = ?",
+                    (new_hashed_pw, user_id),
+                )
+                db.execute(
+                    "DELETE FROM user_sessions WHERE user_id = ?",
+                    (user_id,),
+                )
+                db.commit()
+            except Exception:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                raise
+
+        await asyncio.to_thread(_change_password_db)
     except Exception:
-        db.rollback()
         logger.error("Failed to change password", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again later.")
 
@@ -540,13 +653,22 @@ async def change_password(
     expires_at = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_MAX_AGE_DAYS)
 
     try:
-        db.execute(
-            "INSERT INTO user_sessions (user_id, refresh_token_hash, expires_at) VALUES (?, ?, ?)",
-            (user_id, refresh_token_hash, expires_at.isoformat()),
-        )
-        db.commit()
+        def _create_session_db():
+            try:
+                db.execute(
+                    "INSERT INTO user_sessions (user_id, refresh_token_hash, expires_at) VALUES (?, ?, ?)",
+                    (user_id, refresh_token_hash, expires_at.isoformat()),
+                )
+                db.commit()
+            except Exception:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                raise
+
+        await asyncio.to_thread(_create_session_db)
     except Exception:
-        db.rollback()
         logger.error("Failed to create new session", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again later.")
 
@@ -577,14 +699,15 @@ async def list_sessions(
     Returns sessions with: id, ip_address, user_agent, created_at, expires_at
     Never returns token hashes.
     """
-    cursor = db.execute(
-        """SELECT id, ip_address, user_agent, created_at, expires_at
-           FROM user_sessions
-           WHERE user_id = ? AND expires_at > datetime('now')
-           ORDER BY created_at DESC""",
-        (user["id"],),
+    rows = await asyncio.to_thread(
+        lambda: db.execute(
+            """SELECT id, ip_address, user_agent, created_at, expires_at
+               FROM user_sessions
+               WHERE user_id = ? AND expires_at > datetime('now')
+               ORDER BY created_at DESC""",
+            (user["id"],),
+        ).fetchall()
     )
-    rows = cursor.fetchall()
 
     sessions = []
     for row in rows:
@@ -613,24 +736,34 @@ async def revoke_session(
     Returns 204 on success.
     """
     # Verify session belongs to user
-    cursor = db.execute(
-        "SELECT id FROM user_sessions WHERE id = ? AND user_id = ?",
-        (session_id, user["id"]),
+    row = await asyncio.to_thread(
+        lambda: db.execute(
+            "SELECT id FROM user_sessions WHERE id = ? AND user_id = ?",
+            (session_id, user["id"]),
+        ).fetchone()
     )
-    row = cursor.fetchone()
 
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
 
     # Delete the session
     try:
-        db.execute(
-            "DELETE FROM user_sessions WHERE id = ?",
-            (session_id,),
-        )
-        db.commit()
+        def _revoke_session_db():
+            try:
+                db.execute(
+                    "DELETE FROM user_sessions WHERE id = ?",
+                    (session_id,),
+                )
+                db.commit()
+            except Exception:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                raise
+
+        await asyncio.to_thread(_revoke_session_db)
     except Exception:
-        db.rollback()
         logger.error("Failed to revoke session", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again later.")
 
@@ -656,11 +789,12 @@ async def revoke_all_sessions(
     token_hash = hashlib.sha256(refresh_token.encode()).hexdigest()
 
     # Find current session
-    cursor = db.execute(
-        "SELECT id FROM user_sessions WHERE refresh_token_hash = ? AND user_id = ?",
-        (token_hash, user["id"]),
+    row = await asyncio.to_thread(
+        lambda: db.execute(
+            "SELECT id FROM user_sessions WHERE refresh_token_hash = ? AND user_id = ?",
+            (token_hash, user["id"]),
+        ).fetchone()
     )
-    row = cursor.fetchone()
 
     if not row:
         raise HTTPException(status_code=401, detail="Invalid refresh token", headers={"WWW-Authenticate": "Bearer"})
@@ -674,19 +808,26 @@ async def revoke_all_sessions(
     )
 
     try:
-        # Delete all other sessions for this user
-        db.execute(
-            "DELETE FROM user_sessions WHERE user_id = ? AND id != ?",
-            (user["id"], current_session_id),
-        )
-        # Update current session with new refresh token
-        db.execute(
-            "UPDATE user_sessions SET refresh_token_hash = ?, expires_at = ? WHERE id = ?",
-            (new_refresh_token_hash, new_expires_at.isoformat(), current_session_id),
-        )
-        db.commit()
+        def _revoke_all_sessions_db():
+            try:
+                db.execute(
+                    "DELETE FROM user_sessions WHERE user_id = ? AND id != ?",
+                    (user["id"], current_session_id),
+                )
+                db.execute(
+                    "UPDATE user_sessions SET refresh_token_hash = ?, expires_at = ? WHERE id = ?",
+                    (new_refresh_token_hash, new_expires_at.isoformat(), current_session_id),
+                )
+                db.commit()
+            except Exception:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                raise
+
+        await asyncio.to_thread(_revoke_all_sessions_db)
     except Exception:
-        db.rollback()
         logger.error("Failed to revoke all sessions", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again later.")
 

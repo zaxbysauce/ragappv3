@@ -87,6 +87,10 @@ Before deploying KnowledgeVault to production, ensure the following:
   INSTANT_RERANKER_TOP_N=4
   INSTANT_MEMORY_CONTEXT_TOP_K=2
   INSTANT_MAX_TOKENS=4096
+
+  # Concurrency settings (optional, defaults shown)
+  VECTOR_SEARCH_CONCURRENCY=16
+  WRITE_LOCK_TIMEOUT_SECONDS=30.0
   
   # Security settings
   ADMIN_SECRET_TOKEN=<secure-random-token>

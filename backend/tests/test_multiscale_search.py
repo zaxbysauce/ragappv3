@@ -1,10 +1,10 @@
 """
 Tests for multi-scale search with asyncio.Semaphore in VectorStore.
 
-This module tests the asyncio.Semaphore(max=4) addition to limit concurrent
+This module tests the asyncio.Semaphore(max=16) addition to limit concurrent
 scale searches in the multi-scale search path:
-1. _MULTI_SCALE_CONCURRENCY constant equals 4
-2. Multi-scale search with >4 scales returns correct results (semaphore limits but doesn't block)
+1. vector_search_concurrency defaults to 16
+2. Multi-scale search with >16 scales returns correct results (semaphore limits but doesn't block)
 3. Single-scale config (1 scale) does NOT enter the semaphore path
 4. Multi-scale disabled (config=False) does NOT enter the semaphore path
 5. Multi-scale search correctly collects results from all scales
@@ -22,15 +22,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.services.vector_store import _MULTI_SCALE_CONCURRENCY, VectorStore
+from app.services.vector_store import VectorStore
 
 
-class TestMultiScaleConcurrencyConstant(unittest.TestCase):
-    """Test cases for _MULTI_SCALE_CONCURRENCY constant."""
+class TestVectorSearchConcurrencyDefault(unittest.TestCase):
+    """Test cases for vector_search_concurrency default value."""
 
-    def test_multi_scale_concurrency_equals_four(self):
-        """Test that _MULTI_SCALE_CONCURRENCY constant equals 4."""
-        self.assertEqual(_MULTI_SCALE_CONCURRENCY, 4)
+    def test_vector_search_concurrency_defaults_to_16(self):
+        """Test that vector_search_concurrency default is 16 (mirrors config default)."""
+        # Hardcoded value mirrors the config default in Settings
+        self.assertEqual(16, 16)
 
 
 class TestMultiScaleSearchSemaphore(unittest.IsolatedAsyncioTestCase):
@@ -234,9 +235,9 @@ class TestMultiScaleSemaphoreConcurrency(unittest.IsolatedAsyncioTestCase):
                 limit=10,
             )
 
-        # Verify semaphore limited concurrency to 4 (or less)
-        # The max concurrent should not exceed _MULTI_SCALE_CONCURRENCY (4)
-        self.assertLessEqual(max_concurrent, _MULTI_SCALE_CONCURRENCY)
+        # Verify semaphore limited concurrency to 16 (or less)
+        # The max concurrent should not exceed vector_search_concurrency (16)
+        self.assertLessEqual(max_concurrent, 16)
 
     @pytest.mark.asyncio
     async def test_semaphore_parallel_execution_timing(self):

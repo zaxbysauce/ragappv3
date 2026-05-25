@@ -11,7 +11,7 @@ import logging
 import sqlite3
 from typing import Any, Dict, List, Literal, Optional, Set
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -23,6 +23,7 @@ from app.api.deps import (
     get_user_accessible_vault_ids,
 )
 from app.config import settings
+from app.limiter import limiter
 from app.models.chat_mode import ChatMode
 from app.models.database import get_pool
 from app.services.citation_validator import repair_against_sources_and_memories
@@ -436,8 +437,10 @@ async def non_stream_chat_response(
 
 
 @router.post("/chat", response_model=ChatResponse)
+@limiter.limit(settings.chat_rate_limit)
 async def chat(
-    request: ChatRequest,
+    request: Request,
+    body: ChatRequest,
     rag_engine: RAGEngine = Depends(get_rag_engine),
     user: dict = Depends(get_current_active_user),
 ):
@@ -455,17 +458,17 @@ async def chat(
     """
     logger.info(
         "[chat] Request received: message_len=%d, vault_id=%s, stream=%s",
-        len(request.message),
-        request.vault_id,
-        request.stream,
+        len(body.message),
+        body.vault_id,
+        body.stream,
     )
-    if request.stream:
+    if body.stream:
         raise HTTPException(
             status_code=400,
             detail="Streaming is not supported on this endpoint. Use /chat/stream for streaming responses.",
         )
-    if request.vault_id is not None:
-        if not await evaluate_policy(user, "vault", request.vault_id, "read"):
+    if body.vault_id is not None:
+        if not await evaluate_policy(user, "vault", body.vault_id, "read"):
             raise HTTPException(status_code=403, detail="No read access to this vault")
     else:
         # vault_id=None ("All Vaults") searches across all vaults without filtering.
@@ -475,13 +478,13 @@ async def chat(
                 status_code=403,
                 detail="Searching all vaults requires admin access. Please select a specific vault.",
             )
-    effective_mode = ChatMode(request.mode) if request.mode else None
+    effective_mode = ChatMode(body.mode) if body.mode else None
     try:
         return await non_stream_chat_response(
-            request.message,
-            request.history,
+            body.message,
+            body.history,
             rag_engine,
-            vault_id=request.vault_id,
+            vault_id=body.vault_id,
             mode=effective_mode,
         )
     except Exception:
@@ -490,23 +493,25 @@ async def chat(
 
 
 @router.post("/chat/stream")
+@limiter.limit(settings.chat_rate_limit)
 async def chat_stream(
-    request: ChatStreamRequest,
+    request: Request,
+    body: ChatStreamRequest,
     rag_engine: RAGEngine = Depends(get_rag_engine),
     user: dict = Depends(get_current_active_user),
 ):
     """Streaming chat endpoint that accepts a sequence of chat messages."""
-    if not request.messages:
+    if not body.messages:
         raise HTTPException(status_code=400, detail="At least one message is required")
 
-    last_message = request.messages[-1]
+    last_message = body.messages[-1]
     if last_message.role.lower() != "user":
         raise HTTPException(
             status_code=400, detail="The last message must be from the user"
         )
 
-    if request.vault_id is not None:
-        if not await evaluate_policy(user, "vault", request.vault_id, "read"):
+    if body.vault_id is not None:
+        if not await evaluate_policy(user, "vault", body.vault_id, "read"):
             raise HTTPException(status_code=403, detail="No read access to this vault")
     else:
         # vault_id=None ("All Vaults") searches across all vaults without filtering.
@@ -517,13 +522,13 @@ async def chat_stream(
                 detail="Searching all vaults requires admin access. Please select a specific vault.",
             )
 
-    history = [msg.model_dump(exclude_none=True) for msg in request.messages[:-1]]
-    effective_mode = ChatMode(request.mode) if request.mode else None
+    history = [msg.model_dump(exclude_none=True) for msg in body.messages[:-1]]
+    effective_mode = ChatMode(body.mode) if body.mode else None
     return stream_chat_response(
         last_message.content,
         history,
         rag_engine,
-        vault_id=request.vault_id,
+        vault_id=body.vault_id,
         mode=effective_mode,
     )
 
@@ -610,7 +615,7 @@ async def list_sessions(
 
     # Filter sessions for non-admin users
     if user.get("role") not in ("superadmin", "admin"):
-        accessible_ids = get_user_accessible_vault_ids(user, conn)
+        accessible_ids = await get_user_accessible_vault_ids(user, conn)
         if accessible_ids:
             sessions_with_count = [
                 r for r in sessions_with_count if r.get("vault_id") in accessible_ids

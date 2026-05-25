@@ -10,7 +10,7 @@ import logging
 import sqlite3
 from typing import List, Optional, Union
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.api.deps import (
@@ -19,6 +19,8 @@ from app.api.deps import (
     get_db,
     get_memory_store,
 )
+from app.config import settings
+from app.limiter import limiter
 from app.services.memory_store import MemoryRecord, MemoryStore, MemoryStoreError
 
 logger = logging.getLogger(__name__)
@@ -279,8 +281,10 @@ async def list_memories(
 
 
 @router.post("/memories", response_model=MemoryResponse)
+@limiter.limit(settings.memory_mutation_rate_limit)
 async def create_memory(
-    request: MemoryCreateRequest,
+    request: Request,
+    body: MemoryCreateRequest,
     memory_store: MemoryStore = Depends(get_memory_store),
     user: dict = Depends(get_current_active_user),
 ):
@@ -289,33 +293,33 @@ async def create_memory(
 
     Uses MemoryStore.add_memory to add a new memory to the database.
     """
-    if request.vault_id is not None:
-        if not await evaluate_policy(user, "vault", request.vault_id, "write"):
+    if body.vault_id is not None:
+        if not await evaluate_policy(user, "vault", body.vault_id, "write"):
             raise HTTPException(status_code=403, detail="No write access to this vault")
     try:
         record = await asyncio.to_thread(
             memory_store.add_memory,
-            content=request.content,
-            category=request.category,
-            tags=request.tags,
-            source=request.source,
-            vault_id=request.vault_id,
+            content=body.content,
+            category=body.category,
+            tags=body.tags,
+            source=body.source,
+            vault_id=body.vault_id,
         )
     except MemoryStoreError as e:
         logger.exception(
             "MemoryStoreError in create_memory (content length: %d)",
-            len(request.content),
+            len(body.content),
         )
         raise HTTPException(status_code=400, detail=str(e))
     except sqlite3.Error as e:
         logger.exception(
-            "Database error in create_memory (content length: %d)", len(request.content)
+            "Database error in create_memory (content length: %d)", len(body.content)
         )
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
     except (ValueError, TypeError, RuntimeError) as e:
         logger.exception(
             "Unexpected error in create_memory (content length: %d)",
-            len(request.content),
+            len(body.content),
         )
         raise HTTPException(status_code=500, detail=f"Server error: {e}")
 
@@ -323,9 +327,11 @@ async def create_memory(
 
 
 @router.put("/memories/{memory_id}", response_model=MemoryResponse)
+@limiter.limit(settings.memory_mutation_rate_limit)
 async def update_memory(
+    request: Request,
     memory_id: int,
-    request: MemoryUpdateRequest,
+    body: MemoryUpdateRequest,
     conn: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_active_user),
     memory_store: MemoryStore = Depends(get_memory_store),
@@ -359,24 +365,24 @@ async def update_memory(
         update_fields = []
         params = []
 
-        if request.content is not None:
+        if body.content is not None:
             update_fields.append("content = ?")
-            params.append(request.content)
+            params.append(body.content)
             # Clear stale embedding atomically with the content change so
             # semantic search never returns results based on the old content.
             # embed_and_store below recomputes best-effort after commit.
             if memory_store._has_embedding_columns(conn):
                 update_fields.append("embedding = NULL")
                 update_fields.append("embedding_model = NULL")
-        if request.category is not None:
+        if body.category is not None:
             update_fields.append("category = ?")
-            params.append(request.category)
-        if request.tags is not None:
+            params.append(body.category)
+        if body.tags is not None:
             update_fields.append("tags = ?")
-            params.append(request.tags)
-        if request.source is not None:
+            params.append(body.tags)
+        if body.source is not None:
             update_fields.append("source = ?")
-            params.append(request.source)
+            params.append(body.source)
 
         if not update_fields:
             # No fields to update, just fetch and return current record
@@ -426,9 +432,9 @@ async def update_memory(
         # embed_and_store is best-effort: if the embedding service is down, FTS
         # fallback remains intact and the old embedding (now stale) is NULLed first
         # inside the method so searches won't use misleading vectors.
-        if request.content is not None:
+        if body.content is not None:
             try:
-                await memory_store.embed_and_store(memory_id, request.content)
+                await memory_store.embed_and_store(memory_id, body.content)
             except Exception:
                 logger.warning(
                     "Could not recompute embedding for memory %d after content update",
@@ -484,7 +490,9 @@ async def update_memory(
 
 
 @router.delete("/memories/{memory_id}")
+@limiter.limit(settings.memory_mutation_rate_limit)
 async def delete_memory(
+    request: Request,
     memory_id: int,
     conn: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_active_user),

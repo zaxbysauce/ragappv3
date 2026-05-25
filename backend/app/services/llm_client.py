@@ -96,8 +96,8 @@ class LLMClient:
         """Start the HTTP client. Must be called before using the client."""
         # Configure limits for connection pooling with keep-alive
         limits = httpx.Limits(
-            max_keepalive_connections=5,
-            max_connections=10,
+            max_keepalive_connections=settings.llm_max_keepalive_connections,
+            max_connections=settings.llm_max_connections,
             keepalive_expiry=300.0,  # Keep connections alive for 5 minutes
         )
         # Add keep-alive headers to prevent LM Studio from unloading
@@ -135,10 +135,11 @@ class LLMClient:
                 keepalive = getattr(pool_obj, "_num_keepalive", 0)
                 limits = getattr(pool_obj, "_limits", None)
                 max_connections = (
-                    getattr(limits, "max_connections", 10) if limits else 10
+                    getattr(limits, "max_connections", settings.llm_max_connections) if limits else settings.llm_max_connections
                 )
                 max_keepalive = (
-                    getattr(limits, "max_keepalive_connections", 5) if limits else 5
+                    getattr(limits, "max_keepalive_connections", settings.llm_max_keepalive_connections)
+                    if limits else settings.llm_max_keepalive_connections
                 )
                 logger.info(
                     f"LLM client pool: {connections}/{max_connections} connections, "
