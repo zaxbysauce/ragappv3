@@ -33,6 +33,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.deps import (
+    UserRole,
     get_background_processor,
     get_current_active_user,
     get_db,
@@ -46,7 +47,6 @@ from app.api.deps import (
     require_admin_role,
     require_vault_permission,
 )
-from app.api.deps import UserRole
 from app.config import Settings, settings
 from app.limiter import limiter
 from app.models.database import SQLiteConnectionPool
