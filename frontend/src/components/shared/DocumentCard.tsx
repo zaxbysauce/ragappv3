@@ -4,7 +4,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Progress } from "@/components/ui/progress";
-import { Trash2, MoreVertical } from "lucide-react";
+import { Trash2, MoreVertical, Download } from "lucide-react";
 import { FileIcon } from "@/lib/fileIcon";
 import { StatusBadge } from "./StatusBadge";
 import { formatFileSize, formatDate } from "@/lib/formatters";
@@ -33,6 +33,8 @@ interface DocumentCardProps {
   };
   /** Callback when delete action is triggered */
   onDelete: (id: string) => void;
+  /** Callback when download action is triggered */
+  onDownload?: (id: string) => void;
   /** Loading state for delete action */
   isDeleting?: boolean;
   /** Whether delete actions should be available for this document */
@@ -55,6 +57,7 @@ interface DocumentCardProps {
 export function DocumentCard({
   document,
   onDelete,
+  onDownload,
   isDeleting = false,
   canDelete = true,
   isSelected = false,
@@ -135,7 +138,7 @@ export function DocumentCard({
           </div>
 
           {/* Actions dropdown (≥44×44px touch target) */}
-          {canDelete && (
+          {(canDelete || onDownload) && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -149,15 +152,26 @@ export function DocumentCard({
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-48">
-                <DropdownMenuItem
-                  onClick={() => onDelete(document.id)}
-                  disabled={isDeleting}
-                  className="text-destructive focus:text-destructive"
-                  aria-label={`Delete ${document.filename}`}
-                >
-                  <Trash2 className="w-4 h-4 mr-2" />
-                  Delete
-                </DropdownMenuItem>
+                {onDownload && (
+                  <DropdownMenuItem
+                    onClick={() => onDownload(document.id)}
+                    aria-label={`Download ${document.filename}`}
+                  >
+                    <Download className="w-4 h-4 mr-2" />
+                    Download
+                  </DropdownMenuItem>
+                )}
+                {canDelete && (
+                  <DropdownMenuItem
+                    onClick={() => onDelete(document.id)}
+                    disabled={isDeleting}
+                    className="text-destructive focus:text-destructive"
+                    aria-label={`Delete ${document.filename}`}
+                  >
+                    <Trash2 className="w-4 h-4 mr-2" />
+                    Delete
+                  </DropdownMenuItem>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
           )}

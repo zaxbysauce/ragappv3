@@ -67,6 +67,7 @@ _MAGIC_BYTES: dict[str, bytes] = {
     ".pdf": b"%PDF",
     ".docx": b"PK\x03\x04",
     ".xlsx": b"PK\x03\x04",
+    ".pptx": b"PK\x03\x04",
     ".xls": b"\xd0\xcf\x11\xe0",  # OLE Compound File
 }
 
@@ -140,6 +141,73 @@ def _record_document_action(
         """,
         (file_id, action, status, user_id, digest),
     )
+
+
+def _user_id_str(user: dict | None) -> str:
+    if user and user.get("id"):
+        return str(user["id"])
+    return "unknown"
+
+
+async def _safe_record_action(
+    file_id: int,
+    action: str,
+    status: str,
+    user: dict | None,
+    secret_manager: Optional[SecretManager],
+    conn: sqlite3.Connection,
+) -> None:
+    """Best-effort HMAC audit log against the request connection (DD-C010).
+
+    Never raises — auditing must not break the user-facing operation. No-op when
+    ``secret_manager`` is unavailable (e.g. before lifespan startup).
+    """
+    if secret_manager is None:
+        return
+    try:
+        await asyncio.to_thread(
+            _record_document_action,
+            file_id,
+            action,
+            status,
+            _user_id_str(user),
+            secret_manager,
+            conn,
+        )
+        await asyncio.to_thread(conn.commit)
+    except Exception as exc:  # noqa: BLE001 — audit failures must not propagate
+        logger.warning(
+            "Audit logging failed (%s/%s) for file_id=%s: %s", action, status, file_id, exc
+        )
+
+
+async def _record_upload_audit(
+    file_id: int,
+    user: dict | None,
+    secret_manager: Optional[SecretManager],
+    db_pool: "SQLiteConnectionPool",
+) -> None:
+    """Best-effort upload audit. Uploads use the pool (no request conn), so this
+    borrows a pooled connection for the single INSERT (DD-C010).
+
+    No-op when ``secret_manager`` is unavailable (e.g. before lifespan startup)."""
+    if secret_manager is None:
+        return
+
+    def _write() -> None:
+        conn = db_pool.get_connection()
+        try:
+            _record_document_action(
+                file_id, "upload", "success", _user_id_str(user), secret_manager, conn
+            )
+            conn.commit()
+        finally:
+            db_pool.release_connection(conn)
+
+    try:
+        await asyncio.to_thread(_write)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Upload audit logging failed for file_id=%s: %s", file_id, exc)
 
 
 @router.post("/admin/retry/{file_id}")
@@ -670,6 +738,7 @@ async def get_document_status(
 @router.get("/{file_id}/raw")
 async def get_document_raw(
     file_id: int,
+    request: Request,
     conn: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_active_user),
     evaluate: Callable = Depends(get_evaluate_policy),
@@ -711,6 +780,15 @@ async def get_document_raw(
 
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail="Document file not found")
+
+    await _safe_record_action(
+        file_id,
+        "read",
+        "success",
+        user,
+        getattr(request.app.state, "secret_manager", None),
+        conn,
+    )
 
     media_type = mimetypes.guess_type(row["file_name"])[0] or "application/octet-stream"
     is_pdf = media_type == "application/pdf" or row["file_name"].lower().endswith(".pdf")
@@ -848,7 +926,7 @@ async def upload_document_root(
     runs in the background processor; clients poll
     ``GET /documents/{file_id}/status`` for progress.
     """
-    return await _do_upload(
+    response = await _do_upload(
         request,
         file,
         settings_dep,
@@ -858,6 +936,10 @@ async def upload_document_root(
         background_processor,
         vault_id,
     )
+    await _record_upload_audit(
+        response.file_id, user, getattr(request.app.state, "secret_manager", None), db_pool
+    )
+    return response
 
 
 @router.post("/upload", response_model=UploadResponse)
@@ -881,7 +963,7 @@ async def upload_document(
     background processor. Returns immediately so the client can poll
     ``GET /documents/{file_id}/status`` for phase-aware progress.
     """
-    return await _do_upload(
+    response = await _do_upload(
         request,
         file,
         settings_dep,
@@ -891,6 +973,10 @@ async def upload_document(
         background_processor,
         vault_id,
     )
+    await _record_upload_audit(
+        response.file_id, user, getattr(request.app.state, "secret_manager", None), db_pool
+    )
+    return response
 
 
 async def _do_upload(
@@ -1181,6 +1267,31 @@ async def scan_directories(
     # Note: No finally block to stop processor - it runs continuously
 
 
+def _unlink_document_file(stored_path: str, vault_id: int) -> None:
+    """Best-effort delete of an on-disk document, confined to the vault's roots.
+
+    Prevents orphaned files accumulating after a record is deleted (DD-C003).
+    Path containment is enforced so a tampered DB row can never cause deletion
+    outside the configured document roots.
+    """
+    try:
+        file_path = Path(stored_path).resolve(strict=False)
+    except (OSError, RuntimeError, ValueError, TypeError):
+        return
+    roots = [
+        root.resolve(strict=False) for root in _allowed_document_roots(settings, vault_id)
+    ]
+    if not any(_path_is_within(file_path, root) for root in roots):
+        logger.warning(
+            "Refusing to unlink document outside configured roots: %s", file_path
+        )
+        return
+    try:
+        file_path.unlink(missing_ok=True)
+    except OSError as exc:
+        logger.warning("Failed to unlink document file %s: %s", file_path, exc)
+
+
 async def _delete_file_record(
     conn: sqlite3.Connection,
     vector_store: VectorStore,
@@ -1190,6 +1301,19 @@ async def _delete_file_record(
 ) -> None:
     """Delete one file and its derived data with consistent cleanup."""
     try:
+        # Resolve the on-disk path before deleting the row so the file can be
+        # garbage-collected from disk after the DB row is gone (DD-C003).
+        stored_path: Optional[str] = None
+        try:
+            path_cursor = await asyncio.to_thread(
+                conn.execute, "SELECT file_path FROM files WHERE id = ?", (file_id,)
+            )
+            path_row = await asyncio.to_thread(path_cursor.fetchone)
+            if path_row is not None:
+                stored_path = path_row["file_path"]
+        except sqlite3.Error:
+            stored_path = None
+
         try:
             db = vector_store.db
             if db is not None and "chunks" in await db.table_names():
@@ -1222,6 +1346,10 @@ async def _delete_file_record(
         )
         await asyncio.to_thread(conn.commit)
         logger.info("Deleted document '%s' (id: %d)", file_name, file_id)
+
+        # GC the original file from disk after the row is committed.
+        if stored_path:
+            await asyncio.to_thread(_unlink_document_file, stored_path, vault_id)
     except Exception:
         await asyncio.to_thread(conn.rollback)
         raise
@@ -1269,6 +1397,15 @@ async def delete_document(
             file_id,
             file_name,
             file_vault_id,
+        )
+
+        await _safe_record_action(
+            file_id,
+            "delete",
+            "success",
+            user,
+            getattr(request.app.state, "secret_manager", None),
+            conn,
         )
 
         return DeleteResponse(
@@ -1339,6 +1476,14 @@ async def batch_delete_documents(
                 file_name,
                 file_vault_id,
             )
+            await _safe_record_action(
+                normalized_file_id,
+                "delete",
+                "success",
+                user,
+                getattr(request.app.state, "secret_manager", None),
+                conn,
+            )
             deleted_count += 1
 
         except Exception:
@@ -1383,6 +1528,14 @@ async def delete_all_vault_documents(
                 file_id,
                 file_name,
                 vault_id,
+            )
+            await _safe_record_action(
+                file_id,
+                "delete",
+                "success",
+                user,
+                getattr(request.app.state, "secret_manager", None),
+                conn,
             )
             deleted_count += 1
 

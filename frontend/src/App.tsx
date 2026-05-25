@@ -24,6 +24,8 @@ const OrgsPage = lazy(() => import("@/pages/OrgsPage"));
 const ProfilePage = lazy(() => import("@/pages/ProfilePage"));
 const NotFoundPage = lazy(() => import("@/pages/NotFoundPage"));
 const WikiPage = lazy(() => import("@/pages/WikiPage"));
+const KMSPage = lazy(() => import("@/pages/KMSPage"));
+const KMSDetailPage = lazy(() => import("@/pages/KMSDetailPage"));
 
 function PageLoader() {
   return (
@@ -45,6 +47,7 @@ function MainAppShell({ children }: { children: React.ReactNode }) {
     if (pathname.startsWith("/documents")) return "documents";
     if (pathname.startsWith("/memory")) return "memory";
     if (pathname.startsWith("/wiki")) return "wiki";
+    if (pathname.startsWith("/kms")) return "kms";
     if (pathname.startsWith("/vaults")) return "vaults";
     if (pathname.startsWith("/settings")) return "settings";
     if (pathname.startsWith("/admin/groups")) return "groups";
@@ -72,6 +75,9 @@ function MainAppShell({ children }: { children: React.ReactNode }) {
         break;
       case "wiki":
         navigate("/wiki");
+        break;
+      case "kms":
+        navigate("/kms");
         break;
       case "vaults":
         navigate("/vaults");
@@ -238,6 +244,26 @@ function App() {
                   <ProtectedRoute>
                     <MainAppShell>
                       <WikiPage />
+                    </MainAppShell>
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/kms"
+                element={
+                  <ProtectedRoute>
+                    <MainAppShell>
+                      <KMSPage />
+                    </MainAppShell>
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/kms/:entryId"
+                element={
+                  <ProtectedRoute>
+                    <MainAppShell>
+                      <KMSDetailPage />
                     </MainAppShell>
                   </ProtectedRoute>
                 }

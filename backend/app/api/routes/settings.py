@@ -91,6 +91,10 @@ class SettingsUpdate(BaseModel):
     wiki_llm_curator_run_on_query: Optional[bool] = None
     wiki_llm_curator_run_on_manual: Optional[bool] = None
 
+    # KMS / Knowledge Management config
+    kms_enabled: Optional[bool] = None
+    kms_compile_on_ingest: Optional[bool] = None
+
     @field_validator("chunk_size")
     @classmethod
     def validate_chunk_size(cls, v):
@@ -401,6 +405,9 @@ ALLOWED_FIELDS = [
     "wiki_llm_curator_run_on_ingest",
     "wiki_llm_curator_run_on_query",
     "wiki_llm_curator_run_on_manual",
+    # KMS / Knowledge Management
+    "kms_enabled",
+    "kms_compile_on_ingest",
 ]
 
 
@@ -545,6 +552,10 @@ class SettingsResponse(BaseModel):
     wiki_llm_curator_run_on_query: bool = False
     wiki_llm_curator_run_on_manual: bool = True
 
+    # KMS / Knowledge Management config
+    kms_enabled: bool = True
+    kms_compile_on_ingest: bool = True
+
     # Limits (safe to expose)
     max_file_size_mb: int
     allowed_extensions: list[str]
@@ -637,6 +648,9 @@ def _build_settings_dict() -> dict:
         "wiki_llm_curator_run_on_ingest": settings.wiki_llm_curator_run_on_ingest,
         "wiki_llm_curator_run_on_query": settings.wiki_llm_curator_run_on_query,
         "wiki_llm_curator_run_on_manual": settings.wiki_llm_curator_run_on_manual,
+        # KMS / Knowledge Management
+        "kms_enabled": settings.kms_enabled,
+        "kms_compile_on_ingest": settings.kms_compile_on_ingest,
     }
     # NOTE: callers MUST set base["effective_sources"] explicitly with a
     # real DB connection. _compute_effective_sources(None) would silently
