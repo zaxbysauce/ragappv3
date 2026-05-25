@@ -484,6 +484,7 @@ class Settings(BaseSettings):
         "text/x-log",
         "application/vnd.ms-excel",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     }
 
     # CORS settings

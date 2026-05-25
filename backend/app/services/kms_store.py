@@ -257,9 +257,14 @@ class KMSStore:
             return self.get_entry(entry_id)
         if "tags" in updates:
             updates["tags_json"] = json.dumps(updates.pop("tags") or [])
-        if "slug" in updates and updates["slug"]:
+        # A provided-but-blank slug must never be persisted: slug is NOT NULL and
+        # an empty value would collide on the next blank-slug update. Drop it so it
+        # is regenerated from the title (if also being updated) or left unchanged.
+        if "slug" in updates and not str(updates["slug"] or "").strip():
+            del updates["slug"]
+        if "slug" in updates:
             updates["slug"] = self._unique_slug(vault_id, updates["slug"], exclude_id=entry_id)
-        elif "title" in updates and "slug" not in updates:
+        elif "title" in updates:
             updates["slug"] = self._unique_slug(vault_id, updates["title"], exclude_id=entry_id)
         updates["updated_at"] = datetime.utcnow().isoformat()
         set_clause = ", ".join(f"{k} = ?" for k in updates)

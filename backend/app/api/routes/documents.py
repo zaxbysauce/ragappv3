@@ -1476,6 +1476,14 @@ async def batch_delete_documents(
                 file_name,
                 file_vault_id,
             )
+            await _safe_record_action(
+                normalized_file_id,
+                "delete",
+                "success",
+                user,
+                getattr(request.app.state, "secret_manager", None),
+                conn,
+            )
             deleted_count += 1
 
         except Exception:
@@ -1520,6 +1528,14 @@ async def delete_all_vault_documents(
                 file_id,
                 file_name,
                 vault_id,
+            )
+            await _safe_record_action(
+                file_id,
+                "delete",
+                "success",
+                user,
+                getattr(request.app.state, "secret_manager", None),
+                conn,
             )
             deleted_count += 1
 

@@ -15,10 +15,23 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.api.deps import evaluate_policy, get_current_active_user, get_db
+from app.config import settings
+from app.security import csrf_protect
 from app.services.kms_store import KMSStore
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+
+
+def require_kms_enabled() -> None:
+    """Master switch (config.kms_enabled). When off, the entire KMS subsystem —
+    reads, writes, and job creation — is unavailable, not just auto-ingest."""
+    if not settings.kms_enabled:
+        raise HTTPException(status_code=403, detail="KMS subsystem is disabled")
+
+
+# Apply the master switch to every KMS route. CSRF is added per-route on the
+# mutating endpoints below.
+router = APIRouter(dependencies=[Depends(require_kms_enabled)])
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +125,7 @@ async def create_kms_entry(
     request: KMSEntryCreateRequest,
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_active_user),
+    _csrf: str = Depends(csrf_protect),
 ):
     await _require_vault_write(user, request.vault_id)
     _validate_status(request.status)
@@ -154,6 +168,7 @@ async def update_kms_entry(
     request: KMSEntryUpdateRequest,
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_active_user),
+    _csrf: str = Depends(csrf_protect),
 ):
     store = KMSStore(db)
     entry = store.get_entry(entry_id)
@@ -173,6 +188,7 @@ async def delete_kms_entry(
     entry_id: int,
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_active_user),
+    _csrf: str = Depends(csrf_protect),
 ):
     store = KMSStore(db)
     entry = store.get_entry(entry_id)
@@ -220,6 +236,7 @@ async def compile_document_kms(
     vault_id: int = Query(...),
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_active_user),
+    _csrf: str = Depends(csrf_protect),
 ):
     """Enqueue a KMS ingest job for an already-indexed document."""
     await _require_vault_write(user, vault_id)
@@ -247,6 +264,7 @@ async def recompile_vault_kms(
     vault_id: int = Query(...),
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_active_user),
+    _csrf: str = Depends(csrf_protect),
 ):
     """Enqueue a settings_reindex job to recompile all document entries in a vault."""
     await _require_vault_write(user, vault_id)

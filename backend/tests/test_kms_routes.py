@@ -39,6 +39,7 @@ from fastapi.testclient import TestClient
 from app.api.deps import get_db
 from app.config import settings
 from app.main import app
+from app.security import csrf_protect
 from app.services.auth_service import create_access_token
 from app.services.kms_store import KMSStore
 
@@ -117,6 +118,8 @@ class KMSTestBase(unittest.TestCase):
                 self._connection_pool.release_connection(conn)
 
         app.dependency_overrides[get_db] = override_get_db
+        # CSRF is exercised separately; bypass it for the JWT-based route tests.
+        app.dependency_overrides[csrf_protect] = lambda: "test-csrf"
 
         conn = self._connection_pool.get_connection()
         try:
@@ -168,6 +171,7 @@ class KMSTestBase(unittest.TestCase):
         settings.users_enabled = self._original_users_enabled
         settings.data_dir = self._original_data_dir
         app.dependency_overrides.pop(get_db, None)
+        app.dependency_overrides.pop(csrf_protect, None)
         if hasattr(self, "_connection_pool"):
             self._connection_pool.close_all()
         shutil.rmtree(self._temp_dir, ignore_errors=True)
@@ -321,6 +325,30 @@ class TestKMSCrud(KMSTestBase):
             self.client.get(f"/api/kms/entries/{eid}", headers=h).status_code, 404
         )
 
+    def test_blank_slug_update_does_not_persist_empty_slug(self):
+        h = self._write_headers()
+        created = self.client.post(
+            "/api/kms/entries",
+            json={"vault_id": 2, "title": "Slug Test"},
+            headers=h,
+        ).json()
+        eid = created["id"]
+        self.assertEqual(created["slug"], "slug-test")
+
+        # Blank slug alone must not overwrite with an empty string.
+        r1 = self.client.put(
+            f"/api/kms/entries/{eid}", json={"slug": ""}, headers=h
+        )
+        self.assertEqual(r1.status_code, 200)
+        self.assertTrue(r1.json()["slug"], "slug must not be empty after blank update")
+
+        # Blank slug + new title regenerates the slug from the title.
+        r2 = self.client.put(
+            f"/api/kms/entries/{eid}", json={"slug": "", "title": "Renamed Thing"}, headers=h
+        )
+        self.assertEqual(r2.status_code, 200)
+        self.assertEqual(r2.json()["slug"], "renamed-thing")
+
     def test_invalid_status_rejected(self):
         r = self.client.post(
             "/api/kms/entries",
@@ -417,6 +445,105 @@ class TestKMSStoreUnit(KMSTestBase):
             self.assertEqual(store.reset_running_jobs(), 0)
         finally:
             self._connection_pool.release_connection(conn)
+
+
+class TestKMSMasterSwitch(KMSTestBase):
+    """kms_enabled=False must disable the whole subsystem, not just auto-ingest."""
+
+    def test_disabled_blocks_read_and_write(self):
+        original = settings.kms_enabled
+        settings.kms_enabled = False
+        try:
+            h = self._write_headers()
+            r_list = self.client.get("/api/kms/entries?vault_id=2", headers=h)
+            self.assertEqual(r_list.status_code, 403)
+            self.assertIn("disabled", r_list.text.lower())
+
+            r_create = self.client.post(
+                "/api/kms/entries",
+                json={"vault_id": 2, "title": "X"},
+                headers=h,
+            )
+            self.assertEqual(r_create.status_code, 403)
+
+            r_compile = self.client.post(
+                "/api/kms/documents/1/compile?vault_id=2", headers=h
+            )
+            self.assertEqual(r_compile.status_code, 403)
+        finally:
+            settings.kms_enabled = original
+
+    def test_enabled_allows_access(self):
+        # Sanity: with the default flag, the same list call works.
+        original = settings.kms_enabled
+        settings.kms_enabled = True
+        try:
+            r = self.client.get(
+                "/api/kms/entries?vault_id=2", headers=self._write_headers()
+            )
+            self.assertEqual(r.status_code, 200)
+        finally:
+            settings.kms_enabled = original
+
+
+class TestKMSCsrf(KMSTestBase):
+    """Mutating KMS routes must enforce CSRF (cookie-auth deployments)."""
+
+    def test_create_without_csrf_rejected(self):
+        from app.security import CSRFManager
+
+        # Remove the test bypass and install a real (in-memory) CSRF manager so
+        # csrf_protect runs its actual check rather than the lambda override.
+        app.dependency_overrides.pop(csrf_protect, None)
+        app.state.csrf_manager = CSRFManager(settings.redis_url)
+        try:
+            r = self.client.post(
+                "/api/kms/entries",
+                json={"vault_id": 2, "title": "NoCsrf"},
+                headers=self._write_headers(),  # valid JWT, but no CSRF cookie/header
+            )
+            self.assertEqual(r.status_code, 403)
+            self.assertIn("csrf", r.text.lower())
+        finally:
+            app.dependency_overrides[csrf_protect] = lambda: "test-csrf"
+            if hasattr(app.state, "csrf_manager"):
+                delattr(app.state, "csrf_manager")
+
+
+class TestKMSProcessorE2E(KMSTestBase):
+    """End-to-end: a queued ingest job is compiled into a document entry."""
+
+    def test_compile_job_produces_searchable_entry(self):
+        from app.models.database import get_pool
+        from app.services.kms_compile_processor import KMSCompileProcessor
+
+        pool = get_pool(self._db_path)
+        with pool.connection() as c:
+            cur = c.execute(
+                "INSERT INTO files (vault_id, file_path, file_name, file_size, status, parsed_text) "
+                "VALUES (2,'/uploads/e2e.txt','e2e.txt',32,'indexed','unique_needle_term in the document body')"
+            )
+            file_id = cur.lastrowid
+            c.commit()
+            KMSStore(c).create_job(
+                2, "ingest", f"file:{file_id}", {"file_id": file_id, "vault_id": 2}
+            )
+
+        proc = KMSCompileProcessor(pool)
+        claimed = proc._claim_next_job()
+        self.assertIsNotNone(claimed)
+        result = proc._dispatch(claimed)
+        proc._complete_job(claimed.id, result)
+
+        self.assertFalse(result.get("skipped"))
+        with pool.connection() as c:
+            store = KMSStore(c)
+            entry = store.get_entry_by_file(2, file_id)
+            self.assertIsNotNone(entry)
+            self.assertEqual(entry.source_type, "document")
+            self.assertIn("unique_needle_term", entry.body)
+            # Content is full-text searchable.
+            self.assertTrue(any(e.id == entry.id for e in store.list_entries(2, search="unique_needle_term")))
 
 
 class TestKMSSettingsReload(KMSTestBase):

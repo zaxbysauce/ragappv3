@@ -817,5 +817,69 @@ class TestReadAccess(TestDocumentAuthBase):
         self.assertEqual(filenames, ["operator-report.pdf"])
 
 
+class TestDeleteAuditLogging(TestDocumentAuthBase):
+    """Bulk and vault-wide deletes must each write a per-file HMAC audit row."""
+
+    def _install_secret_manager(self):
+        sm = MagicMock()
+        sm.get_hmac_key.return_value = (b"test-hmac-key", "v1")
+        app.state.secret_manager = sm
+        return sm
+
+    def _seed_files(self, ids):
+        conn = self._connection_pool.get_connection()
+        try:
+            # Clean slate for vault 2 so vault-wide delete counts are deterministic
+            # (the base setUp seeds an unrelated file in vault 2).
+            conn.execute("DELETE FROM files WHERE vault_id = 2")
+            for fid in ids:
+                conn.execute(
+                    "INSERT OR REPLACE INTO files (id, file_name, file_path, file_size, status, chunk_count, vault_id) "
+                    "VALUES (?, ?, ?, ?, 'indexed', 0, 2)",
+                    (fid, f"doc{fid}.txt", f"/uploads/doc{fid}.txt", 10),
+                )
+            conn.execute("DELETE FROM document_actions")
+            conn.commit()
+        finally:
+            self._connection_pool.release_connection(conn)
+
+    def _audit_count(self, action="delete"):
+        conn = self._connection_pool.get_connection()
+        try:
+            return conn.execute(
+                "SELECT COUNT(*) FROM document_actions WHERE action = ?", (action,)
+            ).fetchone()[0]
+        finally:
+            self._connection_pool.release_connection(conn)
+
+    def tearDown(self):
+        if hasattr(app.state, "secret_manager"):
+            delattr(app.state, "secret_manager")
+        super().tearDown()
+
+    def test_batch_delete_writes_audit_row_per_file(self):
+        self._install_secret_manager()
+        self._seed_files([101, 102])
+        resp = self.client.post(
+            "/api/documents/batch",
+            headers=self._auth_headers(self._superadmin_token()),
+            json={"file_ids": ["101", "102"]},
+        )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual(resp.json()["deleted_count"], 2)
+        self.assertEqual(self._audit_count("delete"), 2)
+
+    def test_vault_all_delete_writes_audit_row_per_file(self):
+        self._install_secret_manager()
+        self._seed_files([201, 202, 203])
+        resp = self.client.delete(
+            "/api/documents/vault/2/all",
+            headers=self._auth_headers(self._superadmin_token()),
+        )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual(resp.json()["deleted_count"], 3)
+        self.assertEqual(self._audit_count("delete"), 3)
+
+
 if __name__ == "__main__":
     unittest.main()
