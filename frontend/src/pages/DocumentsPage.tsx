@@ -17,10 +17,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { FileText, Upload, Search, Trash2, ScanLine, AlertCircle, Loader2, X, RotateCcw, Trash, Info } from "lucide-react";
+import { FileText, Upload, Search, Trash2, ScanLine, AlertCircle, Loader2, X, RotateCcw, Trash, Info, Download } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FileIcon } from "@/lib/fileIcon";
-import { listDocuments, scanDocuments, deleteDocument, deleteDocuments, deleteAllDocumentsInVault, getDocumentStats, getDocumentWikiStatus, compileDocumentWiki, type Document, type DocumentStatsResponse, type DocumentWikiStatus } from "@/lib/api";
+import { listDocuments, scanDocuments, deleteDocument, deleteDocuments, deleteAllDocumentsInVault, getDocumentStats, getDocumentWikiStatus, compileDocumentWiki, downloadDocument, type Document, type DocumentStatsResponse, type DocumentWikiStatus } from "@/lib/api";
 import { formatFileSize, formatDate } from "@/lib/formatters";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useVaultStore } from "@/stores/useVaultStore";
@@ -535,6 +535,14 @@ export default function DocumentsPage() {
       },
       variant: "destructive",
     });
+  };
+
+  const handleDownloadDocument = async (doc: Document) => {
+    try {
+      await downloadDocument(doc.id, doc.filename || `document-${doc.id}`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to download document");
+    }
   };
 
   // Server already filters by search query — only apply the local optimistic-delete mask.
@@ -1123,7 +1131,7 @@ export default function DocumentsPage() {
                       <th scope="col" className="text-left p-4 font-medium flex-none w-[120px]">Wiki</th>
                       <th scope="col" className="text-left p-4 font-medium flex-none w-[100px]">Size</th>
                       <th scope="col" className="text-left p-4 font-medium flex-none w-[140px]">Uploaded</th>
-                      <th scope="col" className="text-right p-4 font-medium flex-none w-[60px]">Actions</th>
+                      <th scope="col" className="text-right p-4 font-medium flex-none w-[110px]">Actions</th>
                     </tr>
                   </thead>
                   <tbody role="rowgroup" style={{ height: `${tableVirtualizer.getTotalSize()}px`, position: 'relative' }}>
@@ -1232,7 +1240,16 @@ export default function DocumentsPage() {
                           </td>
                           <td className="p-4 flex-none w-[100px]">{formatFileSize(doc.size)}</td>
                           <td className="p-4 flex-none w-[140px] text-muted-foreground">{formatDate(doc.created_at)}</td>
-                          <td className="p-4 flex-none w-[60px] text-right">
+                          <td className="p-4 flex-none w-[110px] text-right">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="min-w-[44px] min-h-[44px]"
+                              onClick={() => handleDownloadDocument(doc)}
+                              aria-label="Download document"
+                            >
+                              <Download className="w-4 h-4" aria-hidden="true" />
+                            </Button>
                             {canMutateDocuments && (
                             <Button
                               variant="ghost"
@@ -1276,6 +1293,7 @@ export default function DocumentsPage() {
                      <DocumentCard
                        document={doc}
                        onDelete={(id) => handleDeleteDocument(String(id))}
+                       onDownload={() => handleDownloadDocument(doc)}
                        canDelete={canMutateDocuments}
                        isSelected={selectedIds.has(doc.id)}
                        onSelectionChange={canMutateDocuments ? handleSelectOne : undefined}

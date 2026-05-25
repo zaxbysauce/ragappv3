@@ -16,6 +16,7 @@ from app.services.background_tasks import get_background_processor
 from app.services.email_service import EmailIngestionService
 from app.services.embeddings import EmbeddingService
 from app.services.file_watcher import FileWatcher
+from app.services.kms_compile_processor import KMSCompileProcessor
 from app.services.llm_client import (
     LLMClient,
     create_instant_client,
@@ -155,6 +156,8 @@ def _load_persisted_settings(sqlite_path: str) -> None:
             "instant_memory_context_top_k",
             "instant_max_tokens",
             "vector_top_k",
+            "kms_enabled",
+            "kms_compile_on_ingest",
         ]
         for key in NEW_DIRECT_KEYS:
             if key in persisted:
@@ -477,6 +480,18 @@ async def lifespan(app: FastAPI):
         logger.warning("WikiCompileProcessor start failed (continuing): %s", e)
         app.state.wiki_compile_processor = None
 
+    # Start KMSCompileProcessor (background KMS job worker)
+    try:
+        app.state.kms_compile_processor = KMSCompileProcessor(pool=app.state.db_pool)
+        await _safe_await(
+            app.state.kms_compile_processor.start(),
+            "KMSCompileProcessor start",
+            timeout=10,
+        )
+    except Exception as e:
+        logger.warning("KMSCompileProcessor start failed (continuing): %s", e)
+        app.state.kms_compile_processor = None
+
     # Initialize RAGEngine singleton with cached services
     app.state.rag_engine = RAGEngine(
         embedding_service=app.state.embedding_service,
@@ -538,6 +553,8 @@ async def lifespan(app: FastAPI):
         await app.state.background_processor.stop()
     if getattr(app.state, "wiki_compile_processor", None):
         await app.state.wiki_compile_processor.stop()
+    if getattr(app.state, "kms_compile_processor", None):
+        await app.state.kms_compile_processor.stop()
     # Close both underlying LLM clients. The ``llm_client`` attr is an
     # alias of ``thinking_llm_client`` so closing it separately is
     # unnecessary; ``LLMClient.close()`` is also idempotent.

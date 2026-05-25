@@ -1890,6 +1890,32 @@ class DocumentProcessor:
             # If wiki enqueue failed, don't leave wiki_pending=1 hanging.
             set_wiki_pending(self.pool, file_id, False)
 
+        # Enqueue a KMS compile job so the document becomes a user-curatable,
+        # full-text-searchable KMS entry. Independent of the wiki pipeline and
+        # gated by the kms_enabled / kms_compile_on_ingest flags.
+        try:
+            from app.config import settings as _settings
+
+            if _settings.kms_enabled and _settings.kms_compile_on_ingest:
+                from app.services.kms_store import KMSStore as _KMSStore
+
+                if self._write_semaphore:
+                    await self._write_semaphore.acquire()
+                conn = self.pool.get_connection()
+                try:
+                    _KMSStore(conn).create_job(
+                        vault_id=vault_id,
+                        trigger_type="ingest",
+                        trigger_id=f"file:{file_id}",
+                        input_json={"file_id": file_id, "vault_id": vault_id},
+                    )
+                finally:
+                    self.pool.release_connection(conn)
+                    if self._write_semaphore:
+                        self._write_semaphore.release()
+        except Exception as _kms_exc:
+            logger.warning("Failed to enqueue KMS ingest job for file_id=%d: %s", file_id, _kms_exc)
+
         # Clear transient progress fields and pin phase=indexed so polls show
         # a clean "ready" snapshot rather than stale embedding counters.
         clear_progress(self.pool, file_id)

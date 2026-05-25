@@ -525,6 +525,69 @@ CREATE INDEX IF NOT EXISTS idx_wiki_claims_vault_page_status ON wiki_claims(vaul
 CREATE INDEX IF NOT EXISTS idx_wiki_claim_sources_claim_id ON wiki_claim_sources(claim_id);
 CREATE INDEX IF NOT EXISTS idx_wiki_compile_jobs_vault_status ON wiki_compile_jobs(vault_id, status);
 CREATE INDEX IF NOT EXISTS idx_wiki_lint_findings_vault_status_severity ON wiki_lint_findings(vault_id, status, severity);
+
+-- ============================================================
+-- KMS / Knowledge Management tables (user-curated documentation)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS kms_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    vault_id INTEGER NOT NULL,
+    file_id INTEGER REFERENCES files(id) ON DELETE SET NULL,
+    slug TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL DEFAULT '',
+    summary TEXT DEFAULT '',
+    tags_json TEXT DEFAULT '[]',
+    source_type TEXT NOT NULL DEFAULT 'manual' CHECK (source_type IN (
+        'manual','document','import')),
+    status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN (
+        'draft','published','archived')),
+    created_by INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_compiled_at TIMESTAMP,
+    UNIQUE(vault_id, slug)
+);
+
+CREATE TABLE IF NOT EXISTS kms_compile_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    vault_id INTEGER NOT NULL,
+    trigger_type TEXT NOT NULL CHECK (trigger_type IN (
+        'ingest','manual','settings_reindex')),
+    trigger_id TEXT,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN (
+        'pending','running','completed','failed','cancelled')),
+    error TEXT,
+    result_json TEXT DEFAULT '{}',
+    input_json TEXT DEFAULT '{}',
+    retry_count INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP
+);
+
+-- FTS index over KMS entry content (title + summary + body + tags)
+CREATE VIRTUAL TABLE IF NOT EXISTS kms_entries_fts USING fts5(
+    title, summary, body, tags_json,
+    content='kms_entries', content_rowid='id'
+);
+
+CREATE TRIGGER IF NOT EXISTS kms_entries_fts_insert AFTER INSERT ON kms_entries BEGIN
+    INSERT INTO kms_entries_fts(rowid, title, summary, body, tags_json) VALUES (new.id, new.title, new.summary, new.body, new.tags_json);
+END;
+CREATE TRIGGER IF NOT EXISTS kms_entries_fts_delete AFTER DELETE ON kms_entries BEGIN
+    INSERT INTO kms_entries_fts(kms_entries_fts, rowid, title, summary, body, tags_json) VALUES ('delete', old.id, old.title, old.summary, old.body, old.tags_json);
+END;
+CREATE TRIGGER IF NOT EXISTS kms_entries_fts_update AFTER UPDATE ON kms_entries BEGIN
+    INSERT INTO kms_entries_fts(kms_entries_fts, rowid, title, summary, body, tags_json) VALUES ('delete', old.id, old.title, old.summary, old.body, old.tags_json);
+    INSERT INTO kms_entries_fts(rowid, title, summary, body, tags_json) VALUES (new.id, new.title, new.summary, new.body, new.tags_json);
+END;
+
+CREATE INDEX IF NOT EXISTS idx_kms_entries_vault_status ON kms_entries(vault_id, status);
+CREATE INDEX IF NOT EXISTS idx_kms_entries_vault_slug ON kms_entries(vault_id, slug);
+CREATE INDEX IF NOT EXISTS idx_kms_entries_file_id ON kms_entries(file_id);
+CREATE INDEX IF NOT EXISTS idx_kms_compile_jobs_vault_status ON kms_compile_jobs(vault_id, status);
 """
 
 
@@ -657,6 +720,7 @@ def run_migrations(sqlite_path: str) -> None:
     migrate_add_wiki_tables(sqlite_path)
     migrate_add_wiki_refs_and_job_input(sqlite_path)
     migrate_add_wiki_jobs_retry_count(sqlite_path)
+    migrate_add_kms_tables(sqlite_path)
     migrate_add_files_parsed_text(sqlite_path)
     migrate_add_files_processing_progress(sqlite_path)
     migrate_add_files_enrichment_status(sqlite_path)
@@ -1365,6 +1429,83 @@ def migrate_add_wiki_jobs_retry_count(sqlite_path: str) -> None:
             conn.execute(
                 "ALTER TABLE wiki_compile_jobs ADD COLUMN retry_count INTEGER DEFAULT 0"
             )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def migrate_add_kms_tables(sqlite_path: str) -> None:
+    """
+    Migration: Add KMS / Knowledge Management tables for existing databases.
+
+    Idempotent — safe to run multiple times. All tables, FTS virtual tables,
+    triggers, and indexes use IF NOT EXISTS guards.
+
+    Args:
+        sqlite_path: Path to the SQLite database file.
+    """
+    conn = sqlite3.connect(sqlite_path)
+    try:
+        conn.execute("PRAGMA foreign_keys = ON;")
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS kms_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vault_id INTEGER NOT NULL,
+                file_id INTEGER REFERENCES files(id) ON DELETE SET NULL,
+                slug TEXT NOT NULL,
+                title TEXT NOT NULL,
+                body TEXT NOT NULL DEFAULT '',
+                summary TEXT DEFAULT '',
+                tags_json TEXT DEFAULT '[]',
+                source_type TEXT NOT NULL DEFAULT 'manual' CHECK (source_type IN (
+                    'manual','document','import')),
+                status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN (
+                    'draft','published','archived')),
+                created_by INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_compiled_at TIMESTAMP,
+                UNIQUE(vault_id, slug)
+            );
+
+            CREATE TABLE IF NOT EXISTS kms_compile_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vault_id INTEGER NOT NULL,
+                trigger_type TEXT NOT NULL CHECK (trigger_type IN (
+                    'ingest','manual','settings_reindex')),
+                trigger_id TEXT,
+                status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN (
+                    'pending','running','completed','failed','cancelled')),
+                error TEXT,
+                result_json TEXT DEFAULT '{}',
+                input_json TEXT DEFAULT '{}',
+                retry_count INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                started_at TIMESTAMP,
+                completed_at TIMESTAMP
+            );
+
+            CREATE VIRTUAL TABLE IF NOT EXISTS kms_entries_fts USING fts5(
+                title, summary, body, tags_json,
+                content='kms_entries', content_rowid='id'
+            );
+
+            CREATE TRIGGER IF NOT EXISTS kms_entries_fts_insert AFTER INSERT ON kms_entries BEGIN
+                INSERT INTO kms_entries_fts(rowid, title, summary, body, tags_json) VALUES (new.id, new.title, new.summary, new.body, new.tags_json);
+            END;
+            CREATE TRIGGER IF NOT EXISTS kms_entries_fts_delete AFTER DELETE ON kms_entries BEGIN
+                INSERT INTO kms_entries_fts(kms_entries_fts, rowid, title, summary, body, tags_json) VALUES ('delete', old.id, old.title, old.summary, old.body, old.tags_json);
+            END;
+            CREATE TRIGGER IF NOT EXISTS kms_entries_fts_update AFTER UPDATE ON kms_entries BEGIN
+                INSERT INTO kms_entries_fts(kms_entries_fts, rowid, title, summary, body, tags_json) VALUES ('delete', old.id, old.title, old.summary, old.body, old.tags_json);
+                INSERT INTO kms_entries_fts(rowid, title, summary, body, tags_json) VALUES (new.id, new.title, new.summary, new.body, new.tags_json);
+            END;
+
+            CREATE INDEX IF NOT EXISTS idx_kms_entries_vault_status ON kms_entries(vault_id, status);
+            CREATE INDEX IF NOT EXISTS idx_kms_entries_vault_slug ON kms_entries(vault_id, slug);
+            CREATE INDEX IF NOT EXISTS idx_kms_entries_file_id ON kms_entries(file_id);
+            CREATE INDEX IF NOT EXISTS idx_kms_compile_jobs_vault_status ON kms_compile_jobs(vault_id, status);
+        """)
         conn.commit()
     finally:
         conn.close()

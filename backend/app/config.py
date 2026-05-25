@@ -362,6 +362,12 @@ class Settings(BaseSettings):
     wiki_llm_curator_run_on_manual: bool = True
     """Run the curator in manual / recompile jobs when curator is enabled."""
 
+    # ── KMS / Knowledge Management configuration ─────────────────────────
+    kms_enabled: bool = True
+    """Master switch for the KMS (user-curated knowledge management) subsystem."""
+    kms_compile_on_ingest: bool = True
+    """Create/refresh a KMS document entry when a document finishes indexing."""
+
     # ── Retrieval profile configuration ──────────────────────────────────
     retrieval_profile: str = "advanced"
     """Retrieval profile: 'baseline' (dense + hybrid + rerank), 'advanced' (adds enrichment)."""
@@ -434,6 +440,7 @@ class Settings(BaseSettings):
         ".md",
         ".pdf",
         ".docx",
+        ".pptx",
         ".csv",
         ".xls",
         ".xlsx",

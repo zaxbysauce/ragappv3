@@ -1,4 +1,4 @@
-import { MessageSquare, FileText, Brain, Settings, Database, Users, UserCog, Building2, UserCircle, Sun, Moon, BookOpen, LogOut } from "lucide-react";
+import { MessageSquare, FileText, Brain, Settings, Database, Users, UserCog, Building2, UserCircle, Sun, Moon, BookOpen, Library, LogOut } from "lucide-react";
 import { useThemeStore } from "@/stores/useThemeStore";
 import { useAuthStore } from "@/stores/useAuthStore";
 import { cn } from "@/lib/utils";
@@ -21,6 +21,7 @@ const navItems: NavConfigItem[] = [
   { id: "documents", label: "Documents", icon: FileText, to: "/documents" },
   { id: "memory", label: "Memory", icon: Brain, to: "/memory" },
   { id: "wiki", label: "Wiki", icon: BookOpen, to: "/wiki" },
+  { id: "kms", label: "KMS", icon: Library, to: "/kms" },
   { id: "vaults", label: "Vaults", icon: Database, to: "/vaults" },
   { id: "settings", label: "Settings", icon: Settings, to: "/settings" },
   { id: "groups", label: "Groups", icon: Users, to: "/admin/groups", adminOnly: true },
