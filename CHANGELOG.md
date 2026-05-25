@@ -8,22 +8,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **KMS content search (Phase 1.5)**: Document body text is now searchable via `GET /api/documents?search=`. A new `files_content_fts` FTS5 external-content table indexes `files.parsed_text`; triggers keep it in sync; `list_documents` ORs content-FTS hits alongside metadata-FTS hits. Fixes DD-C002, the critical blocker from issue #119.
+- **KMS RAG integration (Phase 2)**: KMS entries now surface in chat as `[K#]` citations alongside wiki `[W#]` citations. `KMSRetrievalService` performs FTS-backed retrieval (gated by `kms_enabled`), injected into the RAG pipeline after wiki retrieval. The SSE `done` event emits `kms_used`; `kms_refs` is persisted per chat message. The frontend renders `KMSCards` (emerald theme) after assistant messages and adds a "Knowledge" tab in the right-pane source viewer.
+- KMS citation support in `CitationValidator`: `[K#]` labels parsed by `parse_kms_citations()`; K-citations included in repair logic.
+
+### Fixed
+
+- **Wiki retrieval silent failure**: `WikiRetrievalService` returned empty results in production due to two bugs: (1) pool interface mismatch (service used `.get()`/`.put()` but the production pool exposes `.get_connection()`/`.release_connection()`); (2) FTS alias form (`FROM table alias WHERE alias MATCH ?`) fails in this SQLite build. Both fixed — dual-interface `_acquire`/`_release` pattern and full table names in FTS queries.
+- **`files_content_fts` rebuild on every startup**: `migrate_add_files_content_fts` was running `VALUES('rebuild')` unconditionally, re-indexing all document bodies on every application restart. Now gated on whether the FTS table is being created for the first time — subsequent startups are a no-op.
+- **KMS content FTS cross-vault leak (performance)**: The `files_content_fts` subquery in `list_documents` was unscoped, causing the FTS engine to search across all vaults before the outer `WHERE vault_id = ?` narrowed results. Now uses a vault-scoped JOIN when `vault_id` is provided.
+- **KMS duplicate `require_kms_enabled`**: The sync 403 version was captured by the router before the async 503 version was defined. Consolidated to a single async 503 version defined before `router = APIRouter(...)`.
+- **Document delete double audit**: `batch_delete_documents` and `delete_all_vault_documents` emitted two `_safe_record_action("delete")` calls per file after PR #127 introduced a second call while the first (from Phase 1) was already present.
+- **KMS CSRF test override leak**: `TestKMSCSRFProtection.setUp` called `super().setUp()` which installed `app.dependency_overrides[csrf_protect]` but never removed it, causing CSRF-protected endpoints to bypass protection and return 201 instead of 403 in CSRF tests.
+
 - Configurable rate limiting for API endpoints: `chat_rate_limit` (default 30/min), `search_rate_limit` (default 60/min), `vault_create_rate_limit` (default 10/min), and `memory_mutation_rate_limit` (default 30/min). Set to 0 for unlimited.
 - async_hash_password() wrapper using ThreadPoolExecutor for non-blocking password hashing in auth endpoints
 - Memory dense search optimized with FTS pre-filtering and SQL LIMIT for improved performance
 
 ### Changed
 
-<<<<<<< HEAD
 - bcrypt password verification (cost factor 14, ~400ms) now offloaded to dedicated ThreadPoolExecutor(4) via async_verify_password(), preventing event-loop blocking during login and password-change under concurrent load
 - All authentication endpoints now use async bcrypt operations via async_verify_password() and async_hash_password()
 - VectorStore write lock now has configurable asyncio.wait_for timeout (default 30s) via @asynccontextmanager _acquire_write_lock(); all 8 write paths updated
 - VectorStore search concurrency increased from hardcoded 4 to configurable settings.vector_search_concurrency (default 16)
 - LLM HTTP client pool limits now configurable: `LLM_MAX_CONNECTIONS` (default 100) and `LLM_MAX_KEEPALIVE_CONNECTIONS` (default 50)
 - LanceDB optimize_mode default changed from "after_every_write" to "periodic" to reduce compaction blocking on every chunk write
-=======
 - Pull request CI now checks frontend toolchain compatibility, root and subpath frontend builds, configuration contract drift, and high-risk PR test-scope drift.
->>>>>>> origin/master
 - Browser login documentation now reflects JWT-only username/password auth with httpOnly refresh cookies; the legacy frontend `kv_api_key` fallback is no longer documented as supported.
 - Settings write endpoints (`POST /api/settings` and `PUT /api/settings`) are documented as admin-protected operations, and `GET /api/settings/connection` is documented as an authenticated model connection check.
 - Auth error handling changes are documented for API consumers: expired or invalid JWTs now return HTTP 401 with structured token error details.

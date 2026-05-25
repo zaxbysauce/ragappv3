@@ -19,7 +19,9 @@ KnowledgeVault enables you to:
 | **Semantic Chunking** | Structure-aware document processing preserves tables and code blocks |
 | **Vector Search** | LanceDB-powered semantic search with relevance scoring |
 | **Memory System** | SQLite FTS5-backed memory storage with natural language retrieval |
-| **Streaming Chat** | Real-time AI responses with source citations |
+| **Streaming Chat** | Real-time AI responses with source, wiki, and KMS citations (`[S#]`, `[W#]`, `[K#]`) |
+| **Knowledge Management** | User-curated documentation entries per vault with FTS search; surfaced in chat as `[K#]` citations |
+| **Document Content Search** | Full-text search across document body text, not just metadata |
 | **Auto-Titling** | LLM-generated session titles from first message |
 | **File Watcher** | Automatic detection and processing of new documents |
 | **Email Ingestion** | Ingest documents via email with IMAP polling and vault routing |

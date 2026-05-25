@@ -487,17 +487,47 @@ async def list_documents(
     if search and search.strip():
         fts_query = _build_files_fts_query(search.strip())
         if fts_query:
-            extra_where.append(
-                """(
-                    LOWER(file_name) LIKE ?
-                    OR id IN (
-                        SELECT rowid FROM files_search_fts
-                        WHERE files_search_fts MATCH ?
-                    )
-                )"""
-            )
-            extra_params.append(f"%{search.strip().lower()}%")
-            extra_params.append(fts_query)
+            if vault_id is not None:
+                # Vault-scoped content FTS: join back to files so the FTS
+                # engine only returns rowids belonging to this vault.
+                # Note: FTS5 alias form (alias MATCH ?) fails in this SQLite
+                # build — must use the full virtual-table name in MATCH.
+                extra_where.append(
+                    """(
+                        LOWER(file_name) LIKE ?
+                        OR id IN (
+                            SELECT rowid FROM files_search_fts
+                            WHERE files_search_fts MATCH ?
+                        )
+                        OR id IN (
+                            SELECT files_content_fts.rowid FROM files_content_fts
+                            JOIN files _cf ON _cf.id = files_content_fts.rowid
+                            WHERE files_content_fts MATCH ?
+                            AND _cf.vault_id = ?
+                        )
+                    )"""
+                )
+                extra_params.append(f"%{search.strip().lower()}%")
+                extra_params.append(fts_query)
+                extra_params.append(fts_query)
+                extra_params.append(vault_id)
+            else:
+                extra_where.append(
+                    """(
+                        LOWER(file_name) LIKE ?
+                        OR id IN (
+                            SELECT rowid FROM files_search_fts
+                            WHERE files_search_fts MATCH ?
+                        )
+                        OR id IN (
+                            SELECT rowid FROM files_content_fts
+                            WHERE files_content_fts MATCH ?
+                        )
+                    )"""
+                )
+                extra_params.append(f"%{search.strip().lower()}%")
+                extra_params.append(fts_query)
+                extra_params.append(fts_query)
         else:
             extra_where.append("LOWER(file_name) LIKE ?")
             extra_params.append(f"%{search.strip().lower()}%")
@@ -1486,15 +1516,6 @@ async def batch_delete_documents(
             )
             deleted_count += 1
 
-            await _safe_record_action(
-                normalized_file_id,
-                "delete",
-                "success",
-                user,
-                getattr(request.app.state, "secret_manager", None),
-                conn,
-            )
-
         except Exception:
             logger.exception("Error deleting document %s", file_id)
             failed_ids.append(file_id)
@@ -1547,15 +1568,6 @@ async def delete_all_vault_documents(
                 conn,
             )
             deleted_count += 1
-
-            await _safe_record_action(
-                file_id,
-                "delete",
-                "success",
-                user,
-                getattr(request.app.state, "secret_manager", None),
-                conn,
-            )
 
         except Exception:
             logger.exception(
