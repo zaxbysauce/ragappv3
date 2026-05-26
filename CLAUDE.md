@@ -99,7 +99,7 @@ and `writing-tests` skills, and summarized for all agent runners in the root
 **CI is the source of truth, not your local toolchain.** Before pushing or
 opening a PR, run the `ci-compatibility-audit` skill — it reproduces the exact
 CI gates from `.github/workflows/ci.yml` (backend `ruff check .`, frontend
-typecheck/lint/test/build, and the `scripts/check_*_contract.py` contract
+typecheck/lint/test/build, and the `scripts/check_*.py` contract
 scripts). A lint or type error caught locally is free; caught in CI it costs a
 push → fail → fixup-commit round trip.
 

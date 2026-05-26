@@ -209,7 +209,7 @@ Use available local artifacts first. Run safe read-only or standard project vali
 
 > Repo note: the exact commands that reproduce this repo's CI gates
 > (backend `ruff check .`, frontend typecheck/lint/test/build, the
-> `scripts/check_*_contract.py` contract scripts) are documented in the
+> `scripts/check_*.py` contract scripts) are documented in the
 > `ci-compatibility-audit` skill, derived from `.github/workflows/ci.yml`. Use
 > those as the canonical lint/typecheck/build/contract signal source rather
 > than guessing commands.

@@ -33,7 +33,7 @@ When you add or change a repo-specific skill, mirror it across all three trees
 
 ## Non-negotiables
 
-- **CI is the source of truth.** Before any push or PR, run `ci-compatibility-audit`: backend `ruff check .` + targeted pytest, frontend `typecheck`/`lint`/`test`/`build`, and `scripts/check_*_contract.py`. A lint/type error caught locally is free; caught in CI it costs a round trip.
+- **CI is the source of truth.** Before any push or PR, run `ci-compatibility-audit`: backend `ruff check .` + targeted pytest, frontend `typecheck`/`lint`/`test`/`build`, and `scripts/check_*.py`. A lint/type error caught locally is free; caught in CI it costs a round trip.
 - **CI pins Python 3.11.** On local 3.14+, some tests fail with `RuntimeError: There is no current event loop` — that's a local-interpreter artifact, not a regression. See `docs/engineering/testing.md`.
 - **Frontend is Vitest, not `bun:test`.** Ignore any `bun:test` guidance.
 - **Never ship unwired code, never defer work, and never make scope decisions without explicit instruction.**
