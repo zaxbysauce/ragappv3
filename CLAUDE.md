@@ -86,3 +86,25 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+
+---
+
+## Repository environment notes
+
+**CI is the source of truth, not your local toolchain.** Before pushing or
+opening a PR, run the `preflight` skill — it reproduces the exact CI gates from
+`.github/workflows/ci.yml` (backend `ruff check .`, frontend
+typecheck/lint/test/build, and the `scripts/check_*_contract.py` contract
+scripts). A lint or type error caught locally is free; caught in CI it costs a
+push → fail → fixup-commit round trip.
+
+**Python version:** CI pins **Python 3.11**. On a newer local interpreter (e.g.
+3.14) some backend tests fail with `RuntimeError: There is no current event
+loop` — the test harness uses the removed implicit-event-loop pattern. These
+are **false failures from the local interpreter, not regressions**. Use a 3.11
+venv when possible, and never read this specific error as a real test failure.
+
+**Frontend tests:** for jsdom gotchas (router context for `<Link>`, driving
+Radix `Select`, virtualized lists), see
+`.claude/skills/preflight/references/frontend-testing-gotchas.md` for the
+repo's established mock patterns before improvising.
