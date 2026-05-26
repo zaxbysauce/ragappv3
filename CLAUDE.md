@@ -92,8 +92,8 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 ## Repository environment notes
 
 **CI is the source of truth, not your local toolchain.** Before pushing or
-opening a PR, run the `preflight` skill — it reproduces the exact CI gates from
-`.github/workflows/ci.yml` (backend `ruff check .`, frontend
+opening a PR, run the `ci-compatibility-audit` skill — it reproduces the exact
+CI gates from `.github/workflows/ci.yml` (backend `ruff check .`, frontend
 typecheck/lint/test/build, and the `scripts/check_*_contract.py` contract
 scripts). A lint or type error caught locally is free; caught in CI it costs a
 push → fail → fixup-commit round trip.
@@ -106,5 +106,5 @@ venv when possible, and never read this specific error as a real test failure.
 
 **Frontend tests:** for jsdom gotchas (router context for `<Link>`, driving
 Radix `Select`, virtualized lists), see
-`.claude/skills/preflight/references/frontend-testing-gotchas.md` for the
-repo's established mock patterns before improvising.
+`.claude/skills/ci-compatibility-audit/references/frontend-testing-gotchas.md`
+for the repo's established mock patterns before improvising.
