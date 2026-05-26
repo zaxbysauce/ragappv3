@@ -8,6 +8,7 @@ generated_from_knowledge:
   - 670ea64b-3607-4a9c-9252-b09e12d22444
   - cfde9fb8-03e1-4f5c-95e7-13a460b85293
   - 0aa2d48d-66a3-4ff9-89bd-37bdb3a9f8d7
+  - 3905045d-3ae0-4bd8-ac0b-9ab65c1417ce
 confidence: 0.50
 status: active
 trigger:
@@ -64,6 +65,14 @@ Use this skill alongside `swarm-pr-review` or `reviewing-code-core` when reviewi
 - [ ] A test that only renders the component without firing events is a coverage gap, not a behavior test.
 - [ ] Check that `fireEvent` or `userEvent` calls exist for interaction tests.
 
+### 7. Schema Migration Safety (when database.py modified)
+- [ ] New columns added via `ALTER TABLE ADD COLUMN` only after `PRAGMA table_info()` confirms absence.
+- [ ] New tables and indexes use `IF NOT EXISTS` guards in migration functions.
+- [ ] FK indexes on new columns are created in the migration function, not in the SCHEMA string — avoids "no such column" on legacy databases where the column may not exist yet.
+- [ ] Migration function is idempotent (safe to run multiple times).
+- [ ] Migration function is registered in `run_migrations()` and called in the correct order relative to other migrations.
+- [ ] Legacy databases are tested: start the app against an existing DB and verify the migration runs without `no such column` or `duplicate column name` errors.
+
 ## Forbidden Shortcuts
 - Do not assume backend int = frontend number without checking the API type.
 - Do not approve response model changes without checking all query SELECT columns.
@@ -83,3 +92,4 @@ SKILLS: file:.opencode/skills/generated/pr-review-database-api/SKILL.md
 - 670ea64b-3607-4a9c-9252-b09e12d22444 — Unbounded concurrent requests
 - cfde9fb8-03e1-4f5c-95e7-13a460b85293 — Correlated subquery performance
 - 0aa2d48d-66a3-4ff9-89bd-37bdb3a9f8d7 — Test name/behavior alignment
+- 3905045d-3ae0-4bd8-ac0b-9ab65c1417ce — SQLite schema migration safety (IF NOT EXISTS, PRAGMA table_info, migration ordering)
