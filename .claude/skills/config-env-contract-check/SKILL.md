@@ -23,6 +23,8 @@ Check these files when present:
 - `frontend/vite.config.ts`
 - `frontend/vite.paths.ts`
 - `frontend/src/stores/useSettingsStore.ts`
+- `scripts/check_config_contract.py` ← CI contract enforcer; must be updated atomically with env var defaults
+- `scripts/validate_vite_env.mjs` ← Build-time frontend env validator; must stay in sync with inline Dockerfile validation
 - `README.md`
 - `INSTALLATION.md`
 - `docs/admin-guide.md`
@@ -37,6 +39,26 @@ Check these files when present:
 - Security-sensitive placeholders are documented and rejected or validated by runtime config.
 - Docs examples match the actual env names consumed by code.
 - Tests cover parser edge cases for new config formats.
+
+## Atomicity rule for env var default changes
+
+When changing a default value for any env var that appears across the deployment
+stack, all of the following surfaces MUST be updated in the same commit:
+
+1. `.env.example` — example/documentation value
+2. `docker-compose.yml` — Compose default
+3. `Dockerfile` (root) — build-stage default
+4. `frontend/Dockerfile` — frontend build-stage default
+5. `scripts/check_config_contract.py` — CI contract assertion
+
+Missing any one of these causes `scripts/check_config_contract.py` to fail in
+CI with a mismatch error that is hard to diagnose without knowing all five
+surfaces must agree. The script itself is part of the contract, not just an
+observer of it.
+
+Additionally: the inline validation in `frontend/Dockerfile` and the standalone
+`scripts/validate_vite_env.mjs` must implement identical validation rules.
+If you add or relax a check in one, update the other.
 
 ## Automation
 
