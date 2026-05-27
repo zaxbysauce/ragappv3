@@ -224,6 +224,12 @@ After enabling swarm mode, immediately execute `$ARGUMENTS` using this swarm-lik
 3. Create a scoped plan.
 4. Implement in coherent units.
 5. Run objective verification.
+   **Behavioral-change test trap:** When a change intentionally modifies behavior
+   (not just adds it), search for pre-existing tests that assert the OLD behavior
+   before pushing. These tests will fail CI even when the change is correct.
+   Update them with a comment explaining why the old assertion is superseded.
+   The ci-compatibility-audit local run catches the failure, but the root cause
+   (a test asserting stale behavior) is easy to misread as a regression.
 6. Use independent reviewer validation where risk justifies it.
 7. Use critic challenge only for high-impact or still-ambiguous results.
 8. Summarize what changed, what was verified, and what risks remain.

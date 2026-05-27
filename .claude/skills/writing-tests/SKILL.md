@@ -35,6 +35,31 @@ The authoritative testing policy and conventions live in
 - Config in `frontend/vite.config.ts`; `*.test.tsx`; `src/test/setup.ts` mocks `localStorage`/`confirm`/`scrollTo`.
 - jsdom mock patterns (full snippets in `ci-compatibility-audit/references/frontend-testing-gotchas.md`): wrap `<Link>` components in `MemoryRouter`; mock `@/components/ui/select` (Radix can't open in jsdom); mock `@tanstack/react-virtual`'s `useVirtualizer` to render all rows; `vi.mock` factories can't close over outer vars (`await import("react")`).
 
+## Source-inspection test pattern
+
+Some backend tests open Python source files as strings and regex-match for
+structural invariants — e.g., "every `StreamingResponse` call must include
+`X-Accel-Buffering`", or "every route file exports a `router` object". This
+pattern appears in `backend/tests/test_path_prefix.py` and similar files.
+
+**When to use it:**
+- Enforcing cross-cutting structural invariants that are hard to exercise
+  behaviorally (e.g., "all streaming responses must set a header").
+- Checking that boilerplate or security-sensitive patterns are not omitted.
+- When a behavioral test would require an integration setup disproportionate
+  to the risk being tested.
+
+**When NOT to use it:**
+- As a substitute for behavioral tests when a behavioral test is straightforward.
+- For logic correctness — source inspection cannot catch a header present but
+  set to the wrong value.
+- Where refactoring (e.g., renaming a function) would silently break the test
+  without breaking production behavior.
+
+**Tradeoff:** Fast and easy to write; fragile to non-behavioral refactoring.
+Always prefer behavioral unit tests when practical. When using source
+inspection, add a comment explaining why a behavioral test is not used.
+
 ## Running
 
 CI runs only a *narrow* backend pytest subset — also run your changed area's tests locally (`pytest -q tests/<file>`). Use `ci-compatibility-audit` for the exact CI-mirror commands before pushing.

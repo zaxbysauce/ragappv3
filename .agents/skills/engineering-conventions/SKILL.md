@@ -32,4 +32,9 @@ file you are editing over anything summarized here.
 - Three agent runners, three skill trees (`.claude/`, `.agents/`, `.opencode/`). Mirror repo-specific skills across all three, or keep them thin pointers to canonical docs.
 - Before push/PR: run `ci-compatibility-audit`. For tests: `writing-tests` / `docs/engineering/testing.md`. For commits/PRs: `commit-pr`.
 
+**TypeScript tsconfig boundary (Vite context)**
+- `tsconfig.node.json` covers only `vite.config.ts`. `tsconfig.json` covers `src/` and references `tsconfig.node.json` as a composite project.
+- Do NOT add files from `src/` to `tsconfig.node.json`'s `include` array and do NOT import `src/` files from `vite.config.ts` or `vite.paths.ts`. Doing so produces `Output file has not been built from source file` — a TypeScript composite conflict because both tsconfigs would include the same file.
+- When logic must be shared between `vite.paths.ts` and `src/lib/`, keep two copies with cross-reference comments. The subpath deployment helpers (`normalizeBasePath`) follow this pattern: canonical source in `src/lib/normalize-base-path.ts`, inline duplicate in `vite.paths.ts`.
+
 See `docs/engineering/conventions.md` for the full detail and file references.
