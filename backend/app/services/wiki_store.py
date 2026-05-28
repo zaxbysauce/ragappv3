@@ -440,6 +440,10 @@ class WikiStore:
         page = self.get_page(cur.lastrowid)  # type: ignore[arg-type]
         if page:
             self.log_activity(vault_id, "page_created", "page", page.id, user_id=created_by)
+            # DD-C030: resolve [[slug]] wiki-links in the new page's body so
+            # backlinks exist as soon as the page is created.
+            if markdown:
+                self.sync_page_links(page.id, vault_id, markdown)
         return page  # type: ignore[return-value]
 
     def get_page(self, page_id: int, load_relations: bool = True) -> Optional[WikiPage]:
@@ -547,6 +551,10 @@ class WikiStore:
                 f"Version conflict: page {page_id} was modified concurrently"
             )
         self.log_activity(vault_id, "page_updated", "page", page_id, user_id=edited_by, commit=False)
+        # DD-C030: if the body changed, re-resolve [[slug]] wiki-links inside this
+        # same transaction so the save stays atomic.
+        if "markdown" in updates:
+            self.sync_page_links(page_id, vault_id, updates["markdown"], commit=False)
         if commit:
             self._db.commit()
         return self.get_page(page_id)
@@ -1401,13 +1409,23 @@ class WikiStore:
     # -----------------------------------------------------------------------
 
     def attach_file(self, page_id: int, file_id: int, vault_id: int) -> Optional[WikiPageFile]:
-        """Attach a file to a wiki page. INSERT OR IGNORE for idempotency."""
+        """Attach a file to a wiki page.
+
+        Uses a plain INSERT so a duplicate (page_id, file_id) raises
+        ``sqlite3.IntegrityError`` against the UNIQUE constraint. The route layer
+        translates that into a 409 — using ``INSERT OR IGNORE`` here would
+        silently swallow the conflict and make that 409 handler dead code.
+        """
         now = datetime.utcnow().isoformat()
-        self._db.execute(
-            """INSERT OR IGNORE INTO wiki_page_files (page_id, file_id, vault_id, created_at)
-               VALUES (?, ?, ?, ?)""",
-            (page_id, file_id, vault_id, now),
-        )
+        try:
+            self._db.execute(
+                """INSERT INTO wiki_page_files (page_id, file_id, vault_id, created_at)
+                   VALUES (?, ?, ?, ?)""",
+                (page_id, file_id, vault_id, now),
+            )
+        except sqlite3.IntegrityError:
+            self._db.rollback()
+            raise
         self._db.commit()
         row = self._db.execute(
             "SELECT * FROM wiki_page_files WHERE page_id = ? AND file_id = ?",
@@ -1436,9 +1454,15 @@ class WikiStore:
     # Wiki Links (DD-C030)
     # -----------------------------------------------------------------------
 
-    def sync_page_links(self, page_id: int, vault_id: int, markdown: str) -> list[WikiPageLink]:
+    def sync_page_links(
+        self, page_id: int, vault_id: int, markdown: str, commit: bool = True
+    ) -> list[WikiPageLink]:
         """Parse [[slug]] and [[slug|display]] from markdown, resolve to page IDs,
-        replace old links."""
+        replace old links.
+
+        ``commit=False`` lets a caller (e.g. ``update_page``) fold the link sync
+        into its own transaction so the whole save is atomic.
+        """
         # Extract all [[...]] wiki-link targets. F-006: support the
         # ``[[slug|display text]]`` form — the part before the pipe is the link
         # target, the part after is the human-readable label.
@@ -1486,7 +1510,8 @@ class WikiStore:
                    VALUES (?, ?, ?, ?, ?)""",
                 (page_id, target_id, vault_id, link_text, now),
             )
-        self._db.commit()
+        if commit:
+            self._db.commit()
 
         rows = self._db.execute(
             "SELECT * FROM wiki_page_links WHERE source_page_id = ? AND vault_id = ?",
