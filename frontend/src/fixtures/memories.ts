@@ -1,6 +1,6 @@
 import type { MemoryResult, MemoryWikiStatus } from "@/lib/api";
 
-export const mockMemories: MemoryResult[] = [
+export const mockMemories: MemoryResult[] = import.meta.env.DEV ? [
   {
     id: "mem-101",
     content: "User prefers concise answers with bullet points for technical questions.",
@@ -61,9 +61,9 @@ export const mockMemories: MemoryResult[] = [
     metadata: { category: "guideline", tags: ["ui", "design"], source: "design-doc" },
     score: 0.90,
   },
-];
+] : [];
 
-export const mockMemoryWikiStatuses: Record<string, MemoryWikiStatus> = {
+export const mockMemoryWikiStatuses: Record<string, MemoryWikiStatus> = import.meta.env.DEV ? ({
   "mem-101": {
     memory_id: 101,
     wiki_status: "promoted",
@@ -100,4 +100,4 @@ export const mockMemoryWikiStatuses: Record<string, MemoryWikiStatus> = {
     latest_job: null,
     job_count: 0,
   },
-};
+}) : ({} as Record<string, MemoryWikiStatus>);

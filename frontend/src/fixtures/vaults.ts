@@ -1,6 +1,6 @@
 import type { Vault, Organization } from "@/lib/api";
 
-export const mockOrganizations: Organization[] = [
+export const mockOrganizations: Organization[] = import.meta.env.DEV ? [
   {
     id: 1,
     name: "Acme Corporation",
@@ -41,9 +41,9 @@ export const mockOrganizations: Organization[] = [
     group_count: 1,
     created_at: "2024-01-05T09:15:00Z",
   },
-];
+] : [];
 
-export const mockVaults: Vault[] = [
+export const mockVaults: Vault[] = import.meta.env.DEV ? [
   {
     id: 1,
     name: "General Knowledge",
@@ -110,4 +110,4 @@ export const mockVaults: Vault[] = [
     session_count: 9,
     org_id: 4,
   },
-];
+] : [];

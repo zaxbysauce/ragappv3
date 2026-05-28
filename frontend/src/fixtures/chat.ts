@@ -1,7 +1,7 @@
 import type { ChatSession, ChatSessionMessage, Source, UsedMemory, WikiReference } from "@/lib/api";
 import type { Message } from "@/stores/useChatStore";
 
-export const mockSources: Source[] = [
+export const mockSources: Source[] = import.meta.env.DEV ? [
   {
     id: "src-1",
     file_id: "doc-001",
@@ -26,9 +26,9 @@ export const mockSources: Source[] = [
     snippet: "CREATE TABLE users (id SERIAL PRIMARY KEY, username VARCHAR(255) UNIQUE NOT NULL)",
     score: 0.88,
   },
-];
+] : [];
 
-export const mockUsedMemories: UsedMemory[] = [
+export const mockUsedMemories: UsedMemory[] = import.meta.env.DEV ? [
   {
     id: "mem-1",
     memory_label: "M1",
@@ -43,9 +43,9 @@ export const mockUsedMemories: UsedMemory[] = [
     category: "fact",
     score: 0.92,
   },
-];
+] : [];
 
-export const mockWikiReferences: WikiReference[] = [
+export const mockWikiReferences: WikiReference[] = import.meta.env.DEV ? [
   {
     wiki_label: "W1",
     page_id: 1,
@@ -82,9 +82,9 @@ export const mockWikiReferences: WikiReference[] = [
     source_count: 1,
     provenance_summary: "Derived from security policy document",
   },
-];
+] : [];
 
-export const mockChatSessions: ChatSession[] = [
+export const mockChatSessions: ChatSession[] = import.meta.env.DEV ? [
   {
     id: 1,
     vault_id: 1,
@@ -155,9 +155,9 @@ export const mockChatSessions: ChatSession[] = [
     forked_from_session_id: null,
     fork_message_index: null,
   },
-];
+] : [];
 
-export const mockChatMessages: Message[] = [
+export const mockChatMessages: Message[] = import.meta.env.DEV ? [
   {
     id: "msg-1",
     role: "user",
@@ -206,7 +206,7 @@ export const mockChatMessages: Message[] = [
     wikiRefs: [mockWikiReferences[0]],
     created_at: "2024-05-01T10:12:00Z",
   },
-];
+] : [];
 
 export const mockChatSessionMessages: ChatSessionMessage[] = mockChatMessages.map((m) => ({
   id: parseInt(m.id.replace("msg-", ""), 10),

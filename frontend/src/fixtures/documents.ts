@@ -1,6 +1,6 @@
 import type { Document, DocumentStatsResponse, DocumentWikiStatus, DocumentStatusResponse } from "@/lib/api";
 
-export const mockDocuments: Document[] = [
+export const mockDocuments: Document[] = import.meta.env.DEV ? [
   {
     id: "doc-001",
     filename: "Project_Requirements_2024.pdf",
@@ -97,9 +97,9 @@ export const mockDocuments: Document[] = [
     created_at: "2024-04-25T14:00:00Z",
     metadata: { status: "indexed", entries: 480 },
   },
-];
+] : [];
 
-export const mockDocumentStats: DocumentStatsResponse = {
+export const mockDocumentStats: DocumentStatsResponse = import.meta.env.DEV ? ({
   total_documents: 128,
   total_chunks: 4560,
   total_size_bytes: 1_247_000_000,
@@ -109,9 +109,9 @@ export const mockDocumentStats: DocumentStatsResponse = {
     pending: 8,
     error: 12,
   },
-};
+}) : ({} as DocumentStatsResponse);
 
-export const mockDocumentWikiStatuses: Record<string, DocumentWikiStatus> = {
+export const mockDocumentWikiStatuses: Record<string, DocumentWikiStatus> = import.meta.env.DEV ? ({
   "doc-001": {
     file_id: 1,
     wiki_status: "compiled",
@@ -175,9 +175,9 @@ export const mockDocumentWikiStatuses: Record<string, DocumentWikiStatus> = {
     },
     job_count: 2,
   },
-};
+}) : ({} as Record<string, DocumentWikiStatus>);
 
-export const mockDocumentStatuses: DocumentStatusResponse[] = [
+export const mockDocumentStatuses: DocumentStatusResponse[] = import.meta.env.DEV ? [
   {
     id: 1,
     filename: "Project_Requirements_2024.pdf",
@@ -208,4 +208,4 @@ export const mockDocumentStatuses: DocumentStatusResponse[] = [
     wiki_phase: null,
     wiki_job_id: null,
   },
-];
+] : [];

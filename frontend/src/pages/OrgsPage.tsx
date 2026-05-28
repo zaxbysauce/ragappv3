@@ -66,12 +66,14 @@ const ROLE_OPTIONS: { value: OrgRole; label: string }[] = [
 
 const CHANGEABLE_ROLE_OPTIONS = ROLE_OPTIONS.filter((r) => r.value !== "owner");
 
-const MOCK_ORGS: Organization[] = [
+// Dev-only mock data; gated on import.meta.env.DEV so it folds away (and is
+// dead-code eliminated) in production builds. See finding F-004.
+const MOCK_ORGS: Organization[] = import.meta.env.DEV ? [
   { id: 1, name: "Acme Corporation", description: "Primary engineering organization", member_count: 12, vault_count: 4, created_at: "2023-09-01T08:00:00Z" },
   { id: 2, name: "Beta Labs", description: "Research and development division", member_count: 8, vault_count: 2, created_at: "2023-10-15T10:30:00Z" },
   { id: 3, name: "Gamma Solutions", description: "Client-facing support and documentation", member_count: 24, vault_count: 6, created_at: "2023-11-20T14:00:00Z" },
   { id: 4, name: "Delta Systems", description: "Infrastructure and DevOps team", member_count: 6, vault_count: 3, created_at: "2024-01-05T09:15:00Z" },
-];
+] : [];
 
 function OrgsPageContent() {
   const testMode = useTestMode();

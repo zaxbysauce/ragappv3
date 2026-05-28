@@ -1,6 +1,6 @@
 import type { User, UserListItem } from "@/lib/api";
 
-export const mockUsers: User[] = [
+export const mockUsers: User[] = import.meta.env.DEV ? [
   {
     id: 1,
     email: "alex.doe@example.com",
@@ -73,9 +73,9 @@ export const mockUsers: User[] = [
     created_at: "2024-04-20T13:00:00Z",
     updated_at: "2024-04-20T13:00:00Z",
   },
-];
+] : [];
 
-export const mockUserListItems: UserListItem[] = [
+export const mockUserListItems: UserListItem[] = import.meta.env.DEV ? [
   { id: 1, username: "alex.doe", full_name: "Alex Doe", role: "superadmin", is_active: true },
   { id: 2, username: "jordan.admin", full_name: "Jordan Smith", role: "admin", is_active: true },
   { id: 3, username: "casey.member", full_name: "Casey Johnson", role: "member", is_active: true },
@@ -84,7 +84,7 @@ export const mockUserListItems: UserListItem[] = [
   { id: 6, username: "riley.eng", full_name: "Riley Garcia", role: "member", is_active: true },
   { id: 7, username: "quinn.lead", full_name: "Quinn Martinez", role: "admin", is_active: true },
   { id: 8, username: "skyler.new", full_name: "Skyler Lee", role: "viewer", is_active: true },
-];
+] : [];
 
 export interface MockAdminUser {
   id: number;
@@ -95,7 +95,7 @@ export interface MockAdminUser {
   created_at: string;
 }
 
-export const mockAdminUsers: MockAdminUser[] = [
+export const mockAdminUsers: MockAdminUser[] = import.meta.env.DEV ? [
   { id: 1, username: "alex.doe", full_name: "Alex Doe", role: "superadmin", is_active: true, created_at: "2023-09-01T08:00:00Z" },
   { id: 2, username: "jordan.admin", full_name: "Jordan Smith", role: "admin", is_active: true, created_at: "2023-09-05T09:00:00Z" },
   { id: 3, username: "casey.member", full_name: "Casey Johnson", role: "member", is_active: true, created_at: "2023-10-01T11:00:00Z" },
@@ -104,4 +104,4 @@ export const mockAdminUsers: MockAdminUser[] = [
   { id: 6, username: "riley.eng", full_name: "Riley Garcia", role: "member", is_active: true, created_at: "2024-01-15T09:00:00Z" },
   { id: 7, username: "quinn.lead", full_name: "Quinn Martinez", role: "admin", is_active: true, created_at: "2024-02-01T08:00:00Z" },
   { id: 8, username: "skyler.new", full_name: "Skyler Lee", role: "viewer", is_active: true, created_at: "2024-04-20T13:00:00Z" },
-];
+] : [];

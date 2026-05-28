@@ -1,6 +1,6 @@
 import type { WikiPage, WikiClaim, WikiEntity, WikiLintFinding, WikiCompileJob, WikiRelation } from "@/lib/api";
 
-export const mockWikiClaims: WikiClaim[] = [
+export const mockWikiClaims: WikiClaim[] = import.meta.env.DEV ? [
   {
     id: 1,
     vault_id: 1,
@@ -101,17 +101,17 @@ export const mockWikiClaims: WikiClaim[] = [
       { id: 5, claim_id: 5, source_kind: "document", file_id: 5, chunk_id: null, memory_id: null, chat_message_id: null, source_label: "D5", quote: "3 critical, 7 medium", char_start: null, char_end: null, page_number: null, confidence: 0.88, created_at: "2024-03-12T17:00:00Z" },
     ],
   },
-];
+] : [];
 
-export const mockWikiEntities: WikiEntity[] = [
+export const mockWikiEntities: WikiEntity[] = import.meta.env.DEV ? [
   { id: 1, vault_id: 1, canonical_name: "Semantic Search", entity_type: "technology", aliases_json: '["vector search","semantic retrieval"]', description: "Vector-based semantic retrieval technology", page_id: 1, created_at: "2024-01-15T09:35:00Z", updated_at: "2024-01-15T09:35:00Z" },
   { id: 2, vault_id: 1, canonical_name: "JWT Authentication", entity_type: "protocol", aliases_json: '["JSON Web Token","Bearer token"]', description: "Token-based authentication protocol", page_id: 2, created_at: "2024-03-12T17:00:00Z", updated_at: "2024-03-12T17:00:00Z" },
   { id: 3, vault_id: 1, canonical_name: "AES-256", entity_type: "standard", aliases_json: '["Advanced Encryption Standard"]', description: "Symmetric encryption standard", page_id: 7, created_at: "2024-03-12T17:00:00Z", updated_at: "2024-03-12T17:00:00Z" },
   { id: 4, vault_id: 1, canonical_name: "Acme Platform", entity_type: "system", aliases_json: '["The platform"]', description: "The main software platform", page_id: 1, created_at: "2024-01-15T09:35:00Z", updated_at: "2024-01-15T09:35:00Z" },
   { id: 5, vault_id: 1, canonical_name: "Security Audit 2023", entity_type: "event", aliases_json: '[]', description: "Annual security assessment conducted in 2023", page_id: 3, created_at: "2024-03-12T17:00:00Z", updated_at: "2024-03-12T17:00:00Z" },
-];
+] : [];
 
-export const mockWikiLintFindings: WikiLintFinding[] = [
+export const mockWikiLintFindings: WikiLintFinding[] = import.meta.env.DEV ? [
   {
     id: 1,
     vault_id: 1,
@@ -164,9 +164,9 @@ export const mockWikiLintFindings: WikiLintFinding[] = [
     created_at: "2024-04-20T08:00:00Z",
     updated_at: "2024-04-20T08:00:00Z",
   },
-];
+] : [];
 
-export const mockWikiCompileJobs: WikiCompileJob[] = [
+export const mockWikiCompileJobs: WikiCompileJob[] = import.meta.env.DEV ? [
   {
     id: 1,
     vault_id: 1,
@@ -206,15 +206,15 @@ export const mockWikiCompileJobs: WikiCompileJob[] = [
     completed_at: "2024-05-06T14:00:35Z",
     retry_count: 2,
   },
-];
+] : [];
 
-export const mockWikiRelations: WikiRelation[] = [
+export const mockWikiRelations: WikiRelation[] = import.meta.env.DEV ? [
   { id: 1, vault_id: 1, subject_entity_id: 4, predicate: "implements", object_entity_id: 1, object_text: null, claim_id: 1, confidence: 0.96, created_at: "2024-01-15T09:35:00Z" },
   { id: 2, vault_id: 1, subject_entity_id: 2, predicate: "requires", object_entity_id: 3, object_text: null, claim_id: 3, confidence: 0.99, created_at: "2024-03-12T17:00:00Z" },
   { id: 3, vault_id: 1, subject_entity_id: null, predicate: "affected_by", object_entity_id: 5, object_text: null, claim_id: 5, confidence: 0.88, created_at: "2024-03-12T17:00:00Z" },
-];
+] : [];
 
-export const mockWikiPages: WikiPage[] = [
+export const mockWikiPages: WikiPage[] = import.meta.env.DEV ? [
   {
     id: 1,
     vault_id: 1,
@@ -395,4 +395,4 @@ export const mockWikiPages: WikiPage[] = [
     entities: [],
     lint_findings: [],
   },
-];
+] : [];

@@ -1,7 +1,7 @@
 import type { SettingsResponse, HealthResponse, LlmModeHealth, ConnectionTestResult } from "@/lib/api";
 import type { HealthStatus } from "@/types/health";
 
-export const mockSettings: SettingsResponse = {
+export const mockSettings: SettingsResponse = import.meta.env.DEV ? ({
   port: 8000,
   data_dir: "/var/lib/ragapp/data",
   ollama_embedding_url: "http://localhost:11434",
@@ -63,17 +63,17 @@ export const mockSettings: SettingsResponse = {
   max_file_size_mb: 50,
   allowed_extensions: [".pdf", ".docx", ".md", ".txt", ".html", ".csv", ".json", ".sql"],
   backend_cors_origins: ["http://localhost:5173", "http://localhost:3000"],
-};
+}) : ({} as SettingsResponse);
 
-export const mockHealthStatus: HealthStatus = {
+export const mockHealthStatus: HealthStatus = import.meta.env.DEV ? ({
   backend: true,
   embeddings: true,
   chat: true,
   loading: false,
   lastChecked: new Date("2024-05-07T10:00:00Z"),
-};
+}) : ({} as HealthStatus);
 
-export const mockHealthResponse: HealthResponse = {
+export const mockHealthResponse: HealthResponse = import.meta.env.DEV ? ({
   status: "healthy",
   version: "0.9.2",
   timestamp: "2024-05-07T10:00:00Z",
@@ -82,14 +82,14 @@ export const mockHealthResponse: HealthResponse = {
     embeddings: true,
     chat: true,
   },
-};
+}) : ({} as HealthResponse);
 
-export const mockLlmModeHealth: LlmModeHealth = {
+export const mockLlmModeHealth: LlmModeHealth = import.meta.env.DEV ? ({
   thinking: true,
   instant: false,
-};
+}) : ({} as LlmModeHealth);
 
-export const mockConnectionResult: ConnectionTestResult = {
+export const mockConnectionResult: ConnectionTestResult = import.meta.env.DEV ? ({
   embeddings: { url: "http://localhost:11434", status: 200, ok: true },
   chat: { url: "http://localhost:11434", status: 200, ok: true },
-};
+}) : ({} as ConnectionTestResult);

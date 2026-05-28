@@ -1,6 +1,6 @@
 import type { Group, GroupMember } from "@/lib/api";
 
-export const mockGroups: Group[] = [
+export const mockGroups: Group[] = import.meta.env.DEV ? [
   {
     id: 1,
     name: "Engineering Team",
@@ -49,9 +49,9 @@ export const mockGroups: Group[] = [
     org_id: 4,
     organization_name: "Delta Systems",
   },
-];
+] : [];
 
-export const mockGroupMembers: Record<number, GroupMember[]> = {
+export const mockGroupMembers: Record<number, GroupMember[]> = import.meta.env.DEV ? ({
   1: [
     { id: 2, username: "jordan.admin", full_name: "Jordan Smith" },
     { id: 3, username: "casey.member", full_name: "Casey Johnson" },
@@ -76,4 +76,4 @@ export const mockGroupMembers: Record<number, GroupMember[]> = {
   6: [
     { id: 7, username: "quinn.lead", full_name: "Quinn Martinez" },
   ],
-};
+}) : ({} as Record<number, GroupMember[]>);
