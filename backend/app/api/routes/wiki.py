@@ -316,8 +316,11 @@ async def attach_file_to_page(
     page = store.get_page(page_id, load_relations=False)
     if not page:
         raise HTTPException(status_code=404, detail="Wiki page not found")
+    # F-003: collapse the cross-vault case to 404 so an authenticated caller
+    # cannot use 403-vs-404 to probe whether a page id exists in another vault.
+    # Matches list_page_files / list_page_backlinks below.
     if page.vault_id != request.vault_id:
-        raise HTTPException(status_code=403, detail="Page does not belong to this vault")
+        raise HTTPException(status_code=404, detail="Wiki page not found")
     try:
         pf = store.attach_file(page_id, request.file_id, request.vault_id)
     except sqlite3.IntegrityError:

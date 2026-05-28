@@ -1057,8 +1057,10 @@ class TestWikiPageFilesRoute(WikiNewRouteTestBase):
         listing = self.client.get(f"/api/wiki/pages/{page_id}/files", params={"vault_id": 1})
         self.assertEqual(len(listing.json()["files"]), 1)
 
-    def test_attach_wrong_vault_page_returns_403(self):
-        # Page is in vault 1; request claims vault 2 -> handler returns 403.
+    def test_attach_wrong_vault_page_returns_404(self):
+        # F-003 existence-oracle parity: a page in vault 1 attached as vault 2
+        # must return 404 (not 403), so a caller cannot distinguish "exists in
+        # another vault" from "does not exist". Matches the read endpoints.
         self._insert_vault2()
         page = self._create_page(vault_id=1, title="Vault1 Page")
         page_id = page["id"]
@@ -1067,8 +1069,7 @@ class TestWikiPageFilesRoute(WikiNewRouteTestBase):
             f"/api/wiki/pages/{page_id}/files",
             json={"vault_id": 2, "file_id": file_id},
         )
-        self.assertEqual(resp.status_code, 403, resp.text)
-        self.assertIn("vault", resp.json()["detail"].lower())
+        self.assertEqual(resp.status_code, 404, resp.text)
 
     def test_detach_nonexistent_attachment_returns_404(self):
         page = self._create_page(title="No Attach")
