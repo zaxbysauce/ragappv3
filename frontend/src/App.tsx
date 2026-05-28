@@ -1,4 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
+import { TestModeProvider } from "@/fixtures/TestModeContext";
 import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { PageShell } from "@/components/layout/PageShell";
@@ -7,6 +8,9 @@ import { useEffect, lazy, Suspense } from "react";
 import { useAuthStore } from "@/stores/useAuthStore";
 import type { NavItemId } from "@/components/layout/navigationTypes";
 import { Loader2 } from "lucide-react";
+
+// Toggle mock-data mode via: VITE_TEST_MODE=true npm run dev
+const TEST_MODE = import.meta.env.VITE_TEST_MODE === "true";
 
 // H-16 fix: Lazy-load all page components for code splitting
 const ChatShell = lazy(() => import("@/pages/ChatShell"));
@@ -33,7 +37,7 @@ function PageLoader() {
 }
 
 // Main app shell wrapper that provides the navigation and page layout
-function MainAppShell({ children }: { children: React.ReactNode }) {
+function MainAppShell({ children, testMode = false }: { children: React.ReactNode; testMode?: boolean }) {
   const health = useHealthCheck({ pollInterval: 30000 });
   const navigate = useNavigate();
   const location = useLocation();
@@ -96,13 +100,15 @@ function MainAppShell({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <PageShell
-      activeItem={activeItem}
-      onItemSelect={handleItemSelect}
-      healthStatus={health}
-    >
-      {children}
-    </PageShell>
+    <TestModeProvider testMode={testMode}>
+      <PageShell
+        activeItem={activeItem}
+        onItemSelect={handleItemSelect}
+        healthStatus={health}
+      >
+        {children}
+      </PageShell>
+    </TestModeProvider>
   );
 }
 
@@ -110,7 +116,9 @@ function App() {
   const initAuth = useAuthStore((state) => state.init);
 
   useEffect(() => {
-    initAuth();
+    if (!TEST_MODE) {
+      initAuth();
+    }
   }, [initAuth]);
 
   return (
@@ -124,20 +132,20 @@ function App() {
               <Route
                 path="/chat"
                 element={
-                  <ProtectedRoute>
-                    <MainAppShell>
+                  <ProtectedRoute testMode={TEST_MODE}>
+                    <MainAppShell testMode={TEST_MODE}>
                       <ChatShell />
                     </MainAppShell>
                   </ProtectedRoute>
                 }
               />
               {/* /chat/redesign removed — redirect to canonical /chat */}
-              <Route path="/chat/redesign" element={<ProtectedRoute><Navigate to="/chat" replace /></ProtectedRoute>} />
+              <Route path="/chat/redesign" element={<ProtectedRoute testMode={TEST_MODE}><Navigate to="/chat" replace /></ProtectedRoute>} />
               <Route
                 path="/chat/:sessionId"
                 element={
-                  <ProtectedRoute>
-                    <MainAppShell>
+                  <ProtectedRoute testMode={TEST_MODE}>
+                    <MainAppShell testMode={TEST_MODE}>
                       <ChatShell />
                     </MainAppShell>
                   </ProtectedRoute>
@@ -148,8 +156,8 @@ function App() {
               <Route
                 path="/documents"
                 element={
-                  <ProtectedRoute>
-                    <MainAppShell>
+                  <ProtectedRoute testMode={TEST_MODE}>
+                    <MainAppShell testMode={TEST_MODE}>
                       <DocumentsPage />
                     </MainAppShell>
                   </ProtectedRoute>
@@ -158,8 +166,8 @@ function App() {
               <Route
                 path="/memory"
                 element={
-                  <ProtectedRoute>
-                    <MainAppShell>
+                  <ProtectedRoute testMode={TEST_MODE}>
+                    <MainAppShell testMode={TEST_MODE}>
                       <MemoryPage />
                     </MainAppShell>
                   </ProtectedRoute>
@@ -168,8 +176,8 @@ function App() {
               <Route
                 path="/vaults"
                 element={
-                  <ProtectedRoute>
-                    <MainAppShell>
+                  <ProtectedRoute testMode={TEST_MODE}>
+                    <MainAppShell testMode={TEST_MODE}>
                       <VaultsPage />
                     </MainAppShell>
                   </ProtectedRoute>
@@ -178,8 +186,8 @@ function App() {
               <Route
                 path="/settings"
                 element={
-                  <ProtectedRoute>
-                    <MainAppShell>
+                  <ProtectedRoute testMode={TEST_MODE}>
+                    <MainAppShell testMode={TEST_MODE}>
                       <SettingsPage />
                     </MainAppShell>
                   </ProtectedRoute>
@@ -190,8 +198,8 @@ function App() {
               <Route
                 path="/admin/users"
                 element={
-                  <ProtectedRoute>
-                    <MainAppShell>
+                  <ProtectedRoute testMode={TEST_MODE}>
+                    <MainAppShell testMode={TEST_MODE}>
                       <AdminUsersPage />
                     </MainAppShell>
                   </ProtectedRoute>
@@ -200,8 +208,8 @@ function App() {
               <Route
                 path="/admin/groups"
                 element={
-                  <ProtectedRoute>
-                    <MainAppShell>
+                  <ProtectedRoute testMode={TEST_MODE}>
+                    <MainAppShell testMode={TEST_MODE}>
                       <AdminGroupsPage />
                     </MainAppShell>
                   </ProtectedRoute>
@@ -210,8 +218,8 @@ function App() {
               <Route
                 path="/admin/organizations"
                 element={
-                  <ProtectedRoute>
-                    <MainAppShell>
+                  <ProtectedRoute testMode={TEST_MODE}>
+                    <MainAppShell testMode={TEST_MODE}>
                       <OrgsPage />
                     </MainAppShell>
                   </ProtectedRoute>
@@ -221,8 +229,8 @@ function App() {
               <Route
                 path="/profile"
                 element={
-                  <ProtectedRoute>
-                    <MainAppShell>
+                  <ProtectedRoute testMode={TEST_MODE}>
+                    <MainAppShell testMode={TEST_MODE}>
                       <ProfilePage />
                     </MainAppShell>
                   </ProtectedRoute>
@@ -231,8 +239,8 @@ function App() {
               <Route
                 path="/wiki"
                 element={
-                  <ProtectedRoute>
-                    <MainAppShell>
+                  <ProtectedRoute testMode={TEST_MODE}>
+                    <MainAppShell testMode={TEST_MODE}>
                       <WikiPage />
                     </MainAppShell>
                   </ProtectedRoute>

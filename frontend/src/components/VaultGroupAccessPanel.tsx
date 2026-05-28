@@ -3,8 +3,25 @@ import { toast } from "sonner";
 import apiClient from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { Users, UserX, Loader2, Building2 } from "lucide-react";
 
 type VaultPermission = "read" | "write" | "admin";
@@ -103,57 +120,68 @@ export function VaultGroupAccessPanel({ vaultId }: VaultGroupAccessPanelProps) {
       <CardContent className="space-y-6">
         <form onSubmit={handleAddGroup} className="flex gap-2 items-end">
           <div className="flex-1 space-y-2">
-            <label htmlFor={`group-id-${vaultId}`} className="text-sm font-medium">Group ID</label>
+            <Label htmlFor={`group-id-${vaultId}`}>Group ID</Label>
             <Input id={`group-id-${vaultId}`} placeholder="Enter group ID..." value={newGroupId} onChange={(e) => setNewGroupId(e.target.value)} disabled={addingGroup} aria-label="Group ID to grant vault access" />
           </div>
           <div className="space-y-2">
-            <label htmlFor={`group-perm-${vaultId}`} className="text-sm font-medium">Permission</label>
-            <select id={`group-perm-${vaultId}`} value={newGroupPermission} onChange={(e) => setNewGroupPermission(e.target.value as VaultPermission)} disabled={addingGroup} aria-label="Permission level for group access" className="h-10 rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
-              {PERMISSION_OPTIONS.map((opt) => (<option key={opt.value} value={opt.value}>{opt.label}</option>))}
-            </select>
+            <Label htmlFor={`group-perm-${vaultId}`}>Permission</Label>
+            <Select
+              value={newGroupPermission}
+              onValueChange={(v) => setNewGroupPermission(v as VaultPermission)}
+              disabled={addingGroup}
+            >
+              <SelectTrigger id={`group-perm-${vaultId}`} aria-label="Permission level for group access">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PERMISSION_OPTIONS.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <Button type="submit" disabled={addingGroup || !newGroupId.trim()}>
             {addingGroup ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Users className="w-4 h-4 mr-2" />}
             Grant
           </Button>
         </form>
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <caption className="sr-only">Group Access List</caption>
-            <thead>
-              <tr className="border-b">
-                <th scope="col" className="text-left py-2 font-medium">Group</th>
-                <th scope="col" className="text-left py-2 font-medium">Organization</th>
-                <th scope="col" className="text-left py-2 font-medium">Permission</th>
-                <th scope="col" className="text-left py-2 font-medium">Granted</th>
-                <th scope="col" className="text-right py-2 font-medium">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr><td colSpan={5} className="py-8 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto text-muted-foreground" role="status" aria-live="polite" /><span className="sr-only">Loading group access</span></td></tr>
-              ) : groupAccessList.length === 0 ? (
-                <tr><td colSpan={5} className="py-8 text-center text-muted-foreground" role="status" aria-live="polite">No groups have access yet. Grant access to organization groups to give their members vault permissions.</td></tr>
-              ) : (
-                groupAccessList.map((group) => (
-                  <tr key={group.group_id} className="border-b last:border-0">
-                    <td className="py-3"><div className="font-medium">{group.group_name}</div></td>
-                    <td className="py-3 text-muted-foreground text-sm">{group.org_name}</td>
-                    <td className="py-3">
-                      <select value={group.permission} onChange={(e) => handlePermissionChange(group.group_id, e.target.value as VaultPermission)} disabled={updatingGroupId === group.group_id} aria-label={`Change permission for ${group.group_name}`} className="h-8 rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50">
-                        {PERMISSION_OPTIONS.map((opt) => (<option key={opt.value} value={opt.value}>{opt.label}</option>))}
-                      </select>
-                    </td>
-                    <td className="py-3 text-muted-foreground text-sm">{formatDate(group.granted_at)}</td>
-                    <td className="py-3 text-right">
-                      <Button variant="ghost" size="icon" onClick={() => { setGroupToRemove(group); setRemoveDialogOpen(true); }} aria-label={`Revoke access for ${group.group_name}`} className="text-destructive hover:text-destructive hover:bg-destructive/10"><UserX className="w-4 h-4" /></Button>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+        <Table>
+          <TableCaption className="sr-only">Group Access List</TableCaption>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="text-left py-2">Group</TableHead>
+              <TableHead className="text-left py-2">Organization</TableHead>
+              <TableHead className="text-left py-2">Permission</TableHead>
+              <TableHead className="text-left py-2">Granted</TableHead>
+              <TableHead className="text-right py-2">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {loading ? (
+              <TableRow><TableCell colSpan={5} className="py-8 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto text-muted-foreground" role="status" aria-live="polite" /><span className="sr-only">Loading group access</span></TableCell></TableRow>
+            ) : groupAccessList.length === 0 ? (
+              <TableRow><TableCell colSpan={5} className="py-8 text-center text-muted-foreground" role="status" aria-live="polite">No groups have access yet. Grant access to organization groups to give their members vault permissions.</TableCell></TableRow>
+            ) : (
+              groupAccessList.map((group) => (
+                <TableRow key={group.group_id}>
+                  <TableCell className="py-3"><div className="font-medium">{group.group_name}</div></TableCell>
+                  <TableCell className="py-3 text-muted-foreground text-sm">{group.org_name}</TableCell>
+                  <TableCell className="py-3">
+                    <select value={group.permission} onChange={(e) => handlePermissionChange(group.group_id, e.target.value as VaultPermission)} disabled={updatingGroupId === group.group_id} aria-label={`Change permission for ${group.group_name}`} className="h-8 rounded-sm border border-input bg-background px-2 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50">
+                      {PERMISSION_OPTIONS.map((opt) => (<option key={opt.value} value={opt.value}>{opt.label}</option>))}
+                    </select>
+                  </TableCell>
+                  <TableCell className="py-3 text-muted-foreground text-sm">{formatDate(group.granted_at)}</TableCell>
+                  <TableCell className="py-3 text-right">
+                    <Button variant="destructive" size="icon" onClick={() => { setGroupToRemove(group); setRemoveDialogOpen(true); }} aria-label={`Revoke access for ${group.group_name}`}><UserX className="w-4 h-4" /></Button>
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
       </CardContent>
       <Dialog open={removeDialogOpen} onOpenChange={setRemoveDialogOpen}>
         <DialogContent aria-labelledby="revoke-group-title" aria-describedby="revoke-group-desc">

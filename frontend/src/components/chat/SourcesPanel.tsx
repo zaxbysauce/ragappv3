@@ -112,7 +112,7 @@ function MobileSourcesAccordion({
 }: MobileSourcesAccordionProps) {
   return (
     <Accordion type="single" collapsible defaultValue="sources">
-      <AccordionItem value="sources" className="border rounded-lg bg-card">
+      <AccordionItem value="sources" className="border rounded-sm bg-card">
         <AccordionTrigger className="px-4 py-3 hover:no-underline">
           <div className="flex items-center gap-2">
             <BookOpen className="w-4 h-4 text-muted-foreground" />
@@ -159,7 +159,7 @@ function SourceCard({ source, isExpanded, onToggle, index }: SourceCardProps) {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <FileIcon filename={source.filename} className="w-4 h-4 flex-shrink-0" />
-            <span className="text-sm font-medium truncate max-w-[180px] lg:max-w-[180px] max-w-[200px]">
+            <span className="text-sm font-medium truncate lg:max-w-[180px] max-w-[200px]">
               {source.filename}
             </span>
           </div>

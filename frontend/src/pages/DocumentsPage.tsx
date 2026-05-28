@@ -17,7 +17,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { FileText, Upload, Search, Trash2, ScanLine, AlertCircle, Loader2, X, RotateCcw, Trash, Info } from "lucide-react";
+import { FileText, Search, Trash2, ScanLine, AlertCircle, Loader2, X, RotateCcw, Trash, Info } from "lucide-react";
+import { HugeIcon } from "@/components/ui/HugeIcon";
+import { Files01Icon, Database02Icon, HardDriveIcon, CheckmarkCircle01Icon, Upload05Icon } from "@hugeicons/core-free-icons";
 import { cn } from "@/lib/utils";
 import { FileIcon } from "@/lib/fileIcon";
 import { listDocuments, scanDocuments, deleteDocument, deleteDocuments, deleteAllDocumentsInVault, getDocumentStats, getDocumentWikiStatus, compileDocumentWiki, type Document, type DocumentStatsResponse, type DocumentWikiStatus } from "@/lib/api";
@@ -25,7 +27,19 @@ import { formatFileSize, formatDate } from "@/lib/formatters";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useVaultStore } from "@/stores/useVaultStore";
 import { useUploadStore } from "@/stores/useUploadStore";
+import { useTestMode } from "@/fixtures/TestModeContext";
+import { mockDocuments, mockDocumentStats, mockDocumentWikiStatuses } from "@/fixtures/documents";
 import { VaultSelector } from "@/components/vault/VaultSelector";
+import { PageTitleHeader } from "@/components/layout/PageTitleHeader";
+import {
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { StatusBadge } from "@/components/shared/StatusBadge";
 import { DocumentCard } from "@/components/shared/DocumentCard";
 import { EmptyState } from "@/components/shared/EmptyState";
@@ -33,9 +47,10 @@ import { EmptyState } from "@/components/shared/EmptyState";
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
 export default function DocumentsPage() {
-  const [documents, setDocuments] = useState<Document[]>([]);
-  const [stats, setStats] = useState<DocumentStatsResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  const testMode = useTestMode();
+  const [documents, setDocuments] = useState<Document[]>(testMode ? mockDocuments : []);
+  const [stats, setStats] = useState<DocumentStatsResponse | null>(testMode ? mockDocumentStats : null);
+  const [loading, setLoading] = useState(!testMode);
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearchQuery, isSearching] = useDebounce(searchQuery, 300);
   const [isScanning, setIsScanning] = useState(false);
@@ -51,31 +66,7 @@ export default function DocumentsPage() {
     onConfirm: () => void;
     variant?: "destructive" | "default";
   }>({ open: false, title: "", description: "", onConfirm: () => {} });
-  // Persist the resizable filename column width across reloads.
-  const FILENAME_COL_WIDTH_KEY = "ragapp_doc_table_filename_col";
-  const FILENAME_COL_WIDTH_DEFAULT = 250;
-  const [filenameColWidth, setFilenameColWidth] = useState<number>(() => {
-    if (typeof window === "undefined") return FILENAME_COL_WIDTH_DEFAULT;
-    try {
-      const stored = window.localStorage.getItem(FILENAME_COL_WIDTH_KEY);
-      const parsed = stored ? parseInt(stored, 10) : NaN;
-      if (Number.isFinite(parsed) && parsed >= 120 && parsed <= 600) return parsed;
-    } catch {
-      // ignore
-    }
-    return FILENAME_COL_WIDTH_DEFAULT;
-  });
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    try {
-      window.localStorage.setItem(FILENAME_COL_WIDTH_KEY, String(filenameColWidth));
-    } catch {
-      // ignore (quota / private mode)
-    }
-  }, [filenameColWidth]);
-  const dragState = useRef<{ startX: number; startWidth: number }>({ startX: 0, startWidth: 0 });
   const pollIntervalMsRef = useRef(2_000);
-  const tableScrollRef = useRef<HTMLDivElement>(null);
   const mobileScrollRef = useRef<HTMLDivElement>(null);
   const [wikiStatusMap, setWikiStatusMap] = useState<Record<string, DocumentWikiStatus>>({});
   const [compilingDocIds, setCompilingDocIds] = useState<Set<string>>(new Set());
@@ -103,6 +94,15 @@ export default function DocumentsPage() {
   const { activeVaultId } = useVaultStore();
 
   const fetchDocuments = useCallback(async (search?: string) => {
+    if (testMode) {
+      if (search) {
+        const q = search.toLowerCase();
+        setDocuments(mockDocuments.filter((d) => d.filename.toLowerCase().includes(q)));
+      } else {
+        setDocuments(mockDocuments);
+      }
+      return;
+    }
     try {
       const response = await listDocuments(activeVaultId ?? undefined, search);
       setDocuments(response?.documents || []);
@@ -111,9 +111,13 @@ export default function DocumentsPage() {
       toast.error(err instanceof Error ? err.message : "Failed to load documents");
       setDocuments([]);
     }
-  }, [activeVaultId]);
+  }, [activeVaultId, testMode]);
 
   const fetchWikiStatuses = useCallback(async (docs: Document[]) => {
+    if (testMode) {
+      setWikiStatusMap(mockDocumentWikiStatuses);
+      return;
+    }
     if (!activeVaultId) return;
     const indexed = docs.filter((d) => d.metadata?.status === "indexed");
     const results = await Promise.allSettled(
@@ -127,7 +131,7 @@ export default function DocumentsPage() {
       });
       return next;
     });
-  }, [activeVaultId]);
+  }, [activeVaultId, testMode]);
 
   const handleCompileDocument = useCallback(async (docId: string) => {
     if (!activeVaultId) return;
@@ -144,6 +148,10 @@ export default function DocumentsPage() {
   }, [activeVaultId, documents, fetchWikiStatuses]);
 
   const fetchStats = useCallback(async () => {
+    if (testMode) {
+      setStats(mockDocumentStats);
+      return;
+    }
     try {
       const response = await getDocumentStats(activeVaultId ?? undefined);
       setStats(response);
@@ -151,29 +159,7 @@ export default function DocumentsPage() {
       console.error("Failed to fetch stats:", err);
       toast.error(err instanceof Error ? err.message : "Failed to load document stats");
     }
-  }, [activeVaultId]);
-
-  const handleResizeMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    dragState.current = { startX: e.clientX, startWidth: filenameColWidth };
-    const originalCursor = document.body.style.cursor;
-    document.body.style.cursor = 'col-resize';
-
-    const handleMouseMove = (moveEvent: MouseEvent) => {
-      const deltaX = moveEvent.clientX - dragState.current.startX;
-      const newWidth = Math.max(120, Math.min(600, dragState.current.startWidth + deltaX));
-      setFilenameColWidth(newWidth);
-    };
-
-    const handleMouseUp = () => {
-      document.body.style.cursor = originalCursor;
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-    };
-
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
-  }, [filenameColWidth]);
+  }, [activeVaultId, testMode]);
 
   // isFirstSearchRender guards against the search effect double-firing with
   // loadData on mount AND on vault switch (fetchDocuments ref changes both times).
@@ -434,13 +420,6 @@ export default function DocumentsPage() {
     [documents, optimisticallyDeletedIds]
   );
 
-  const tableVirtualizer = useVirtualizer({
-    count: filteredDocuments.length,
-    getScrollElement: () => tableScrollRef.current,
-    estimateSize: () => 56,
-    overscan: 5,
-  });
-
   const mobileVirtualizer = useVirtualizer({
     count: filteredDocuments.length,
     getScrollElement: () => mobileScrollRef.current,
@@ -450,12 +429,12 @@ export default function DocumentsPage() {
   });
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-300">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Documents</h1>
-          <p className="text-muted-foreground mt-1">Manage your knowledge base documents</p>
-        </div>
+    <div className="space-y-6 animate-in fade-in duration-300 pb-12">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <PageTitleHeader
+          title="Documents"
+          description="Manage your knowledge base documents"
+        />
         <div className="flex items-center gap-2">
           <VaultSelector />
           <Button onClick={handleScan} disabled={isScanning}>
@@ -484,38 +463,61 @@ export default function DocumentsPage() {
       </div>
 
       {stats && (
-        <div className="grid gap-4 md:grid-cols-4">
-          <Card>
-            <CardHeader className="pb-2">
-              <CardDescription>Total Documents</CardDescription>
-              <CardTitle className="text-3xl">{stats.total_documents}</CardTitle>
-            </CardHeader>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardDescription>Total Chunks</CardDescription>
-              <CardTitle className="text-3xl">{stats.total_chunks}</CardTitle>
-            </CardHeader>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardDescription>Total Size</CardDescription>
-              <CardTitle className="text-3xl">{formatFileSize(stats.total_size_bytes)}</CardTitle>
-            </CardHeader>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardDescription>Indexed</CardDescription>
-              <CardTitle className="text-3xl">{stats.documents_by_status?.indexed || 0}</CardTitle>
-            </CardHeader>
-          </Card>
+        <div className="overflow-hidden">
+          {/* Top row: sleek stat badges */}
+          <div className="grid grid-cols-4 gap-4">
+            <Card className="p-6">
+              <div className="flex items-center gap-2">
+                <div className="rounded-sm bg-blue-500/10 p-1.5">
+                  <HugeIcon icon={Files01Icon} size={16} strokeWidth={1.2} className="text-blue-600" />
+                </div>
+                <div>
+                  <span className="text-2xl font-bold leading-none">{stats.total_documents}</span>
+                  <span className="text-xs text-muted-foreground ml-1.5">documents</span>
+                </div>
+              </div>
+            </Card>
+            <Card className="p-6">
+              <div className="flex items-center gap-2">
+              <div className="rounded-sm bg-violet-500/10 p-1.5">
+                <HugeIcon icon={Database02Icon} size={16} strokeWidth={1.2} className="text-violet-600" />
+              </div>
+              <div>
+                <span className="text-2xl font-bold leading-none">{stats.total_chunks}</span>
+                <span className="text-xs text-muted-foreground ml-1.5">chunks</span>
+              </div>
+              </div>
+            </Card>
+            <Card className="p-6">
+              <div className="flex items-center gap-2">
+              <div className="rounded-sm bg-amber-500/10 p-1.5">
+                <HugeIcon icon={HardDriveIcon} size={16} strokeWidth={1.2} className="text-amber-600" />
+              </div>
+              <div>
+                <span className="text-2xl font-bold leading-none">{formatFileSize(stats.total_size_bytes)}</span>
+                <span className="text-xs text-muted-foreground ml-1.5">size</span>
+              </div>
+              </div>
+            </Card>
+            <Card className="p-6">
+              <div className="flex items-center gap-2">
+              <div className="rounded-sm bg-emerald-500/10 p-1.5">
+                <HugeIcon icon={CheckmarkCircle01Icon} size={16} strokeWidth={1.2} className="text-emerald-600" />
+              </div>
+              <div>
+                <span className="text-2xl font-bold leading-none">{stats.documents_by_status?.indexed || 0}</span>
+                <span className="text-xs text-muted-foreground ml-1.5">indexed</span>
+              </div>
+              </div>
+            </Card>
+          </div>
         </div>
       )}
 
       <Card
         {...getRootProps()}
-        className={`border-2 border-dashed cursor-pointer transition-colors ${
-          isDragActive ? "border-primary bg-primary/5" : "border-border"
+        className={`border-2 border-dashed cursor-pointer transition-all duration-200 ease-in-out shadow-none ${
+          isDragActive ? "border-primary bg-primary/5 shadow" : "border-border"
         }`}
       >
         <input {...getInputProps()} />
@@ -525,7 +527,7 @@ export default function DocumentsPage() {
               <Info className="h-3 w-3" aria-hidden="true" />
               Max 50 MB
             </Badge>
-            <Upload className="w-12 h-12 text-muted-foreground mb-4" />
+            <HugeIcon icon={Upload05Icon} size={48} strokeWidth={1.2} className="text-muted-foreground mb-4" />
             <p className="text-lg font-medium">
               {isDragActive ? "Drop files here..." : "Drag & drop files here, or click to select"}
             </p>
@@ -609,7 +611,7 @@ export default function DocumentsPage() {
               return (
                 <div
                   key={upload.id}
-                  className="space-y-2 rounded-md border border-border/40 p-3"
+                  className="space-y-2 rounded-sm border border-border/40 p-3"
                 >
                   <div className="flex justify-between items-center text-sm">
                     <span
@@ -766,7 +768,7 @@ export default function DocumentsPage() {
 
       {rejectedFiles.length > 0 && (
         <div
-          className="rounded-lg border border-warning/30 bg-warning/10 p-4 text-warning-foreground"
+          className="rounded-sm border border-warning/30 bg-warning/10 p-4 text-warning-foreground"
           role="status"
           aria-live="polite"
         >
@@ -807,7 +809,9 @@ export default function DocumentsPage() {
             onChange={(e) => setSearchQuery(e.target.value)}
           />
           {isSearching && (
-            <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground animate-spin" />
+            <div className="absolute right-3 top-1/2 -translate-y-1/2">
+              <Loader2 className="w-4 h-4 text-muted-foreground animate-spin" />
+            </div>
           )}
         </div>
         <div className="flex items-center gap-2">
@@ -836,48 +840,46 @@ export default function DocumentsPage() {
       {loading ? (
         <>
           {/* Desktop Table Skeleton (hidden on mobile) */}
-          <Card className="hidden sm:block">
-            <CardContent className="p-0">
-              <div className="overflow-x-auto">
-              <table className="w-full">
-                <caption className="sr-only">Documents List</caption>
-                <thead>
-                  <tr className="border-b bg-muted/50">
-                    <th scope="col" className="text-left p-4 font-medium">
-                      <Checkbox disabled aria-label="Select all documents" />
-                    </th>
-                    <th scope="col" className="text-left p-4 font-medium">Filename</th>
-                    <th scope="col" className="text-left p-4 font-medium">Status</th>
-                    <th scope="col" className="text-left p-4 font-medium">Chunks</th>
-                    <th scope="col" className="text-left p-4 font-medium">Size</th>
-                    <th scope="col" className="text-left p-4 font-medium">Uploaded</th>
-                    <th scope="col" className="text-right p-4 font-medium">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {[...Array(5)].map((_, i) => (
-                    <tr key={i} className="border-b">
-                      <td className="p-4">
-                        <Checkbox disabled />
-                      </td>
-                      <td className="p-4">
-                        <div className="flex items-center gap-2">
-                          <Skeleton className="h-4 w-4" />
-                          <Skeleton className="h-4 w-[180px]" />
-                        </div>
-                      </td>
-                      <td className="p-4"><Skeleton className="h-5 w-[80px]" /></td>
-                      <td className="p-4"><Skeleton className="h-4 w-[40px]" /></td>
-                      <td className="p-4"><Skeleton className="h-4 w-[60px]" /></td>
-                      <td className="p-4"><Skeleton className="h-4 w-[80px]" /></td>
-                      <td className="p-4 text-right"><Skeleton className="h-11 w-11 ml-auto" /></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              </div>
-            </CardContent>
-          </Card>
+          <div className="hidden sm:block rounded-sm border">
+            <Table>
+              <TableCaption className="sr-only">Documents List</TableCaption>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-12 p-3 flex items-center">
+                    <Checkbox disabled aria-label="Select all documents" />
+                  </TableHead>
+                  <TableHead className="p-3">Filename</TableHead>
+                  <TableHead className="p-3">Status</TableHead>
+                  <TableHead className="p-3">Chunks</TableHead>
+                  <TableHead className="p-3">Wiki</TableHead>
+                  <TableHead className="p-3">Size</TableHead>
+                  <TableHead className="p-3">Uploaded</TableHead>
+                  <TableHead className="text-right p-3">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {[...Array(5)].map((_, i) => (
+                  <TableRow key={i}>
+                    <TableCell className="p-3">
+                      <Checkbox disabled />
+                    </TableCell>
+                    <TableCell className="p-3">
+                      <div className="flex items-center gap-2">
+                        <Skeleton className="h-4 w-4" />
+                        <Skeleton className="h-4 w-[180px]" />
+                      </div>
+                    </TableCell>
+                    <TableCell className="p-3"><Skeleton className="h-5 w-[80px]" /></TableCell>
+                    <TableCell className="p-3"><Skeleton className="h-4 w-[40px]" /></TableCell>
+                    <TableCell className="p-3"><Skeleton className="h-4 w-[60px]" /></TableCell>
+                    <TableCell className="p-3"><Skeleton className="h-4 w-[60px]" /></TableCell>
+                    <TableCell className="p-3"><Skeleton className="h-4 w-[80px]" /></TableCell>
+                    <TableCell className="p-3 text-right"><Skeleton className="h-8 w-8 ml-auto rounded-sm" /></TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
 
           {/* Mobile Cards Skeleton (hidden on desktop) */}
           <div className="grid grid-cols-1 gap-3 sm:hidden">
@@ -886,7 +888,7 @@ export default function DocumentsPage() {
                 <CardContent className="p-4">
                   <div className="flex items-start justify-between gap-3 mb-3">
                     <div className="flex items-center gap-3 min-w-0 flex-1">
-                      <Skeleton className="h-11 w-11 rounded-md" />
+                      <Skeleton className="h-11 w-11 rounded-sm" />
                       <div className="min-w-0">
                         <Skeleton className="h-5 w-32 mb-1" />
                         <Skeleton className="h-4 w-24" />
@@ -913,7 +915,7 @@ export default function DocumentsPage() {
                     </div>
                   </div>
                   <div className="mt-4 flex sm:hidden">
-                    <Skeleton className="h-11 w-full rounded-md" />
+                    <Skeleton className="h-11 w-full rounded-sm" />
                   </div>
                 </CardContent>
               </Card>
@@ -929,158 +931,131 @@ export default function DocumentsPage() {
       ) : (
         <>
           {/* Desktop Table View (hidden on mobile) */}
-          <Card className="hidden sm:block">
-            <CardContent className="p-0">
-              <div ref={tableScrollRef} className="overflow-auto" style={{ maxHeight: '70vh' }}>
-                <table className="w-full" style={{ tableLayout: 'fixed' }}>
-                  <caption className="sr-only">Documents List</caption>
-                  <thead style={{ position: 'sticky', top: 0, zIndex: 10 }}>
-                    <tr role="row" className="border-b bg-muted" style={{ display: 'flex' }}>
-                      <th scope="col" className="text-left p-4 font-medium flex-none w-12">
+          <div className="hidden sm:block rounded-sm border">
+            <Table>
+              <TableCaption className="sr-only">Documents List</TableCaption>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-12 p-3 flex items-center">
+                    <Checkbox
+                      checked={selectedIds.size > 0 && selectedIds.size === filteredDocuments.length}
+                      onCheckedChange={handleSelectAll}
+                      aria-label="Select all documents"
+                    />
+                  </TableHead>
+                  <TableHead className="p-3">Filename</TableHead>
+                  <TableHead className="p-3">Status</TableHead>
+                  <TableHead className="p-3">Chunks</TableHead>
+                  <TableHead className="p-3">Wiki</TableHead>
+                  <TableHead className="p-3">Size</TableHead>
+                  <TableHead className="p-3">Uploaded</TableHead>
+                  <TableHead className="text-right p-3">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filteredDocuments.map((doc) => {
+                  const docId = String(doc.id);
+                  const isSelected = Boolean(selectedIds.has(docId));
+                  return (
+                    <TableRow key={docId} className={isSelected ? "bg-accent/50" : undefined}>
+                      <TableCell className="p-3">
                         <Checkbox
-                          checked={selectedIds.size > 0 && selectedIds.size === filteredDocuments.length}
-                          onCheckedChange={handleSelectAll}
-                          aria-label="Select all documents"
+                          checked={isSelected}
+                          onCheckedChange={(checked) => handleSelectOne(String(doc.id), !!checked)}
+                          aria-label={`Select ${doc.filename}`}
                         />
-                      </th>
-                      <th
-                        scope="col"
-                        className="text-left p-4 font-medium relative flex-none"
-                        style={{ width: filenameColWidth, flexShrink: 0 }}
-                      >
-                        Filename
-                        <div
-                          className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-border transition-colors"
-                          onMouseDown={handleResizeMouseDown}
-                          role="separator"
-                          aria-orientation="vertical"
-                          aria-label="Resize filename column"
-                        />
-                      </th>
-                      <th scope="col" className="text-left p-4 font-medium flex-none w-[120px]">Status</th>
-                      <th scope="col" className="text-left p-4 font-medium flex-none w-20">Chunks</th>
-                      <th scope="col" className="text-left p-4 font-medium flex-none w-[120px]">Wiki</th>
-                      <th scope="col" className="text-left p-4 font-medium flex-none w-[100px]">Size</th>
-                      <th scope="col" className="text-left p-4 font-medium flex-none w-[140px]">Uploaded</th>
-                      <th scope="col" className="text-right p-4 font-medium flex-none w-[60px]">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody role="rowgroup" style={{ height: `${tableVirtualizer.getTotalSize()}px`, position: 'relative' }}>
-                    {tableVirtualizer.getVirtualItems().map((virtualItem) => {
-                      const doc = filteredDocuments[virtualItem.index];
-                      const docId = String(doc.id);
-                      const isSelected = Boolean(selectedIds.has(docId));
-                      return (
-                        <tr
-                          key={docId}
-                          role="row"
-                          data-index={virtualItem.index}
-                          ref={tableVirtualizer.measureElement}
-                          style={{
-                            position: 'absolute',
-                            top: virtualItem.start,
-                            left: 0,
-                            width: '100%',
-                            display: 'flex',
-                          }}
-                          className={`border-b hover:bg-muted/50 ${isSelected ? 'bg-muted/30' : ''}`}
-                        >
-                          <td className="p-4 flex-none w-12">
-                            <Checkbox
-                              checked={isSelected}
-                              onCheckedChange={(checked) => handleSelectOne(String(doc.id), !!checked)}
-                              aria-label={`Select ${doc.filename}`}
-                            />
-                          </td>
-                          <td className="p-4 flex-none" style={{ width: filenameColWidth, flexShrink: 0 }}>
-                            <div className="flex items-center gap-2">
-                              <FileIcon filename={doc.filename} className="w-4 h-4 flex-shrink-0" />
-                              <span className="font-medium truncate max-w-full" title={doc.filename}>{doc.filename}</span>
-                            </div>
-                          </td>
-                          <td className="p-4 flex-none w-[120px]"><StatusBadge status={doc.metadata?.status as string} /></td>
-                          <td className="p-4 flex-none w-20">
-                            {(() => {
-                              const count = Number(doc.metadata?.chunk_count ?? 0);
-                              const status = doc.metadata?.status;
-                              const isIndexed = status === "indexed";
-                              const isFailed = status === "error" || status === "failed";
-                              return (
-                                <span
-                                  title={
-                                    isFailed
-                                      ? `${count} chunks · indexing failed`
-                                      : isIndexed
-                                        ? `${count} chunks indexed`
-                                        : count > 0
-                                          ? `${count} chunks · indexing in progress`
-                                          : "Awaiting chunking"
-                                  }
-                                  className={cn(
-                                    isFailed && "text-destructive",
-                                    !isIndexed && !isFailed && count > 0 && "text-muted-foreground italic"
-                                  )}
-                                >
-                                  {count}
-                                </span>
-                              );
-                            })()}
-                          </td>
-                          <td className="p-4 flex-none w-[120px]">
-                            {(() => {
-                              const ws = wikiStatusMap[docId];
-                              const isCompiling = compilingDocIds.has(docId) || ws?.wiki_status === "compiling";
-                              if (!ws || ws.wiki_status === "not_compiled" || ws.wiki_status === "skipped") {
-                                return (
-                                  <button
-                                    className="text-xs text-muted-foreground hover:text-foreground underline"
-                                    onClick={() => handleCompileDocument(docId)}
-                                    disabled={isCompiling}
-                                    title="Compile wiki for this document"
-                                  >
-                                    {isCompiling ? "Queuing…" : "Compile"}
-                                  </button>
-                                );
+                      </TableCell>
+                      <TableCell className="p-3">
+                        <div className="flex items-center gap-2">
+                          <FileIcon filename={doc.filename} className="w-4 h-4 flex-shrink-0 text-muted-foreground" />
+                          <span className="text-sm font-medium truncate max-w-full" title={doc.filename}>{doc.filename}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell className="p-3">
+                        <StatusBadge status={doc.metadata?.status as string} />
+                      </TableCell>
+                      <TableCell className="p-3">
+                        {(() => {
+                          const count = Number(doc.metadata?.chunk_count ?? 0);
+                          const status = doc.metadata?.status;
+                          const isIndexed = status === "indexed";
+                          const isFailed = status === "error" || status === "failed";
+                          return (
+                            <span
+                              title={
+                                isFailed
+                                  ? `${count} chunks · indexing failed`
+                                  : isIndexed
+                                    ? `${count} chunks indexed`
+                                    : count > 0
+                                      ? `${count} chunks · indexing in progress`
+                                      : "Awaiting chunking"
                               }
-                              const color = ws.wiki_status === "compiled" ? "text-green-600"
-                                : ws.wiki_status === "failed" ? "text-destructive"
-                                : "text-blue-500";
-                              const label = ws.wiki_status === "compiled"
-                                ? `${ws.pages_count}p / ${ws.claims_count}c`
-                                : ws.wiki_status === "compiling" ? "Compiling…"
-                                : "Failed";
-                              return (
-                                <span
-                                  className={`text-xs font-mono cursor-pointer ${color}`}
-                                  onClick={() => handleCompileDocument(docId)}
-                                  title={`Wiki: ${ws.wiki_status} — ${ws.pages_count} pages, ${ws.claims_count} claims, ${ws.lint_count} lint issues. Click to recompile.`}
-                                >
-                                  {label}
-                                </span>
-                              );
-                            })()}
-                          </td>
-                          <td className="p-4 flex-none w-[100px]">{formatFileSize(doc.size)}</td>
-                          <td className="p-4 flex-none w-[140px] text-muted-foreground">{formatDate(doc.created_at)}</td>
-                          <td className="p-4 flex-none w-[60px] text-right">
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="min-w-[44px] min-h-[44px]"
-                              onClick={() => handleDeleteDocument(String(doc.id))}
-                              aria-label="Delete document"
+                              className={cn(
+                                isFailed && "text-destructive",
+                                !isIndexed && !isFailed && count > 0 && "text-muted-foreground italic"
+                              )}
                             >
-                              <Trash2 className="w-4 h-4 text-destructive" aria-hidden="true" />
-                            </Button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </CardContent>
-          </Card>
+                              {count}
+                            </span>
+                          );
+                        })()}
+                      </TableCell>
+                      <TableCell className="p-3">
+                        {(() => {
+                          const ws = wikiStatusMap[docId];
+                          const isCompiling = compilingDocIds.has(docId) || ws?.wiki_status === "compiling";
+                          if (!ws || ws.wiki_status === "not_compiled" || ws.wiki_status === "skipped") {
+                            return (
+                              <Button
+                                variant="link"
+                                size="sm"
+                                className="h-auto p-0 text-xs text-muted-foreground"
+                                onClick={() => handleCompileDocument(docId)}
+                                disabled={isCompiling}
+                                title="Compile wiki for this document"
+                              >
+                                {isCompiling ? "Queuing…" : "Compile"}
+                              </Button>
+                            );
+                          }
+                          const color = ws.wiki_status === "compiled" ? "text-success"
+                            : ws.wiki_status === "failed" ? "text-destructive"
+                            : "text-primary";
+                          const label = ws.wiki_status === "compiled"
+                            ? `${ws.pages_count}p / ${ws.claims_count}c`
+                            : ws.wiki_status === "compiling" ? "Compiling…"
+                            : "Failed";
+                          return (
+                            <span
+                              className={`text-xs font-mono cursor-pointer tabular-nums ${color}`}
+                              onClick={() => handleCompileDocument(docId)}
+                              title={`Wiki: ${ws.wiki_status} — ${ws.pages_count} pages, ${ws.claims_count} claims, ${ws.lint_count} lint issues. Click to recompile.`}
+                            >
+                              {label}
+                            </span>
+                          );
+                        })()}
+                      </TableCell>
+                      <TableCell className="p-3 text-sm text-muted-foreground">{formatFileSize(doc.size)}</TableCell>
+                      <TableCell className="p-3 text-sm text-muted-foreground">{formatDate(doc.created_at)}</TableCell>
+                      <TableCell className="p-3 text-right">
+                        <Button
+                          variant="destructive"
+                          size="icon"
+                          className="h-8 w-8"
+                          onClick={() => handleDeleteDocument(String(doc.id))}
+                          aria-label="Delete document"
+                        >
+                          <Trash2 className="w-4 h-4" aria-hidden="true" />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </div>
 
            {/* Mobile Cards View (hidden on desktop) */}
            <div ref={mobileScrollRef} className="sm:hidden" style={{ maxHeight: '70vh', overflowY: 'auto' }}>

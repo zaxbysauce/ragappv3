@@ -6,11 +6,11 @@ const MARKDOWN_COMPONENTS = {
   code({ className, children, ...props }: any) {
     const isInline = !className;
     return isInline ? (
-      <code className="bg-muted px-1 py-0.5 rounded text-sm font-mono" {...props}>
+      <code className="bg-muted px-1 py-0.5 rounded-sm text-sm font-mono" {...props}>
         {children}
       </code>
     ) : (
-      <pre className="bg-muted p-3 rounded-lg overflow-x-auto my-2">
+      <pre className="bg-muted p-3 rounded-sm overflow-x-auto my-2">
         <code className="text-sm font-mono" {...props}>
           {children}
         </code>
