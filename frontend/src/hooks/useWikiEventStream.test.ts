@@ -16,11 +16,13 @@ function controllableSse() {
   const encoder = new TextEncoder();
   let pending: ((r: { value?: Uint8Array; done: boolean }) => void) | null = null;
   const queue: Array<{ value?: Uint8Array; done: boolean }> = [];
+  let closed = false;
   const reader = {
     read: vi.fn(
       () =>
         new Promise<{ value?: Uint8Array; done: boolean }>((resolve) => {
           if (queue.length) resolve(queue.shift()!);
+          else if (closed) resolve({ done: true });
           else pending = resolve;
         })
     ),
@@ -36,12 +38,52 @@ function controllableSse() {
       queue.push(item);
     }
   };
+  const close = () => {
+    closed = true;
+    const doneItem = { done: true };
+    if (pending) {
+      const r = pending;
+      pending = null;
+      r(doneItem);
+    } else {
+      queue.push(doneItem);
+    }
+  };
   const response = {
     ok: true,
     status: 200,
     body: { getReader: () => reader },
   } as unknown as Response;
-  return { response, emit };
+  return { response, emit, close, reader };
+}
+
+function errorResponse(status: number, detail: string): Response {
+  return {
+    ok: false,
+    status,
+    json: async () => ({ detail }),
+  } as unknown as Response;
+}
+
+function bodylessResponse(status = 200): Response {
+  return {
+    ok: true,
+    status,
+    body: null,
+  } as unknown as Response;
+}
+
+function doneResponse(): Response {
+  return {
+    ok: true,
+    status: 200,
+    body: {
+      getReader: () => ({
+        read: vi.fn().mockResolvedValue({ done: true, value: undefined }),
+        cancel: vi.fn(),
+      }),
+    },
+  } as unknown as Response;
 }
 
 describe("useWikiEventStream", () => {
@@ -59,6 +101,7 @@ describe("useWikiEventStream", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -125,12 +168,20 @@ describe("useWikiEventStream", () => {
     await waitFor(() => expect(refreshAccessTokenMock).toHaveBeenCalledTimes(1));
   });
 
+  it("stops retrying on a 401 token_expired response when refresh fails", async () => {
+    fetchMock.mockResolvedValueOnce(errorResponse(401, "token_expired"));
+    refreshAccessTokenMock.mockResolvedValue(null);
+
+    renderHook(() => useWikiEventStream(42, vi.fn()));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    expect(refreshAccessTokenMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("stops (does not refresh) on a 401 token_invalid response", async () => {
-    fetchMock.mockResolvedValue({
-      ok: false,
-      status: 401,
-      json: async () => ({ detail: "token_invalid" }),
-    } as unknown as Response);
+    fetchMock.mockResolvedValue(errorResponse(401, "token_invalid"));
 
     renderHook(() => useWikiEventStream(42, vi.fn()));
 
@@ -139,6 +190,60 @@ describe("useWikiEventStream", () => {
     await Promise.resolve();
     expect(refreshAccessTokenMock).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops on a 401 user_inactive response", async () => {
+    vi.useFakeTimers();
+    fetchMock.mockResolvedValue(errorResponse(401, "user_inactive"));
+
+    renderHook(() => useWikiEventStream(42, vi.fn()));
+
+    await Promise.resolve();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(refreshAccessTokenMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries after a response without a body", async () => {
+    vi.useFakeTimers();
+    fetchMock.mockResolvedValueOnce(bodylessResponse()).mockResolvedValueOnce(doneResponse());
+
+    const { unmount } = renderHook(() => useWikiEventStream(42, vi.fn()));
+
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+    unmount();
+  });
+
+  it("retries after a non-401 error response", async () => {
+    vi.useFakeTimers();
+    fetchMock.mockResolvedValueOnce(errorResponse(500, "server_error")).mockResolvedValueOnce(doneResponse());
+
+    const { unmount } = renderHook(() => useWikiEventStream(42, vi.fn()));
+
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+    unmount();
+  });
+
+  it("reassembles partial SSE payloads across read calls", async () => {
+    const { response, emit, close } = controllableSse();
+    fetchMock.mockResolvedValue(response);
+    const onTerminal = vi.fn();
+    renderHook(() => useWikiEventStream(42, onTerminal));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    emit('data: {"type":"job_');
+    emit('completed"}\n\n');
+    close();
+
+    await waitFor(() => expect(onTerminal).toHaveBeenCalledTimes(1));
   });
 
   it("aborts the in-flight request on unmount", async () => {
