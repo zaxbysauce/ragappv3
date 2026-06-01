@@ -72,8 +72,32 @@ Read the relevant reference before starting that phase.
 
 ## Phase 0: Setup and Scope Control
 
+### Console error dump intake (when input is a raw browser console paste)
+
+When the user provides a raw console dump instead of a GitHub issue number,
+triage the dump before entering the standard Phase 0 flow. Console dumps
+typically contain 3–4 distinct signal types that must be separated first:
+
+1. **App HTTP errors** — `Failed to load resource: the server responded with a
+   status of NNN` for paths that match the app's API prefix (`/api/`, `/meridian/api/`,
+   etc.). These are the actionable signals.
+2. **Config/info logs** — prefixed with the app name (e.g., `[KnowledgeVault]`).
+   Informational; not errors.
+3. **Browser extension noise** — `A listener indicated an asynchronous response
+   by returning true, but the message channel closed before a response was received`
+   (and `Unchecked runtime.lastError: …`). These originate from `chrome.runtime`
+   content scripts, not app code. Source document label is the page URL
+   (e.g., `chat:1`), not a module path. Confirm by grepping the repo for the
+   exact string — it will not be found. Scope out immediately.
+4. **App JS errors** — uncaught exceptions from module paths. Trace these only
+   if they accompany an HTTP error and are plausibly related.
+
+Document the triage in `01-issue-summary.md` under "Signal separation" before
+any exploration. Only carry the app HTTP errors forward as the investigation
+target. Do not chase extension noise or config logs.
+
 1. Parse the user request into:
-   - issue URL, issue number, or bug description
+   - issue URL, issue number, or bug description (including raw console dump)
    - repo path or GitHub owner/repo if provided
    - requested mode: plan-only, plan-then-approval, or approved implementation
 2. Check repo state:
