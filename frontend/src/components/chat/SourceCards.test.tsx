@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { getSourceBadgeLabel } from "./SourceCards";
+import { render, screen } from "@testing-library/react";
+import { getSourceBadgeLabel, SourceCards } from "./SourceCards";
 import type { Source } from "@/lib/api";
 
 describe("getSourceBadgeLabel", () => {
@@ -35,5 +36,50 @@ describe("getSourceBadgeLabel", () => {
       source_label: "  ",
     };
     expect(getSourceBadgeLabel(source, 0)).toBe("S1");
+  });
+});
+
+describe("SourceCards synthesized badge", () => {
+  const noop = () => {};
+
+  it("shows a Synthesized badge and suppresses the relevance label for synthesized sources", () => {
+    const synthesized: Source = {
+      id: "syn",
+      filename: "Synthesized from 2 sources",
+      snippet: "A condensed summary drawn from multiple sources.",
+      score: 0.05, // would normally render "Highly Relevant" on the distance scale
+      score_type: "distance",
+      metadata: { synthesized: true },
+    };
+
+    render(
+      <SourceCards
+        sources={[synthesized]}
+        onSourceClick={noop}
+        onViewAll={noop}
+      />
+    );
+
+    expect(screen.getByText("Synthesized")).toBeInTheDocument();
+    // The borrowed/misleading relevance label must NOT appear for a synthesized source.
+    expect(screen.queryByText("Highly Relevant")).not.toBeInTheDocument();
+  });
+
+  it("shows the relevance label and no Synthesized badge for a normal source", () => {
+    const normal: Source = {
+      id: "real",
+      filename: "real.pdf",
+      snippet: "Real retrieved chunk text.",
+      score: 0.05,
+      score_type: "distance",
+      metadata: {},
+    };
+
+    render(
+      <SourceCards sources={[normal]} onSourceClick={noop} onViewAll={noop} />
+    );
+
+    expect(screen.getByText("Highly Relevant")).toBeInTheDocument();
+    expect(screen.queryByText("Synthesized")).not.toBeInTheDocument();
   });
 });

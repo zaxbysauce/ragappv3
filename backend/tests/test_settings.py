@@ -188,6 +188,12 @@ class TestSettingsResponseFields(unittest.TestCase):
         self.assertIn("instant_memory_context_top_k", data)
         self.assertIn("instant_max_tokens", data)
 
+        # Instant-mode latency skip flags (operator tuning surface)
+        self.assertIn("instant_skip_query_transformation", data)
+        self.assertIn("instant_skip_retrieval_evaluation", data)
+        self.assertIn("instant_skip_distillation_synthesis", data)
+        self.assertIn("instant_skip_followup_rewrite", data)
+
 
 class TestSettingsUpdateValidation(unittest.TestCase):
     """Tests for SettingsUpdate validation of new fields."""
@@ -261,6 +267,22 @@ class TestSettingsUpdateValidation(unittest.TestCase):
             "instant_reranker_top_n": 3,
             "instant_memory_context_top_k": 2,
             "instant_max_tokens": 2048,
+        }
+
+        response = self.client.post("/api/settings", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        for key, value in payload.items():
+            self.assertEqual(data[key], value)
+
+    def test_post_settings_valid_instant_skip_flags(self):
+        """Test POST /api/settings accepts and round-trips the instant skip flags."""
+        payload = {
+            "instant_skip_query_transformation": False,
+            "instant_skip_retrieval_evaluation": False,
+            "instant_skip_distillation_synthesis": False,
+            "instant_skip_followup_rewrite": True,
         }
 
         response = self.client.post("/api/settings", json=payload)

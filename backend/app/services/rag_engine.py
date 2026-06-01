@@ -446,9 +446,13 @@ class RAGEngine:
         # natural in the prompt.
         retrieval_query = user_input
         from app.services.query_transformer import is_followup_query
+        skip_followup_rewrite = (
+            mode == ChatMode.INSTANT and settings.instant_skip_followup_rewrite
+        )
         if (
             chat_history
             and active_client is not None
+            and not skip_followup_rewrite
             and is_followup_query(user_input)
         ):
             try:
@@ -457,11 +461,14 @@ class RAGEngine:
                     user_input, chat_history
                 )
                 if rewritten and rewritten.lower().strip() != user_input.lower().strip():
-                    logger.info(
+                    # Raw user/query text is logged at DEBUG only — it must not
+                    # land in default (INFO) logs as routine chat traffic.
+                    logger.debug(
                         "Follow-up rewrite: '%s' -> '%s'",
                         user_input[:80],
                         rewritten[:120],
                     )
+                    logger.info("Follow-up rewrite applied")
                     retrieval_query = rewritten
                     trace.followup_rewrite = rewritten
             except Exception as exc:  # noqa: BLE001 — defensive
@@ -471,7 +478,14 @@ class RAGEngine:
         # Use the active (mode-selected) client so Instant mode doesn't
         # pay Thinking latency on query rewrites.
         transformed_queries: List[Tuple[str, str]] = [('original', retrieval_query)]
-        if settings.query_transformation_enabled and active_client is not None:
+        skip_query_transformation = (
+            mode == ChatMode.INSTANT and settings.instant_skip_query_transformation
+        )
+        if (
+            settings.query_transformation_enabled
+            and active_client is not None
+            and not skip_query_transformation
+        ):
             try:
                 query_transformer = QueryTransformer(active_client)
                 transformed_queries = await query_transformer.transform(
@@ -479,10 +493,17 @@ class RAGEngine:
                 )
                 # transformed_queries is now List[Tuple[str, str]] like [('original', '...'), ('step_back', '...'), ('hyde', '...')]
                 if len(transformed_queries) > 1:
-                    logger.info(
+                    # Raw query text at DEBUG only; emit a count at INFO so the
+                    # default logs show that transformation ran without leaking
+                    # the user's question text.
+                    logger.debug(
                         "Query transformation: original='%s', step_back='%s'",
                         transformed_queries[0][1],
                         transformed_queries[1][1],
+                    )
+                    logger.info(
+                        "Query transformation produced %d variant(s)",
+                        len(transformed_queries),
                     )
                 trace.transformed_queries = [t[1] for t in transformed_queries]
             except Exception as e:
@@ -634,6 +655,7 @@ class RAGEngine:
                     override_initial_top_k=effective_initial_top_k,
                     override_reranker_top_n=effective_reranker_top_n,
                     active_client=active_client,
+                    mode=mode,
                 )
                 logger.info(
                     "[query] _execute_retrieval returned: result_count=%d, first_3_distances=%s",
@@ -699,9 +721,24 @@ class RAGEngine:
         # Context distillation: deduplicate overlapping chunks and optionally synthesize
         if settings.context_distillation_enabled and relevant_chunks:
             try:
+                # Synthesis is gated by (a) the global flag and (b) Instant-mode
+                # skip. Defense-in-depth: Instant skips CRAG eval so eval_result
+                # stays CONFIDENT and synthesis would not fire anyway, but we also
+                # withhold the client so it is structurally impossible in Instant.
+                synthesis_client = (
+                    active_client
+                    if (
+                        settings.context_distillation_synthesis_enabled
+                        and not (
+                            mode == ChatMode.INSTANT
+                            and settings.instant_skip_distillation_synthesis
+                        )
+                    )
+                    else None
+                )
                 distiller = ContextDistiller(
                     self.embedding_service,
-                    active_client if settings.context_distillation_synthesis_enabled else None,
+                    synthesis_client,
                 )
                 trace.distillation_before = len(relevant_chunks)
                 relevant_chunks = await distiller.distill(
@@ -712,6 +749,30 @@ class RAGEngine:
                     "[query] After context distillation: chunk_count=%d",
                     len(relevant_chunks),
                 )
+                # Re-pack against the token budget: distillation can APPEND a
+                # synthesized summary after the pre-distillation token packing in
+                # _execute_retrieval, which would otherwise let the final prompt
+                # exceed context_max_tokens by one passage. The synthesized source
+                # is appended last (never in the reserved top-N), so re-packing
+                # keeps all real evidence prioritized and includes the summary
+                # only if it fits the budget.
+                if settings.context_max_tokens > 0 and relevant_chunks:
+                    relevant_chunks, repack_stats = self._pack_context_by_token_budget(
+                        relevant_chunks, settings.context_max_tokens
+                    )
+                    # Reflect the post-distillation pack in the trace so the
+                    # final included/skipped counts (e.g. a synthesized summary
+                    # dropped for budget) are observable, not the stale
+                    # pre-distillation pack stats from _execute_retrieval.
+                    trace.token_pack_included = repack_stats.get(
+                        "token_pack_included", trace.token_pack_included
+                    )
+                    trace.token_pack_skipped = repack_stats.get(
+                        "token_pack_skipped", trace.token_pack_skipped
+                    )
+                    trace.token_pack_truncated = repack_stats.get(
+                        "token_pack_truncated", trace.token_pack_truncated
+                    )
             except Exception as exc:
                 logger.warning("Context distillation failed, continuing: %s", exc)
 
@@ -890,6 +951,7 @@ class RAGEngine:
         override_initial_top_k: Optional[int] = None,
         override_reranker_top_n: Optional[int] = None,
         active_client: Optional[LLMClient] = None,
+        mode: Optional["ChatMode"] = None,
     ) -> tuple[List[Dict[str, Any]], Optional[str], str, Optional[bool], str, str, int, str, List[str], bool, Dict[str, int]]:
         """Execute vector search and retrieval evaluation.
 
@@ -1224,7 +1286,16 @@ class RAGEngine:
 
                 # Retrieval evaluation (CRAG-style self-evaluation)
                 relevance_hint_eval: Optional[str] = None
-                if settings.retrieval_evaluation_enabled and active_client is not None:
+                from app.models.chat_mode import ChatMode  # local to avoid cycles
+                skip_retrieval_evaluation = (
+                    mode == ChatMode.INSTANT
+                    and settings.instant_skip_retrieval_evaluation
+                )
+                if (
+                    settings.retrieval_evaluation_enabled
+                    and active_client is not None
+                    and not skip_retrieval_evaluation
+                ):
                     try:
                         evaluator_key = id(active_client)
                         if evaluator_key not in self._retrieval_evaluators:

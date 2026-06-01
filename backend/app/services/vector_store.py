@@ -323,6 +323,37 @@ class VectorStore:
             pass
         return self._embedding_dim
 
+    async def _vector_index_needs_creation(self) -> bool:
+        """Read-only fast check used to avoid taking the write lock on search.
+
+        Returns False ONLY when we are confident the ANN index is fresh, so the
+        hot search path can skip acquiring the write lock (and thus avoid
+        blocking behind in-flight ingestion writes that hold the same lock).
+        On any uncertainty or error, returns True so the authoritative,
+        write-locked ``_maybe_create_vector_index`` makes the real decision.
+
+        This performs only read-only LanceDB metadata reads and plain attribute
+        comparisons; it never mutates the table.
+        """
+        if self.table is None:
+            return False
+        try:
+            row_count = await self.table.count_rows()
+            if row_count < VECTOR_INDEX_MIN_ROWS:
+                return False
+            indices = await self.table.list_indices()
+            has_embedding_idx = any(idx.name == "embedding_idx" for idx in indices)
+        except (OSError, RuntimeError, ValueError) as e:
+            logger.debug("Vector index freshness probe failed (%s); will take lock", e)
+            return True  # uncertain → let the locked path decide
+        if (
+            has_embedding_idx
+            and self._last_index_build_row_count == row_count
+            and self._last_index_build_generation == self._index_mutation_generation
+        ):
+            return False  # confidently fresh — safe to skip the write lock
+        return True
+
     async def _maybe_create_vector_index(self) -> None:
         """Conditionally create vector ANN index if conditions are met.
 
@@ -330,6 +361,10 @@ class VectorStore:
         1. Skip if row count < VECTOR_INDEX_MIN_ROWS (256)
         2. Skip only when embedding_idx exists and was built for the current row count
         3. Create index with num_partitions=256, num_sub_vectors=embedding_dim//8
+
+        This method re-validates freshness under the write lock, so it is the
+        authoritative decision point even when a lock-free probe
+        (``_vector_index_needs_creation``) reported that creation may be needed.
         """
         if self.table is None:
             return
@@ -894,11 +929,17 @@ class VectorStore:
                     # If we can't determine embedding_dim, leave it as None
                     pass
 
-        # Check if vector index should be created (deferred index creation).
-        # This can mutate LanceDB even on a read path, so serialize it with
-        # ingestion/delete maintenance.
-        async with self._acquire_write_lock():
-            await self._maybe_create_vector_index()
+        # Deferred index creation can mutate LanceDB even on this read path, so
+        # it must be serialized with ingestion/delete via the write lock. To
+        # avoid blocking EVERY search behind that lock (and behind in-flight
+        # ingestion writes that hold it for up to write_lock_timeout_seconds),
+        # first do a lock-free freshness probe and only acquire the write lock
+        # when creation may actually be needed. _maybe_create_vector_index
+        # re-validates freshness under the lock (double-checked locking), so a
+        # concurrent builder cannot cause a duplicate rebuild.
+        if await self._vector_index_needs_creation():
+            async with self._acquire_write_lock():
+                await self._maybe_create_vector_index()
 
         # Check for multi-scale search
         fetch_k = limit * 2

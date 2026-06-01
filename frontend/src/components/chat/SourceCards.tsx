@@ -27,7 +27,15 @@ export function getSourceBadgeLabel(source: Source, fallbackIndex: number): stri
 function SourceCard({ source, fallbackIndex, onClick }: SourceCardProps) {
   const [expanded, setExpanded] = useState(false);
 
-  const relevance = source.score !== undefined
+  // Synthesized sources are LLM-condensed summaries of multiple chunks, not a
+  // single retrieved document. Show a "Synthesized" badge and suppress the
+  // relevance badge for them — their borrowed score is not a meaningful
+  // single-document relevance signal.
+  const isSynthesized = Boolean(
+    (source.metadata as Record<string, unknown> | undefined)?.synthesized
+  );
+
+  const relevance = !isSynthesized && source.score !== undefined
     ? getRelevanceLabel(source.score, source.score_type as ScoreType)
     : null;
 
@@ -62,6 +70,14 @@ function SourceCard({ source, fallbackIndex, onClick }: SourceCardProps) {
           </span>
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
+          {isSynthesized && (
+            <Badge
+              variant="outline"
+              className="text-[10px] px-1.5 py-0 text-primary border-primary/30 bg-primary/5"
+            >
+              Synthesized
+            </Badge>
+          )}
           {relevance && (
             <Badge variant="outline" className={cn("text-[10px] px-1.5 py-0", relevance.color)}>
               {relevance.text}

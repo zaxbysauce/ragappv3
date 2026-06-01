@@ -202,8 +202,11 @@ function SourceListItem({
   scoreType,
   onClick,
 }: SourceListItemProps) {
+  const isSynthesized = Boolean(
+    (source.metadata as Record<string, unknown> | undefined)?.synthesized
+  );
   const relevance =
-    source.score !== undefined
+    !isSynthesized && source.score !== undefined
       ? getRelevanceLabel(source.score, scoreType)
       : null;
 
@@ -283,7 +286,13 @@ function SourcePreview({ source, query, onJumpToAnswer }: SourcePreviewProps) {
     () => highlightQueryTerms(previewContent, query),
     [previewContent, query]
   );
-  const sourceFileId = source.file_id;
+  // Synthesized sources are LLM-condensed summaries, not concrete documents:
+  // no backing file to open, no chunk row to fetch context for, and no
+  // meaningful single-document relevance score.
+  const isSynthesized = Boolean(
+    (source.metadata as Record<string, unknown> | undefined)?.synthesized
+  );
+  const sourceFileId = isSynthesized ? undefined : source.file_id;
   const sourcePageNumber =
     typeof source.page_number === "number"
       ? source.page_number
@@ -297,6 +306,8 @@ function SourcePreview({ source, query, onJumpToAnswer }: SourcePreviewProps) {
     setChunkContext(null);
     setContextError(null);
     if (!source.id) return;
+    // Synthesized sources have no real chunk row — skip the context fetch.
+    if (isSynthesized) return;
 
     setIsLoadingContext(true);
     getChunkContext(source.id)
@@ -315,7 +326,7 @@ function SourcePreview({ source, query, onJumpToAnswer }: SourcePreviewProps) {
     return () => {
       cancelled = true;
     };
-  }, [source.id]);
+  }, [source.id, isSynthesized]);
 
   useEffect(() => {
     setDocumentError(null);
@@ -425,7 +436,7 @@ function SourcePreview({ source, query, onJumpToAnswer }: SourcePreviewProps) {
         </div>
       )}
 
-      {source.score !== undefined && source.score_type && (
+      {!isSynthesized && source.score !== undefined && source.score_type && (
         <div className="flex items-center gap-2 text-sm flex-shrink-0">
           <span className="text-muted-foreground">Relevance:</span>
           <span className={getRelevanceLabel(source.score, source.score_type).color}>

@@ -223,6 +223,26 @@ class Settings(BaseSettings):
     context_distillation_synthesis_enabled: bool = True
     """Enable LLM-based context synthesis when retrieval evaluation returns NO_MATCH only."""
 
+    # ── Instant-mode latency overrides ────────────────────────────────────
+    # Instant mode trades retrieval quality for speed. These flags skip the
+    # expensive pre-generation LLM aux calls in Instant mode only; Thinking
+    # mode is unaffected and keeps the full quality pipeline.
+    instant_skip_query_transformation: bool = True
+    """In Instant mode, skip step-back query transformation (saves one LLM call)."""
+
+    instant_skip_retrieval_evaluation: bool = True
+    """In Instant mode, skip CRAG retrieval evaluation (saves one LLM call)."""
+
+    instant_skip_distillation_synthesis: bool = True
+    """In Instant mode, skip context-distillation LLM synthesis. Defense-in-depth:
+    synthesis only runs on a NO_MATCH verdict, which Instant no longer produces when
+    instant_skip_retrieval_evaluation is True, so this is a belt-and-suspenders guard."""
+
+    instant_skip_followup_rewrite: bool = False
+    """In Instant mode, skip the follow-up rewrite LLM call. Default False: the rewrite
+    runs on the fast Instant client and improves multi-turn retrieval, so it is kept on
+    unless an operator explicitly trades it away for latency."""
+
     # ── Token budget configuration ────────────────────────────────────────
     context_max_tokens: int = 6000
     """Maximum approximate tokens for packed context before prompt building."""

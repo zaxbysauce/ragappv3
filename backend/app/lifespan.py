@@ -210,6 +210,24 @@ async def _safe_await(coro, name, timeout=10):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown events."""
+    # Apply the configured log level to the root logger so application
+    # ``logger.info(...)`` calls (e.g. the ``[query]`` retrieval-phase traces)
+    # actually emit. Historically ``settings.log_level`` / ``LOG_LEVEL`` was
+    # never applied to the root logger, so under uvicorn the root stayed at the
+    # default WARNING and all app INFO logs were silently dropped. We set the
+    # level here and only add a handler if the root has none, so uvicorn's own
+    # access/error handlers are left intact.
+    _root_logger = logging.getLogger()
+    _root_logger.setLevel(
+        getattr(logging, settings.log_level.upper(), logging.INFO)
+    )
+    if not _root_logger.handlers:
+        _handler = logging.StreamHandler()
+        _handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+        )
+        _root_logger.addHandler(_handler)
+
     # Startup: Initialize database and services
     try:
         run_migrations(str(settings.sqlite_path))

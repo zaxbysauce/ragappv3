@@ -19,6 +19,7 @@ from app.api.deps import (
     evaluate_policy,
     get_current_active_user,
     get_db,
+    get_evaluate_policy,
     get_rag_engine,
     get_user_accessible_vault_ids,
 )
@@ -455,6 +456,7 @@ async def chat(
     body: ChatRequest,
     rag_engine: RAGEngine = Depends(get_rag_engine),
     user: dict = Depends(get_current_active_user),
+    evaluate=Depends(get_evaluate_policy),
 ):
     """
     Chat endpoint for RAG-based conversational interface.
@@ -480,7 +482,10 @@ async def chat(
             detail="Streaming is not supported on this endpoint. Use /chat/stream for streaming responses.",
         )
     if body.vault_id is not None:
-        if not await evaluate_policy(user, "vault", body.vault_id, "read"):
+        # Use the DI evaluate_policy variant so the permission check reuses the
+        # request's pooled DB connection instead of opening a second one. This
+        # halves per-request pool usage on the hot chat path (pool max_size=10).
+        if not await evaluate(user, "vault", body.vault_id, "read"):
             raise HTTPException(status_code=403, detail="No read access to this vault")
     else:
         # vault_id=None ("All Vaults") searches across all vaults without filtering.
@@ -511,6 +516,7 @@ async def chat_stream(
     body: ChatStreamRequest,
     rag_engine: RAGEngine = Depends(get_rag_engine),
     user: dict = Depends(get_current_active_user),
+    evaluate=Depends(get_evaluate_policy),
 ):
     """Streaming chat endpoint that accepts a sequence of chat messages."""
     if not body.messages:
@@ -523,7 +529,10 @@ async def chat_stream(
         )
 
     if body.vault_id is not None:
-        if not await evaluate_policy(user, "vault", body.vault_id, "read"):
+        # Use the DI evaluate_policy variant so the permission check reuses the
+        # request's pooled DB connection instead of opening a second one. This
+        # halves per-request pool usage on the hot chat path (pool max_size=10).
+        if not await evaluate(user, "vault", body.vault_id, "read"):
             raise HTTPException(status_code=403, detail="No read access to this vault")
     else:
         # vault_id=None ("All Vaults") searches across all vaults without filtering.

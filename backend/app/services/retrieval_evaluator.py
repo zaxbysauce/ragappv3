@@ -61,8 +61,11 @@ class RetrievalEvaluator:
                 },
             ]
 
+            # One-word classification. Keep max_tokens small but with enough
+            # slack for a reasoning model that may emit a few tokens before the
+            # word (8 was too tight and truncated to empty → silent CONFIDENT).
             response = await self._llm_client.chat_completion(
-                messages=messages, max_tokens=1024, temperature=0.1
+                messages=messages, max_tokens=64, temperature=0.1
             )
 
             if not response:

@@ -552,7 +552,7 @@ class DocumentRetrievalService:
         snippet_source = raw_text if raw_text else chunk.text
         snippet = snippet_source[:300] if snippet_source else ""
 
-        return {
+        result: Dict[str, Any] = {
             "id": unique_id,
             "file_id": chunk.file_id,
             "filename": filename,
@@ -563,6 +563,12 @@ class DocumentRetrievalService:
             "score": chunk.score,
             "metadata": chunk.metadata,
         }
+        # Synthesized sources are LLM-condensed summaries, not concrete retrieved
+        # documents. Drop the (placeholder) score so no relevance label renders
+        # for them on any frontend surface (all guard on ``score !== undefined``).
+        if chunk.metadata.get("synthesized"):
+            result.pop("score", None)
+        return result
 
     def format_chunk(self, chunk: RAGSource) -> str:
         """Format a chunk for inclusion in the prompt context.
