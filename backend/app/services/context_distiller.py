@@ -46,6 +46,72 @@ def _split_sentences(text: str) -> List[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
+# Refusal / "no relevant content" detection for synthesis output.
+# The synthesis prompt asks the model to reply exactly ``NO_RELEVANT_CONTENT``
+# when the sources don't answer the query, but models (especially larger
+# reasoning models) frequently PARAPHRASE that sentinel instead of emitting it
+# verbatim — e.g. "The provided source passages do not contain any information
+# regarding X." The original exact-string check let those paraphrases through
+# and injected them as a fabricated, highly-ranked "source" with no provenance.
+# We therefore detect refusals and, on any refusal, decline to inject a
+# synthesized source at all (the real chunks are kept).
+#
+# IMPORTANT: the absence patterns are anchored to the SOURCES/PASSAGES/DOCUMENTS
+# being the subject of the absence ("the sources do not contain", "no
+# information in the passages") rather than generic negation. This avoids
+# discarding legitimate synthesized summaries whose CONTENT happens to describe
+# an absence (e.g. "The installer does not contain a bundled JRE." or "There is
+# no mention of X in version 1, but version 2 adds it."), which are valid
+# answers, not refusals.
+_SOURCE_NOUN = r"(?:source|passage|document|text|context|excerpt|material)s?"
+_REFUSAL_PATTERNS = (
+    # Exact sentinel (verbatim or embedded).
+    re.compile(r"\bno_relevant_content\b", re.IGNORECASE),
+    # "no relevant content/information/passages/sources"
+    re.compile(r"\bno relevant (?:content|information|passages|sources|details?)\b", re.IGNORECASE),
+    # "<sources> ... do not / don't / does not contain|mention|include|provide|address"
+    re.compile(
+        r"\b" + _SOURCE_NOUN + r"\b[^.]{0,60}?\b(?:do|does|did)\s*n[o']?t\s+"
+        r"(?:contain|mention|include|provide|address|cover|discuss|reference)\b",
+        re.IGNORECASE,
+    ),
+    # "(no|not any) information ... in the <sources>"
+    re.compile(
+        r"\bn(?:o|ot any)\s+(?:information|mention|reference|details?|content)\b"
+        r"[^.]{0,40}?\b(?:in|within|from)\b[^.]{0,20}?\b" + _SOURCE_NOUN + r"\b",
+        re.IGNORECASE,
+    ),
+    # "(cannot|unable to) (answer|find|determine) ... from the <sources>/provided"
+    re.compile(
+        r"\b(?:cannot|can'?t|could not|couldn'?t|unable to)\s+"
+        r"(?:find|answer|determine|provide)\b[^.]{0,60}?"
+        r"\b(?:from|in|within|based on)\b[^.]{0,20}?"
+        r"(?:" + _SOURCE_NOUN + r"|provided|above)\b",
+        re.IGNORECASE,
+    ),
+)
+
+
+def _is_no_content_response(result: str) -> bool:
+    """Return True when a synthesis result should be treated as 'no usable content'.
+
+    Catches the exact sentinel, source-anchored paraphrased refusals, and
+    trivially short output. Conservative by design: on a true refusal we keep
+    the real chunks rather than risk injecting fabricated 'absence' prose as
+    evidence. Anchoring the absence patterns to the sources/passages avoids
+    discarding legitimate summaries that merely describe an absence in their
+    content.
+    """
+    if not result:
+        return True
+    stripped = result.strip()
+    if len(stripped) < 20:
+        # Too short to be a real 3-5 sentence synthesis; likely a bare sentinel
+        # or a truncated refusal.
+        return True
+    return any(pat.search(stripped) for pat in _REFUSAL_PATTERNS)
+
+
 class ContextDistiller:
     """
     Post-retrieval context distillation.
@@ -72,7 +138,10 @@ class ContextDistiller:
         """
         Distill sources: deduplicate sentences, optionally synthesize for weak matches.
 
-        Returns fewer or equal sources than input, never more.
+        Deduplication only shrinks the set (fewer or equal sources). When LLM
+        synthesis fires (NO_MATCH + synthesis enabled + client provided) and
+        produces usable content, one supplementary synthesized source is
+        APPENDED, so the result may contain one more source than the input.
         Fails open: embedding error returns sources unmodified.
         """
         from app.config import settings
@@ -171,9 +240,22 @@ class ContextDistiller:
         query: str,
         sources: "List[RAGSource]",
     ) -> "List[RAGSource]":
-        """Synthesize top-3 chunks into a single coherent passage via LLM."""
+        """Synthesize the top-3 chunks into a supplementary passage via LLM.
+
+        Behavior (corrected):
+        - The synthesized passage is APPENDED as a clearly-labeled supplementary
+          source; the real chunks are ALWAYS kept. Previously the top-3 real
+          chunks were replaced by a single lossy summary on the least-confident
+          (NO_MATCH) verdict, destroying the raw evidence the generator needs.
+        - On any refusal / "no relevant content" result (exact sentinel OR a
+          paraphrase), no synthesized source is added — the real chunks pass
+          through unchanged. This prevents fabricated 'absence' prose from being
+          injected as a high-confidence, provenance-less source.
+        - The synthesized source carries provenance (contributing filenames and
+          file_ids) and is flagged ``synthesized=True`` so the UI labels it as a
+          synthesized summary and suppresses the misleading relevance badge.
+        """
         top3 = sources[:3]
-        rest = sources[3:]
 
         passages = "\n---\n".join(src.text for src in top3)
         user_msg = _SYNTHESIS_PROMPT_USER.format(
@@ -194,16 +276,66 @@ class ContextDistiller:
             logger.warning("Context distillation synthesis LLM call failed: %s", exc)
             return sources  # fail-open: return deduplicated sources
 
-        if not result or result == "NO_RELEVANT_CONTENT":
-            # Synthesis found nothing useful — pass through deduplicated chunks
+        if _is_no_content_response(result):
+            # Synthesis found nothing useful (or refused). Keep the real chunks;
+            # never inject a fabricated 'absence' passage as a source.
+            logger.info(
+                "Context distillation synthesis returned no usable content; "
+                "keeping %d real chunk(s) unmodified.",
+                len(sources),
+            )
             return sources
 
         from app.services.rag_engine import RAGSource
 
+        # Preserve provenance from the contributing chunks so the synthesized
+        # source never renders as an "Unknown document", and do NOT inherit a
+        # real chunk's relevance score (which previously produced a misleading
+        # "Highly Relevant" badge on fabricated content).
+        contributing_files: List[str] = []
+        contributing_names: List[str] = []
+        for src in top3:
+            fid = getattr(src, "file_id", "") or ""
+            if fid and fid not in contributing_files:
+                contributing_files.append(fid)
+            name = (
+                (src.metadata or {}).get("source_file")
+                or (src.metadata or {}).get("filename")
+                or (src.metadata or {}).get("section_title")
+            )
+            if name and name not in contributing_names:
+                contributing_names.append(str(name))
+
+        n = len(contributing_names) or len(contributing_files) or len(top3)
+        display_label = f"Synthesized from {n} source{'s' if n != 1 else ''}"
+
+        # A synthesized source is NOT a concrete retrieved document. It must not
+        # borrow a real chunk's file_id, score, or chunk id, otherwise the UI
+        # would (a) open the first contributing document on click, (b) request
+        # chunk context with a derived "<file_id>_" id, and (c) render a borrowed
+        # relevance label. We therefore give it an empty file_id (no document
+        # actions) and an explicit synthetic id/type via metadata. The borrowed
+        # relevance score is suppressed downstream: ``to_source_metadata`` omits
+        # the ``score`` field entirely for synthesized sources, so every
+        # relevance-rendering surface (which guards on ``score !== undefined``)
+        # skips it. ``score`` is kept 0.0 here only to satisfy the RAGSource
+        # type; it never reaches the client for synthesized sources.
         synthetic = RAGSource(
             text=result,
-            file_id=top3[0].file_id if top3 else "",
-            score=top3[0].score if top3 else 0.0,
-            metadata={"synthesized": True},
+            file_id="",  # no borrowed document → no "open document" action
+            score=0.0,
+            metadata={
+                "synthesized": True,
+                "source_type": "synthesized",
+                # Explicit synthetic id so to_source_metadata does not derive
+                # a real-document-shaped "<file_id>_<index>" id.
+                "_chunk_id": "synthesized",
+                # ``source_file`` drives the frontend filename; use an honest
+                # label instead of borrowing a single real document's name.
+                "source_file": display_label,
+                "synthesized_from_files": contributing_files,
+                "synthesized_from_names": contributing_names,
+            },
         )
-        return [synthetic] + rest
+        # Keep the real chunks; append the synthesized summary as supplementary.
+        return list(sources) + [synthetic]

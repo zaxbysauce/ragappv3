@@ -167,7 +167,8 @@ class QueryTransformer:
         """
         # Skip transformation for exact/document-specific queries
         if _is_exact_or_document_query(query):
-            logger.info(
+            # Raw query text at DEBUG only — keep it out of default INFO logs.
+            logger.debug(
                 "Skipping query transformation for exact/document query: '%s'",
                 query[:80],
             )
@@ -411,7 +412,8 @@ class QueryTransformer:
                     "HyDE response too short (%d chars), discarding", len(response)
                 )
                 return None
-            logger.info("HyDE passage generated for query '%s'", query[:60])
+            logger.debug("HyDE passage generated for query '%s'", query[:60])
+            logger.info("HyDE passage generated")
             return response
         except Exception as e:
             logger.warning("HyDE generation failed: %s", e)

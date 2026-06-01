@@ -62,6 +62,12 @@ class SettingsUpdate(BaseModel):
     instant_memory_context_top_k: Optional[int] = None
     instant_max_tokens: Optional[int] = None
 
+    # Instant-mode latency skips (trade quality for speed in Instant mode only)
+    instant_skip_query_transformation: Optional[bool] = None
+    instant_skip_retrieval_evaluation: Optional[bool] = None
+    instant_skip_distillation_synthesis: Optional[bool] = None
+    instant_skip_followup_rewrite: Optional[bool] = None
+
     # Feature flags (still supported)
     auto_scan_enabled: Optional[bool] = None
     auto_scan_interval_minutes: Optional[int] = None
@@ -384,6 +390,10 @@ ALLOWED_FIELDS = [
     "instant_reranker_top_n",
     "instant_memory_context_top_k",
     "instant_max_tokens",
+    "instant_skip_query_transformation",
+    "instant_skip_retrieval_evaluation",
+    "instant_skip_distillation_synthesis",
+    "instant_skip_followup_rewrite",
     # Wiki / Knowledge Compiler
     "wiki_enabled",
     "wiki_compile_on_ingest",
@@ -489,6 +499,10 @@ class SettingsResponse(BaseModel):
     instant_reranker_top_n: int = 4
     instant_memory_context_top_k: int = 2
     instant_max_tokens: int = 4096
+    instant_skip_query_transformation: bool = True
+    instant_skip_retrieval_evaluation: bool = True
+    instant_skip_distillation_synthesis: bool = True
+    instant_skip_followup_rewrite: bool = False
 
     # Document processing (user-configurable)
     chunk_size: Optional[int] = None  # Legacy, deprecated
@@ -599,6 +613,10 @@ def _build_settings_dict() -> dict:
         "instant_reranker_top_n": settings.instant_reranker_top_n,
         "instant_memory_context_top_k": settings.instant_memory_context_top_k,
         "instant_max_tokens": settings.instant_max_tokens,
+        "instant_skip_query_transformation": settings.instant_skip_query_transformation,
+        "instant_skip_retrieval_evaluation": settings.instant_skip_retrieval_evaluation,
+        "instant_skip_distillation_synthesis": settings.instant_skip_distillation_synthesis,
+        "instant_skip_followup_rewrite": settings.instant_skip_followup_rewrite,
         "chunk_size": settings.chunk_size,
         "chunk_overlap": settings.chunk_overlap,
         "max_context_chunks": settings.max_context_chunks,

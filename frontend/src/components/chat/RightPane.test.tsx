@@ -306,6 +306,37 @@ describe("RightPane", () => {
       expect(screen.getByText("Relevant")).toBeInTheDocument();
     });
 
+    it("should NOT render a relevance label for synthesized sources", () => {
+      // Even if a synthesized source somehow carries a score, the synthesized
+      // flag must suppress the (misleading) relevance label in the source list.
+      const sources = [
+        createMockSource({
+          id: "syn-1",
+          filename: "Synthesized from 2 sources",
+          score: 0.05, // would be "Highly Relevant" if not suppressed
+          score_type: "distance",
+          file_id: "",
+          metadata: { synthesized: true },
+        }),
+      ];
+
+      mockUseChatStore.mockReturnValue({
+        messages: [
+          createMockMessage({ role: "user", content: "test" }),
+          createMockMessage({ role: "assistant", content: "response", sources }),
+        ],
+        expandedSources: new Set(),
+      });
+
+      render(<RightPane />);
+
+      expect(
+        screen.queryAllByText("Synthesized from 2 sources").length
+      ).toBeGreaterThan(0);
+      // The borrowed relevance label must not appear for the synthesized source.
+      expect(screen.queryByText("Highly Relevant")).not.toBeInTheDocument();
+    });
+
     it("should truncate long snippets", () => {
       const longSnippet = "A".repeat(100);
       const sources = [
