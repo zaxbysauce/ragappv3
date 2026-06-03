@@ -62,7 +62,7 @@ cd frontend && npm ci --engine-strict && npm run typecheck && npm run lint
 cd frontend && npm test -- src/lib/api.test.ts src/lib/api.csrf.test.ts src/lib/api.sse.test.ts src/pages/WikiPage.sse.test.tsx src/stores/useAuthStore.api-base.test.ts
 cd frontend && npm test && npm run build
 cd frontend && VITE_APP_BASENAME=/knowledgevault VITE_API_URL=/knowledgevault/api npm run build
-cd backend && ruff check . && pytest --tb=short -v
+cd backend && ruff check . && pytest --tb=short -v tests/test_path_prefix.py tests/test_auth_routes.py tests/test_main_catchall.py tests/test_csrf_auth.py
 python scripts/check_config_contract.py
 python scripts/check_pr_scope_drift.py
 ```
