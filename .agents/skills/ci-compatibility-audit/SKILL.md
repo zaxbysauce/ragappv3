@@ -67,6 +67,10 @@ python scripts/check_config_contract.py
 python scripts/check_pr_scope_drift.py
 ```
 
+Run these before pushing so a CI-only lint/type failure doesn't cost a
+push → fail → fixup-commit round trip. If `frontend/node_modules` is absent,
+run `npm ci --engine-strict` first.
+
 ## Environment caveats (so local results aren't misread)
 
 - **CI's dependency set is reduced — "locally green" ≠ "CI green".** CI installs
@@ -92,10 +96,14 @@ python scripts/check_pr_scope_drift.py
   makes tests that use fake hostnames (`*.example`) or `localhost` URLs fail or
   stall. Validate URL changes at change-time, not on every read. (`.example`
   fails fast with `gaierror`, so a *hang* is heavy-dep loading, not DNS.)
-- **CI pins Python 3.11.** On a newer local interpreter (e.g. 3.14) some backend
-  tests fail with `RuntimeError: There is no current event loop` — a local
-  artifact, not a regression. Prefer a 3.11 venv; the `ruff check .` lint gate
-  and CI-targeted tests are what matter.
+- **Python: CI pins 3.11.** On a newer local interpreter (e.g. 3.14) some
+  backend tests fail with `RuntimeError: There is no current event loop` — the
+  test harness uses the removed implicit-event-loop pattern. These are **false
+  failures from the local interpreter, not regressions**. Prefer a 3.11 venv;
+  the `ruff check .` lint gate and CI-targeted tests are what matter.
+- **Frontend jsdom gotchas** (router context for `<Link>`, driving Radix
+  `Select`, virtualized lists): see `references/frontend-testing-gotchas.md`
+  for the repo's established mock patterns before improvising.
 
 ## Output
 
