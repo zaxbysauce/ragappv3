@@ -218,7 +218,7 @@ class TestMustChangePasswordFlagClearing(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIn("access_token", data)
-        self.assertIn("refresh_token", data)
+        self.assertIn("refresh_token", response.cookies)
 
         # must_change_password should now be 0 (flag cleared)
         flag_after = self._get_must_change_password(user_id)
@@ -260,7 +260,7 @@ class TestMustChangePasswordFlagClearing(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIn("access_token", data)
-        self.assertIn("refresh_token", data)
+        self.assertIn("refresh_token", response.cookies)
 
         # must_change_password should still be 0 (unchanged)
         flag_after = self._get_must_change_password(user_id)
