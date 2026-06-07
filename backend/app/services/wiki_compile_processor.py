@@ -176,7 +176,18 @@ class WikiCompileProcessor:
                 payload["error"] = error
             get_wiki_event_bus().publish(job.vault_id, payload)
         except Exception as exc:  # noqa: BLE001 — fan-out must never fail the loop
-            logger.debug("WikiCompileProcessor: event publish failed: %s", exc)
+            # WARNING (not DEBUG): these are terminal-state events (job
+            # completed/failed) that subscribers expect in real time. A dropped
+            # notification is operationally significant — surface it so the
+            # event is visible to operators, not only at debug verbosity.
+            logger.warning(
+                "WikiCompileProcessor: event publish failed (job_id=%s vault_id=%s event=%s): %s",
+                job.id,
+                job.vault_id,
+                event_type,
+                exc,
+                exc_info=True,
+            )
 
     def _dispatch(self, job) -> dict:
         """Dispatch a job to the appropriate handler. Runs in a thread."""
