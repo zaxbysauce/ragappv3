@@ -189,6 +189,13 @@ check (ssrf.py:100). Therefore:
 - **Phase 3**: per-module triage of genuine drift (async/await ~120, assertion
   ~88, `must_change_password` schema ~76, MagicMock ~76, csrf_protect 16,
   FakeLLMClient kwarg 16, event-loop 7).
+  - **schema sub-unit DONE (reviewer-approved):** synced the hand-rolled
+    `users` schemas in `test_vault_org_routes_adversarial` and
+    `test_users_routes_adversarial` with the canonical
+    `must_change_password`/`failed_attempts`/`locked_until` columns
+    (`app/models/database.py:232-234`). Recovered ~75 tests
+    (vault_org 40→0 fail; users_adversarial ~36→6 fail, the 6 residual being
+    unrelated genuine logic drift). Verified as test-stale, not a code bug.
 - **Phase 5**: nightly job with real `lancedb`/`pyarrow`/`unstructured` for the
   stub-gap buckets (~12).
 
