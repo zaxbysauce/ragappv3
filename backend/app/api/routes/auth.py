@@ -77,9 +77,14 @@ def _rotate_refresh_token_block(
     try:
         db.execute("BEGIN EXCLUSIVE")
         exclusive_started = True
-    except sqlite3.OperationalError:
-        # Already in a transaction (e.g., from connection pool wrapper) — proceed without exclusive lock
-        pass
+    except sqlite3.OperationalError as exc:
+        # Already in a transaction (e.g., from connection pool wrapper) — proceed without
+        # an explicit exclusive lock. Log a warning so lock/transaction problems remain
+        # observable in production (silent swallow hides concurrency bugs).
+        logger.warning(
+            "BEGIN EXCLUSIVE unavailable during refresh-token rotation, proceeding without explicit lock: %s",
+            exc,
+        )
 
     try:
         # Re-verify the session still exists (prevents TOCTOU)
