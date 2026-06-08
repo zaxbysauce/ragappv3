@@ -224,6 +224,7 @@ class TestVectorStoreAddChunks(TestVectorStoreAsync):
                 mock_settings.optimize_mode = "manual"
                 mock_settings.embedding_dim = self.embedding_dim
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
                 await store.add_chunks(records)
 
             self.assertEqual(await store.count_by_file("file1"), 3)
@@ -262,6 +263,7 @@ class TestVectorStoreAddChunks(TestVectorStoreAsync):
                 mock_settings.optimize_interval_chunks = 5000
                 mock_settings.embedding_dim = self.embedding_dim
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
 
                 await store.add_chunks(self.create_test_records(count=2))
 
@@ -342,6 +344,8 @@ class TestVectorStoreAddChunks(TestVectorStoreAsync):
                 mock_settings.optimize_interval_chunks = 5000
                 mock_settings.embedding_dim = embedding_dim
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
+                mock_settings.vector_search_concurrency = 4
                 mock_settings.multi_scale_indexing_enabled = False
                 mock_settings.multi_scale_chunk_sizes = ""
                 mock_ivfpq.return_value = MagicMock()

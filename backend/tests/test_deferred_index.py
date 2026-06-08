@@ -70,6 +70,7 @@ class TestInitTableDefersVectorIndex(unittest.IsolatedAsyncioTestCase):
             # Mock settings
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
 
                 # Mock FTS import
                 with patch("app.services.vector_store.FTS") as mock_fts:
@@ -122,6 +123,7 @@ class TestFTSIndexGuard(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
 
                 with patch("app.services.vector_store.FTS") as mock_fts:
                     mock_fts.return_value = MagicMock()
@@ -160,6 +162,7 @@ class TestFTSIndexGuard(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
 
                 await store.init_table(embedding_dim=384)
 
@@ -258,6 +261,7 @@ class TestMaybeCreateVectorIndex(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
                 mock_settings.embedding_dim = 768
 
                 await self.store._maybe_create_vector_index()
@@ -295,6 +299,7 @@ class TestMaybeCreateVectorIndex(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
                 mock_settings.embedding_dim = 768
 
                 await self.store._maybe_create_vector_index()
@@ -412,6 +417,7 @@ class TestMaybeCreateVectorIndexLogging(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
                 mock_settings.embedding_dim = 768
 
                 with patch("app.services.vector_store.logger") as mock_logger:
@@ -482,6 +488,7 @@ class TestMaybeCreateVectorIndexEdgeCases(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
                 mock_settings.embedding_dim = 768
 
                 with patch("app.services.vector_store.logger") as mock_logger:

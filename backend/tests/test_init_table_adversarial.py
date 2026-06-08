@@ -145,6 +145,7 @@ class TestAdversarialCorruptTable(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
 
             with patch("app.services.vector_store.FTS") as mock_fts:
                 mock_fts.return_value = MagicMock()
@@ -189,6 +190,7 @@ class TestAdversarialCorruptTable(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
 
             with patch("app.services.vector_store.FTS") as mock_fts:
                 mock_fts.return_value = MagicMock()
@@ -239,6 +241,7 @@ class TestAdversarialOverwritePathFailures(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
 
                 with patch("app.services.vector_store.FTS") as mock_fts:
                     mock_fts.return_value = MagicMock()
@@ -335,6 +338,7 @@ class TestAdversarialConcurrency(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
 
                 with patch("app.services.vector_store.FTS") as mock_fts:
                     mock_fts.return_value = MagicMock()
@@ -378,6 +382,7 @@ class TestAdversarialConcurrency(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
 
                 with patch("app.services.vector_store.FTS") as mock_fts:
                     mock_fts.return_value = MagicMock()
@@ -432,6 +437,7 @@ class TestAdversarialEmbeddingDimBoundary(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
 
                 with patch("app.services.vector_store.FTS") as mock_fts:
                     mock_fts.return_value = MagicMock()
@@ -468,6 +474,7 @@ class TestAdversarialEmbeddingDimBoundary(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
 
                 # Negative embedding_dim should raise ValueError
                 with self.assertRaises(ValueError):
@@ -498,6 +505,7 @@ class TestAdversarialEmbeddingDimBoundary(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
 
                 with patch("app.services.vector_store.FTS") as mock_fts:
                     mock_fts.return_value = MagicMock()
@@ -531,6 +539,7 @@ class TestAdversarialEmbeddingDimBoundary(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
 
                 with patch("app.services.vector_store.FTS") as mock_fts:
                     mock_fts.return_value = MagicMock()
@@ -582,6 +591,7 @@ class TestAdversarialSchemaMismatch(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
 
                 with patch("app.services.vector_store.logger"):
                     # Should open the table without crashing
@@ -628,6 +638,7 @@ class TestAdversarialSchemaMismatch(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
 
                 # Should not crash - schema mismatch is handled later
                 await store.init_table(embedding_dim=384)
@@ -665,6 +676,7 @@ class TestAdversarialFTSCreationEdgeCases(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
 
                 with patch("app.services.vector_store.FTS") as mock_fts:
                     mock_fts.return_value = MagicMock()
@@ -698,6 +710,7 @@ class TestAdversarialFTSCreationEdgeCases(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
 
                 with patch("app.services.vector_store.FTS") as mock_fts:
                     mock_fts.return_value = MagicMock()
@@ -735,6 +748,7 @@ class TestAdversarialFTSCreationEdgeCases(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
 
                 with patch("app.services.vector_store.FTS") as mock_fts:
                     mock_fts.return_value = MagicMock()
@@ -779,6 +793,7 @@ class TestAdversarialTableJustCreatedState(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
 
             with patch("app.services.vector_store.FTS") as mock_fts:
                 mock_fts.return_value = MagicMock()
@@ -815,6 +830,7 @@ class TestAdversarialTableJustCreatedState(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
 
             with patch("app.services.vector_store.FTS") as mock_fts:
                 mock_fts.return_value = MagicMock()
@@ -866,6 +882,7 @@ class TestAdversarialInputInjection(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
 
             with patch("app.services.vector_store.FTS") as mock_fts:
                 mock_fts.return_value = MagicMock()
@@ -903,6 +920,7 @@ class TestAdversarialInputInjection(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
 
             with patch("app.services.vector_store.FTS") as mock_fts:
                 mock_fts.return_value = MagicMock()

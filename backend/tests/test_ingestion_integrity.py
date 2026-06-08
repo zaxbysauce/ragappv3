@@ -108,6 +108,7 @@ class TestAnnIndexLifecycle:
             mock_settings.index_rebuild_delta = 0.2
             mock_settings.embedding_dim = 8
             mock_settings.vector_metric = "cosine"
+            mock_settings.write_lock_timeout_seconds = 30
             mock_ivfpq.return_value = MagicMock()
             await store._maybe_rebuild_or_drop_vector_index(deleted_count=90)
 
@@ -128,6 +129,7 @@ class TestAnnIndexLifecycle:
             mock_settings.index_rebuild_delta = 0.2
             mock_settings.embedding_dim = 8
             mock_settings.vector_metric = "cosine"
+            mock_settings.write_lock_timeout_seconds = 30
             mock_ivfpq.return_value = MagicMock()
             await store._maybe_rebuild_or_drop_vector_index(deleted_count=10)
 
@@ -146,6 +148,7 @@ class TestAnnIndexLifecycle:
             mock_settings.index_rebuild_delta = 0.2
             mock_settings.embedding_dim = 8
             mock_settings.vector_metric = "cosine"
+            mock_settings.write_lock_timeout_seconds = 30
             mock_ivfpq.return_value = MagicMock()
             await store._maybe_rebuild_or_drop_vector_index(deleted_count=50)
 
@@ -183,6 +186,7 @@ class TestAddChunksCallsOptimize:
             mock_settings.optimize_mode = "after_every_write"
             mock_settings.embedding_dim = 4
             mock_settings.vector_metric = "cosine"
+            mock_settings.write_lock_timeout_seconds = 30
             # Bypass dimension validation by mocking _get_expected_embedding_dim
             store._get_expected_embedding_dim = AsyncMock(return_value=4)
             await store.add_chunks(records)
@@ -207,6 +211,7 @@ class TestAddChunksCallsOptimize:
         with patch("app.services.vector_store.settings") as mock_settings:
             mock_settings.embedding_dim = 4
             mock_settings.vector_metric = "cosine"
+            mock_settings.write_lock_timeout_seconds = 30
             store._get_expected_embedding_dim = AsyncMock(return_value=4)
             # Should not raise
             await store.add_chunks(records)
@@ -233,6 +238,7 @@ class TestAddChunksCallsOptimize:
             mock_settings.optimize_mode = "manual"
             mock_settings.embedding_dim = 4
             mock_settings.vector_metric = "cosine"
+            mock_settings.write_lock_timeout_seconds = 30
             mock_ivfpq.return_value = MagicMock()
             store._get_expected_embedding_dim = AsyncMock(return_value=4)
 
@@ -287,6 +293,7 @@ class TestAddChunksCallsOptimize:
             mock_settings.optimize_mode = "manual"
             mock_settings.embedding_dim = 4
             mock_settings.vector_metric = "cosine"
+            mock_settings.write_lock_timeout_seconds = 30
             mock_settings.index_rebuild_delta = 0.2
             mock_ivfpq.return_value = MagicMock()
             store._get_expected_embedding_dim = AsyncMock(return_value=4)
@@ -322,6 +329,8 @@ class TestAddChunksCallsOptimize:
             mock_settings.index_rebuild_delta = 0.2
             mock_settings.multi_scale_indexing_enabled = False
             mock_settings.multi_scale_chunk_sizes = ""
+            mock_settings.write_lock_timeout_seconds = 30
+            mock_settings.vector_search_concurrency = 4
 
             deleted = await store.delete_by_file("1")
             await store.search([0.1, 0.2, 0.3, 0.4], hybrid=False)
@@ -351,6 +360,7 @@ class TestAddChunksCallsOptimize:
         with patch("app.services.vector_store.settings") as mock_settings:
             mock_settings.multi_scale_indexing_enabled = False
             mock_settings.multi_scale_chunk_sizes = ""
+            mock_settings.vector_search_concurrency = 4
 
             results = await store.search(
                 embedding=[0.1, 0.2, 0.3, 0.4],

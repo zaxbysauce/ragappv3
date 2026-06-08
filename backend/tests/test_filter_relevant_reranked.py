@@ -76,6 +76,7 @@ def mock_settings():
         mock.retrieval_top_k = 5
         mock.retrieval_window = 1
         mock.rag_relevance_threshold = 0.5
+        mock.new_dedup_policy = False
         yield mock
 
 
