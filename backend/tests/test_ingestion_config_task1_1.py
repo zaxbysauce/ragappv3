@@ -31,9 +31,9 @@ class TestNewIngestionFieldsDefaults:
         assert settings.ingestion_worker_count == 2
 
     def test_optimize_mode_default(self):
-        """optimize_mode should default to 'after_every_write'."""
+        """optimize_mode should default to 'periodic'."""
         settings = Settings()
-        assert settings.optimize_mode == "after_every_write"
+        assert settings.optimize_mode == "periodic"
 
     def test_optimize_interval_chunks_default(self):
         """optimize_interval_chunks should default to 5000."""
@@ -236,7 +236,7 @@ class TestAllFiveFieldsTogether:
         """All 5 fields have correct defaults simultaneously."""
         settings = Settings()
         assert settings.ingestion_worker_count == 2
-        assert settings.optimize_mode == "after_every_write"
+        assert settings.optimize_mode == "periodic"
         assert settings.optimize_interval_chunks == 5000
         assert settings.embedding_concurrent_batches == 4
         assert settings.optimize_on_shutdown is True
