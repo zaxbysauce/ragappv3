@@ -88,6 +88,8 @@ class TestSettingsSSRFIntegration(unittest.TestCase):
     """Tests for SSRF validator in settings.py test_connection()."""
 
     def setUp(self):
+        self._orig_users_enabled = settings.users_enabled
+        settings.users_enabled = False
         self.client = TestClient(app)
         self.client.headers.update(
             {"Authorization": f"Bearer {settings.admin_secret_token}"}
@@ -109,6 +111,7 @@ class TestSettingsSSRFIntegration(unittest.TestCase):
 
     def tearDown(self):
         app.dependency_overrides.pop(self._get_db, None)
+        settings.users_enabled = self._orig_users_enabled
 
     def test_connection_calls_assert_url_safe_before_http_request(self):
         """test_connection() must call assert_url_safe before each HTTP request."""
