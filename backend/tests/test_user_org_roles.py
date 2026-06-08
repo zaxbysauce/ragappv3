@@ -118,6 +118,7 @@ def setup_db(monkeypatch):
 
     monkeypatch.setattr("app.config.settings.data_dir", Path(temp_dir))
     monkeypatch.setattr("app.config.settings.users_enabled", True)
+    monkeypatch.setattr("app.config.settings.jwt_secret_key", "test-jwt-secret-key-for-testing-only")
 
     yield db_path
 

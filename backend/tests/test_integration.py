@@ -364,6 +364,9 @@ class TestIntegration(unittest.TestCase):
         """Set up test fixtures."""
         self.temp_dir = tempfile.mkdtemp()
 
+        from app.config import settings
+        self._orig_data_dir = settings.data_dir
+
         # Create fake services
         self.fake_embedding_service = FakeEmbeddingService()
         self.fake_llm_client = FakeLLMClient()
@@ -379,6 +382,9 @@ class TestIntegration(unittest.TestCase):
         from app.security import csrf_protect
         app.dependency_overrides.pop(get_current_active_user, None)
         app.dependency_overrides.pop(csrf_protect, None)
+
+        from app.config import settings
+        settings.data_dir = self._orig_data_dir
 
         if os.path.exists(self.temp_dir):
             shutil.rmtree(self.temp_dir, ignore_errors=True)

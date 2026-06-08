@@ -207,6 +207,13 @@ class TestSQLInjection:
 
         self.test_pool = test_pool
         self.original_get_pool = original_get_pool
+
+        from app.config import settings
+        self._orig_users_enabled = settings.users_enabled
+        self._orig_jwt_secret = settings.jwt_secret_key
+        settings.users_enabled = True
+        settings.jwt_secret_key = os.environ["JWT_SECRET_KEY"]
+
         self.client = TestClient(app)
 
         yield
@@ -218,6 +225,8 @@ class TestSQLInjection:
 
         users.get_pool = self.original_get_pool
         self.test_pool.close_all()
+        settings.users_enabled = self._orig_users_enabled
+        settings.jwt_secret_key = self._orig_jwt_secret
 
         import shutil
 
@@ -333,6 +342,13 @@ class TestXSSPrevention:
 
         self.test_pool = test_pool
         self.original_get_pool = original_get_pool
+
+        from app.config import settings
+        self._orig_users_enabled = settings.users_enabled
+        self._orig_jwt_secret = settings.jwt_secret_key
+        settings.users_enabled = True
+        settings.jwt_secret_key = os.environ["JWT_SECRET_KEY"]
+
         self.client = TestClient(app)
 
         yield
@@ -344,6 +360,8 @@ class TestXSSPrevention:
 
         users.get_pool = self.original_get_pool
         self.test_pool.close_all()
+        settings.users_enabled = self._orig_users_enabled
+        settings.jwt_secret_key = self._orig_jwt_secret
 
         import shutil
 
@@ -459,6 +477,13 @@ class TestMassAssignment:
 
         self.test_pool = test_pool
         self.original_get_pool = original_get_pool
+
+        from app.config import settings
+        self._orig_users_enabled = settings.users_enabled
+        self._orig_jwt_secret = settings.jwt_secret_key
+        settings.users_enabled = True
+        settings.jwt_secret_key = os.environ["JWT_SECRET_KEY"]
+
         self.client = TestClient(app)
 
         yield
@@ -470,6 +495,8 @@ class TestMassAssignment:
 
         users.get_pool = self.original_get_pool
         self.test_pool.close_all()
+        settings.users_enabled = self._orig_users_enabled
+        settings.jwt_secret_key = self._orig_jwt_secret
 
         import shutil
 
@@ -560,6 +587,13 @@ class TestNegativeAndBoundaryUserIds:
 
         self.test_pool = test_pool
         self.original_get_pool = original_get_pool
+
+        from app.config import settings
+        self._orig_users_enabled = settings.users_enabled
+        self._orig_jwt_secret = settings.jwt_secret_key
+        settings.users_enabled = True
+        settings.jwt_secret_key = os.environ["JWT_SECRET_KEY"]
+
         self.client = TestClient(app)
 
         yield
@@ -571,6 +605,8 @@ class TestNegativeAndBoundaryUserIds:
 
         users.get_pool = self.original_get_pool
         self.test_pool.close_all()
+        settings.users_enabled = self._orig_users_enabled
+        settings.jwt_secret_key = self._orig_jwt_secret
 
         import shutil
 
@@ -694,6 +730,13 @@ class TestOversizedParameters:
 
         self.test_pool = test_pool
         self.original_get_pool = original_get_pool
+
+        from app.config import settings
+        self._orig_users_enabled = settings.users_enabled
+        self._orig_jwt_secret = settings.jwt_secret_key
+        settings.users_enabled = True
+        settings.jwt_secret_key = os.environ["JWT_SECRET_KEY"]
+
         self.client = TestClient(app)
 
         yield
@@ -705,6 +748,8 @@ class TestOversizedParameters:
 
         users.get_pool = self.original_get_pool
         self.test_pool.close_all()
+        settings.users_enabled = self._orig_users_enabled
+        settings.jwt_secret_key = self._orig_jwt_secret
 
         import shutil
 
@@ -803,6 +848,13 @@ class TestEmptyAndMalformedBodies:
 
         self.test_pool = test_pool
         self.original_get_pool = original_get_pool
+
+        from app.config import settings
+        self._orig_users_enabled = settings.users_enabled
+        self._orig_jwt_secret = settings.jwt_secret_key
+        settings.users_enabled = True
+        settings.jwt_secret_key = os.environ["JWT_SECRET_KEY"]
+
         self.client = TestClient(app)
 
         yield
@@ -814,6 +866,8 @@ class TestEmptyAndMalformedBodies:
 
         users.get_pool = self.original_get_pool
         self.test_pool.close_all()
+        settings.users_enabled = self._orig_users_enabled
+        settings.jwt_secret_key = self._orig_jwt_secret
 
         import shutil
 
@@ -970,6 +1024,13 @@ class TestJWTTokenManipulation:
 
         self.test_pool = test_pool
         self.original_get_pool = original_get_pool
+
+        from app.config import settings
+        self._orig_users_enabled = settings.users_enabled
+        self._orig_jwt_secret = settings.jwt_secret_key
+        settings.users_enabled = True
+        settings.jwt_secret_key = os.environ["JWT_SECRET_KEY"]
+
         self.client = TestClient(app)
 
         yield
@@ -981,6 +1042,8 @@ class TestJWTTokenManipulation:
 
         users.get_pool = self.original_get_pool
         self.test_pool.close_all()
+        settings.users_enabled = self._orig_users_enabled
+        settings.jwt_secret_key = self._orig_jwt_secret
 
         import shutil
 
@@ -1116,6 +1179,13 @@ class TestLastSuperadminRaceCondition:
 
         self.test_pool = test_pool
         self.original_get_pool = original_get_pool
+
+        from app.config import settings
+        self._orig_users_enabled = settings.users_enabled
+        self._orig_jwt_secret = settings.jwt_secret_key
+        settings.users_enabled = True
+        settings.jwt_secret_key = os.environ["JWT_SECRET_KEY"]
+
         self.client = TestClient(app)
 
         yield
@@ -1127,6 +1197,8 @@ class TestLastSuperadminRaceCondition:
 
         users.get_pool = self.original_get_pool
         self.test_pool.close_all()
+        settings.users_enabled = self._orig_users_enabled
+        settings.jwt_secret_key = self._orig_jwt_secret
 
         import shutil
 
@@ -1243,6 +1315,13 @@ class TestInvalidRoleValues:
 
         self.test_pool = test_pool
         self.original_get_pool = original_get_pool
+
+        from app.config import settings
+        self._orig_users_enabled = settings.users_enabled
+        self._orig_jwt_secret = settings.jwt_secret_key
+        settings.users_enabled = True
+        settings.jwt_secret_key = os.environ["JWT_SECRET_KEY"]
+
         self.client = TestClient(app)
 
         yield
@@ -1254,6 +1333,8 @@ class TestInvalidRoleValues:
 
         users.get_pool = self.original_get_pool
         self.test_pool.close_all()
+        settings.users_enabled = self._orig_users_enabled
+        settings.jwt_secret_key = self._orig_jwt_secret
 
         import shutil
 
@@ -1359,6 +1440,13 @@ class TestInvalidIsActiveValues:
 
         self.test_pool = test_pool
         self.original_get_pool = original_get_pool
+
+        from app.config import settings
+        self._orig_users_enabled = settings.users_enabled
+        self._orig_jwt_secret = settings.jwt_secret_key
+        settings.users_enabled = True
+        settings.jwt_secret_key = os.environ["JWT_SECRET_KEY"]
+
         self.client = TestClient(app)
 
         yield
@@ -1370,6 +1458,8 @@ class TestInvalidIsActiveValues:
 
         users.get_pool = self.original_get_pool
         self.test_pool.close_all()
+        settings.users_enabled = self._orig_users_enabled
+        settings.jwt_secret_key = self._orig_jwt_secret
 
         import shutil
 
