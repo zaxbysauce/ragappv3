@@ -110,6 +110,11 @@ class TestVaultCreatePermissionAutoGrant(unittest.TestCase):
         self._db_path = db_path
         self._next_user_id = 100  # auto-increment for test users
 
+        # Reset rate limiter storage so tests that run after heavy vault-creation
+        # test suites don't inherit an exhausted bucket.
+        from app.limiter import limiter as _limiter
+        _limiter.reset()
+
     def tearDown(self):
         app.dependency_overrides.pop(get_db, None)
         app.dependency_overrides.pop(get_vector_store, None)

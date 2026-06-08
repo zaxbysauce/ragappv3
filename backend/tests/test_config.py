@@ -18,13 +18,13 @@ class TestSettingsDefaults(unittest.TestCase):
         """Test Settings() loads all defaults with no env overrides."""
         settings = Settings()
 
-        self.assertEqual(settings.data_dir, Path("/data/knowledgevault"))
+        self.assertEqual(settings.data_dir, Path("./data"))
         self.assertEqual(
-            settings.ollama_embedding_url, "http://host.docker.internal:11434"
+            settings.ollama_embedding_url, "http://harrier-embed:8080/v1/embeddings"
         )
         self.assertEqual(settings.ollama_chat_url, "http://host.docker.internal:11434")
-        self.assertEqual(settings.embedding_model, "nomic-embed-text")
-        self.assertEqual(settings.chat_model, "qwen2.5:32b")
+        self.assertEqual(settings.embedding_model, "microsoft/harrier-oss-v1-0.6b")
+        self.assertEqual(settings.chat_model, "gemma-4-26b-a4b-it-apex")
         # New character-based fields
         self.assertEqual(settings.chunk_size_chars, 2000)
         self.assertEqual(settings.chunk_overlap_chars, 200)
@@ -72,6 +72,16 @@ class TestRagRelevanceThreshold(unittest.TestCase):
 
 class TestSettingsPropertyPaths(unittest.TestCase):
     """Test Settings property paths based on data_dir."""
+
+    def setUp(self):
+        self._orig = os.environ.get("DATA_DIR")
+        os.environ["DATA_DIR"] = "/data/knowledgevault"
+
+    def tearDown(self):
+        if self._orig is not None:
+            os.environ["DATA_DIR"] = self._orig
+        else:
+            os.environ.pop("DATA_DIR", None)
 
     def test_documents_dir_property(self):
         """Test documents_dir returns data_dir/documents."""

@@ -97,6 +97,9 @@ def permission_client():
     finally:
         pool.release_connection(conn)
 
+    from app.limiter import limiter as _limiter
+    _limiter.reset()
+
     client = TestClient(app)
     yield client, pool, vector_store, current_user
 

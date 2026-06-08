@@ -19,7 +19,8 @@ from app.services.reranking import RerankingService
 
 @pytest.fixture
 def mock_embedding_settings():
-    with patch("app.services.embeddings.settings") as mock:
+    with patch("app.services.embeddings.settings") as mock, \
+         patch("app.services.embeddings.assert_url_safe"):
         mock.ollama_embedding_url = "http://initial.example:11434/api/embeddings"
         mock.embedding_model = "initial-model"
         mock.embedding_doc_prefix = ""
