@@ -333,6 +333,12 @@ class TestCreateUserEndpoint(unittest.TestCase):
 
     def setUp(self):
         """Set up test client with temporary database."""
+        # Ensure users_enabled=True regardless of settings construction order
+        # (app.config may have been initialized before this module set USERS_ENABLED=true)
+        import app.api.deps as _deps_module
+        _deps_module.settings.users_enabled = True
+        self._original_users_enabled = True  # track that we patched it
+
         self.temp_dir = tempfile.mkdtemp()
         self.db_path = os.path.join(self.temp_dir, "test.db")
 
