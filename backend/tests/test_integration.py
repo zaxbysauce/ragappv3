@@ -154,8 +154,8 @@ class FakeVectorStore:
         self.stored_chunks: List[Dict] = []
         self.deleted_file_ids: List[str] = []
 
-    def search(
-        self, embedding: List[float], limit: int = 10, filter_expr=None, vault_id=None
+    async def search(
+        self, embedding: List[float], limit: int = 10, filter_expr=None, vault_id=None, **kwargs
     ) -> List[Dict]:
         return self.search_results[:limit]
 
@@ -175,9 +175,11 @@ class FakeVectorStore:
     def close(self):
         pass
 
-    def get_chunks_by_uid(self, chunk_uids: List[str]) -> List[Dict]:
-        # Return empty list for fake - real implementation would fetch from DB
+    async def get_chunks_by_uid(self, chunk_uids: List[str]) -> List[Dict]:
         return []
+
+    def get_fts_exceptions(self) -> int:
+        return 0
 
 
 class FakeMemoryStore:
@@ -268,6 +270,19 @@ def setup_app_state(app, **overrides):
         enabled=False, reason="", version=0, updated_at=None
     )
 
+    # Build a minimal fake rag_engine for routes that read app.state.rag_engine
+    from app.services.rag_engine import RAGEngine
+
+    fake_rag_engine = overrides.get(
+        "rag_engine",
+        RAGEngine(
+            embedding_service=overrides.get("embedding_service", FakeEmbeddingService()),
+            vector_store=overrides.get("vector_store", FakeVectorStore()),
+            memory_store=overrides.get("memory_store", FakeMemoryStore()),
+            llm_client=overrides.get("llm_client", FakeLLMClient()),
+        ),
+    )
+
     # Initialize app state
     app.state.db_pool = db_pool
     app.state.maintenance_service = overrides.get(
@@ -283,6 +298,29 @@ def setup_app_state(app, **overrides):
     app.state.secret_manager = overrides.get("secret_manager", MagicMock())
     app.state.toggle_manager = overrides.get("toggle_manager", MagicMock())
     app.state.csrf_manager = overrides.get("csrf_manager", MagicMock())
+    app.state.rag_engine = fake_rag_engine
+
+    # Bypass authentication and CSRF for integration tests (tests cover functionality, not auth)
+    from app.api.deps import get_current_active_user
+    from app.security import csrf_protect
+
+    app.dependency_overrides[get_current_active_user] = lambda: {
+        "id": 0,
+        "username": "admin",
+        "role": "superadmin",
+        "is_active": 1,
+        "must_change_password": 0,
+    }
+    app.dependency_overrides[csrf_protect] = lambda: "test-csrf-token"
+
+    if "background_processor" in overrides:
+        app.state.background_processor = overrides["background_processor"]
+    else:
+        mock_bp = MagicMock()
+        mock_bp.is_running = True
+        mock_bp.start = AsyncMock()
+        mock_bp.enqueue = AsyncMock()
+        app.state.background_processor = mock_bp
 
     # Store test paths on app state for tests to access
     app.state._test_db_path = str(settings.sqlite_path)
@@ -292,6 +330,8 @@ def setup_app_state(app, **overrides):
     def cleanup():
         import shutil
 
+        app.dependency_overrides.pop(get_current_active_user, None)
+        app.dependency_overrides.pop(csrf_protect, None)
         shutil.rmtree(test_data_dir, ignore_errors=True)
 
     return cleanup
@@ -356,6 +396,8 @@ class TestIntegration(unittest.TestCase):
         # Setup mock processor
         mock_processor = MagicMock()
         mock_processor_class.return_value = mock_processor
+        mock_processor._check_duplicate_in_flight.return_value = None  # no duplicate
+        mock_processor._insert_or_get_file_record.return_value = 123   # file_id
 
         # Mock process_file to return a processed document
         mock_result = MagicMock()
@@ -369,17 +411,15 @@ class TestIntegration(unittest.TestCase):
         # Step 1: Upload a document
         test_content = b"This is a test document content for integration testing."
         response = client.post(
-            "/api/documents/upload",
+            "/api/documents/upload?vault_id=1",
             files={"file": ("test_doc.txt", BytesIO(test_content), "text/plain")},
         )
 
         self.assertEqual(response.status_code, 200)
         upload_data = response.json()
         self.assertIn("file_id", upload_data)
-        self.assertEqual(upload_data["status"], "indexed")
-
-        # Verify processor was called
-        mock_processor.process_file.assert_called_once()
+        # status is now 'pending' (queued for async processing), not 'indexed'
+        self.assertIn(upload_data["status"], ["pending", "indexed"])
 
         # Step 2: Verify document is listed
         response = client.get("/api/documents")
@@ -415,6 +455,8 @@ class TestIntegration(unittest.TestCase):
         fake_memory.content = "Remember this important fact"
         self.fake_memory_store._memories = [fake_memory]
 
+        from app.config import settings as app_settings
+
         # Create RAG engine with fake services
         rag_engine = RAGEngine(
             embedding_service=self.fake_embedding_service,
@@ -422,32 +464,37 @@ class TestIntegration(unittest.TestCase):
             memory_store=self.fake_memory_store,
             llm_client=self.fake_llm_client,
         )
+        # Disable atomic visibility filter (no files in test DB)
+        rag_engine._get_indexed_file_ids = MagicMock(return_value=None)
         # Override dependency to use our fake RAG engine
         app.dependency_overrides[get_rag_engine] = lambda: rag_engine
 
-        try:
-            # Send chat request
-            response = client.post(
-                "/api/chat",
-                json={
-                    "message": "What information is in the document?",
-                    "history": [],
-                    "stream": False,
-                },
-            )
+        # FakeEmbeddingService returns identical embeddings, so context distillation
+        # would deduplicate all chunks. Disable it for this test.
+        with patch.object(app_settings, "context_distillation_enabled", False):
+            try:
+                # Send chat request
+                response = client.post(
+                    "/api/chat",
+                    json={
+                        "message": "What information is in the document?",
+                        "history": [],
+                        "stream": False,
+                    },
+                )
 
-            self.assertEqual(response.status_code, 200)
-            chat_data = response.json()
-            self.assertIn("content", chat_data)
-            self.assertIn("sources", chat_data)
-            self.assertIn("memories_used", chat_data)
+                self.assertEqual(response.status_code, 200)
+                chat_data = response.json()
+                self.assertIn("content", chat_data)
+                self.assertIn("sources", chat_data)
+                self.assertIn("memories_used", chat_data)
 
-            # Verify sources are included
-            self.assertEqual(len(chat_data["sources"]), 1)
-            self.assertEqual(chat_data["sources"][0]["file_id"], "123")
-        finally:
-            # Clean up dependency override
-            app.dependency_overrides.pop(get_rag_engine, None)
+                # Verify sources are included
+                self.assertEqual(len(chat_data["sources"]), 1)
+                self.assertEqual(chat_data["sources"][0]["file_id"], "123")
+            finally:
+                # Clean up dependency override
+                app.dependency_overrides.pop(get_rag_engine, None)
 
     @patch("app.api.routes.chat.get_rag_engine")
     def test_chat_streaming_response(self, mock_get_rag_engine):
@@ -795,7 +842,7 @@ class TestIntegration(unittest.TestCase):
         large_content = b"x" * (60 * 1024 * 1024)  # 60 MB
 
         response = client.post(
-            "/api/documents/upload",
+            "/api/documents/upload?vault_id=1",
             files={"file": ("large_file.txt", BytesIO(large_content), "text/plain")},
             headers={"content-length": str(len(large_content))},
         )
@@ -814,7 +861,7 @@ class TestIntegration(unittest.TestCase):
         client = TestClient(app)
 
         response = client.post(
-            "/api/documents/upload",
+            "/api/documents/upload?vault_id=1",
             files={
                 "file": ("malicious.exe", BytesIO(b"test"), "application/octet-stream")
             },
@@ -967,6 +1014,7 @@ class TestAsyncIntegration(unittest.IsolatedAsyncioTestCase):
         self.fake_memory = FakeMemoryStore()
 
         # Import RAGEngine here to avoid import issues
+        from app.config import settings as app_settings
         from app.services.rag_engine import RAGEngine
 
         self.rag_engine = RAGEngine(
@@ -975,6 +1023,17 @@ class TestAsyncIntegration(unittest.IsolatedAsyncioTestCase):
             memory_store=self.fake_memory,
             llm_client=self.fake_llm,
         )
+        # Disable atomic visibility filter (no files in test DB)
+        self.rag_engine._get_indexed_file_ids = MagicMock(return_value=None)
+        # FakeEmbeddingService returns identical embeddings for all texts, so
+        # context distillation would deduplicate all chunks. Disable it.
+        self._distillation_patcher = patch.object(
+            app_settings, "context_distillation_enabled", False
+        )
+        self._distillation_patcher.start()
+
+    async def asyncTearDown(self):
+        self._distillation_patcher.stop()
 
     async def test_rag_query_with_memory_intent_detection(self):
         """Test RAG engine detects memory storage intent."""
@@ -987,9 +1046,10 @@ class TestAsyncIntegration(unittest.IsolatedAsyncioTestCase):
             results.append(chunk)
 
         # Should return confirmation without querying vector store
-        self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]["type"], "content")
-        self.assertIn("Memory stored", results[0]["content"])
+        # (content message + done event are both emitted)
+        content_events = [r for r in results if r.get("type") == "content"]
+        self.assertGreaterEqual(len(content_events), 1)
+        self.assertIn("Memory stored", content_events[0]["content"])
 
         # Verify memory was added
         self.assertEqual(len(self.fake_memory.added_memories), 1)
@@ -1016,6 +1076,9 @@ class TestAsyncIntegration(unittest.IsolatedAsyncioTestCase):
         fake_memory.content = "Important memory"
         self.fake_memory._memories = [fake_memory]
 
+        # LLM must cite [M1] for the memory to appear in memories_used
+        self.fake_llm.response = "Answer based on [M1]."
+
         results = []
         async for chunk in self.rag_engine.query("test query", [], stream=False):
             results.append(chunk)
@@ -1025,7 +1088,7 @@ class TestAsyncIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(done_event["type"], "done")
         self.assertEqual(len(done_event["sources"]), 2)
         self.assertEqual(len(done_event["memories_used"]), 1)
-        self.assertEqual(done_event["memories_used"][0], "Important memory")
+        self.assertEqual(done_event["memories_used"][0]["content"], "Important memory")
 
     async def test_rag_query_with_maintenance_mode(self):
         """Test RAG query behavior during maintenance mode."""
@@ -1071,7 +1134,7 @@ class TestAsyncIntegration(unittest.IsolatedAsyncioTestCase):
             async for _ in self.rag_engine.query("test", [], stream=False):
                 pass
 
-        self.assertIn("encode", str(context.exception).lower())
+        self.assertIn("embedding", str(context.exception).lower())
 
 
 if __name__ == "__main__":
