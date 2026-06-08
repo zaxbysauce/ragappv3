@@ -93,6 +93,8 @@ class TestSettingsResponseFields(unittest.TestCase):
     """Tests for SettingsResponse including reranking and hybrid search fields."""
 
     def setUp(self):
+        self._orig_users_enabled = settings.users_enabled
+        settings.users_enabled = False
         self.client = TestClient(app)
         self.client.headers.update(
             {"Authorization": f"Bearer {settings.admin_secret_token}"}
@@ -116,6 +118,7 @@ class TestSettingsResponseFields(unittest.TestCase):
     def tearDown(self):
         # Restore get_db dependency
         app.dependency_overrides.pop(self._get_db, None)
+        settings.users_enabled = self._orig_users_enabled
 
     def test_settings_response_includes_reranker_fields(self):
         """Test GET /api/settings includes reranking configuration fields."""
@@ -199,6 +202,8 @@ class TestSettingsUpdateValidation(unittest.TestCase):
     """Tests for SettingsUpdate validation of new fields."""
 
     def setUp(self):
+        self._orig_users_enabled = settings.users_enabled
+        settings.users_enabled = False
         self.client = TestClient(app)
         self.client.headers.update(
             {"Authorization": f"Bearer {settings.admin_secret_token}"}
@@ -222,7 +227,9 @@ class TestSettingsUpdateValidation(unittest.TestCase):
     def tearDown(self):
         # Restore get_db dependency
         app.dependency_overrides.pop(self._get_db, None)
+        settings.users_enabled = self._orig_users_enabled
 
+    @patch.dict(os.environ, {"ALLOW_LOCAL_SERVICES": "1"})
     def test_post_settings_valid_reranker_config(self):
         """Test POST /api/settings with valid reranker configuration."""
         payload = {
@@ -257,6 +264,7 @@ class TestSettingsUpdateValidation(unittest.TestCase):
         self.assertEqual(data["hybrid_search_enabled"], False)
         self.assertEqual(data["hybrid_alpha"], 0.3)
 
+    @patch.dict(os.environ, {"ALLOW_LOCAL_SERVICES": "1"})
     def test_post_settings_valid_instant_chat_config(self):
         """Test POST /api/settings with valid instant model configuration."""
         payload = {
@@ -375,6 +383,7 @@ class TestSettingsUpdateValidation(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
 
+    @patch.dict(os.environ, {"ALLOW_LOCAL_SERVICES": "1"})
     def test_post_settings_valid_reranker_url(self):
         """Test POST /api/settings with valid reranker URL."""
         # reranker_url is now SSRF-validated at PUT time (like the other model
@@ -399,6 +408,7 @@ class TestSettingsUpdateValidation(unittest.TestCase):
         data = response.json()
         self.assertEqual(data["reranker_url"], "")
 
+    @patch.dict(os.environ, {"ALLOW_LOCAL_SERVICES": "1"})
     def test_post_settings_combined_new_fields(self):
         """Test POST /api/settings with multiple new fields in one request."""
         payload = {
@@ -426,6 +436,8 @@ class TestConnectionEndpoint(unittest.TestCase):
     """Tests for the /api/settings/connection endpoint."""
 
     def setUp(self):
+        self._orig_users_enabled = settings.users_enabled
+        settings.users_enabled = False
         self.client = TestClient(app)
         self.client.headers.update(
             {"Authorization": f"Bearer {settings.admin_secret_token}"}
@@ -449,7 +461,9 @@ class TestConnectionEndpoint(unittest.TestCase):
     def tearDown(self):
         # Restore get_db dependency
         app.dependency_overrides.pop(self._get_db, None)
+        settings.users_enabled = self._orig_users_enabled
 
+    @patch.dict(os.environ, {"ALLOW_LOCAL_SERVICES": "1"})
     @patch("app.api.routes.settings.httpx.AsyncClient")
     def test_connection_endpoint_with_reranker(self, mock_async_client):
         """Test GET /api/settings/connection tests reranker when configured."""
@@ -482,6 +496,7 @@ class TestConnectionEndpoint(unittest.TestCase):
         finally:
             settings.reranker_url = original_reranker_url
 
+    @patch.dict(os.environ, {"ALLOW_LOCAL_SERVICES": "1"})
     @patch("app.api.routes.settings.httpx.AsyncClient")
     def test_connection_endpoint_reranker_failure(self, mock_async_client):
         """Test GET /api/settings/connection handles reranker failure."""

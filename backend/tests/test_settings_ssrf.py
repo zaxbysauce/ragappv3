@@ -88,6 +88,8 @@ class TestSettingsSSRFIntegration(unittest.TestCase):
     """Tests for SSRF validator in settings.py test_connection()."""
 
     def setUp(self):
+        self._orig_users_enabled = settings.users_enabled
+        settings.users_enabled = False
         self.client = TestClient(app)
         self.client.headers.update(
             {"Authorization": f"Bearer {settings.admin_secret_token}"}
@@ -109,6 +111,7 @@ class TestSettingsSSRFIntegration(unittest.TestCase):
 
     def tearDown(self):
         app.dependency_overrides.pop(self._get_db, None)
+        settings.users_enabled = self._orig_users_enabled
 
     def test_connection_calls_assert_url_safe_before_http_request(self):
         """test_connection() must call assert_url_safe before each HTTP request."""
@@ -134,16 +137,16 @@ class TestSettingsSSRFIntegration(unittest.TestCase):
                 _ = self.client.get("/api/settings/connection")
 
                 # assert_url_safe should have been called for each target URL
-                # targets = { "embeddings": settings.ollama_embedding_url, "chat": settings.ollama_chat_url }
+                # targets include embeddings + chat + reranker (if configured)
                 self.assertGreaterEqual(
                     len(call_record["calls"]), 2, "assert_url_safe should be called at least twice (embeddings + chat)"
                 )
                 # Verify the URLs it was called with match our configured endpoints
+                allowed_urls = {settings.ollama_embedding_url, settings.ollama_chat_url}
+                if settings.reranker_url:
+                    allowed_urls.add(settings.reranker_url)
                 for url in call_record["calls"]:
-                    self.assertIn(
-                        url,
-                        [settings.ollama_embedding_url, settings.ollama_chat_url],
-                    )
+                    self.assertIn(url, allowed_urls)
 
     def test_ssrf_blocked_url_returns_error_dict_with_ssrf_message(self):
         """SSRF-blocked URLs return error dict with 'SSRF blocked' message, loop continues."""

@@ -132,6 +132,7 @@ class HybridLoggingTests(unittest.IsolatedAsyncioTestCase):
         with patch("app.services.vector_store.settings") as mock_settings:
             mock_settings.multi_scale_indexing_enabled = False
             mock_settings.sparse_search_max_candidates = 1000
+            mock_settings.vector_search_concurrency = 4
 
             vs = self._make_vs()
             vs.table.search = MagicMock(side_effect=self._mock_search_side_effect())
@@ -172,6 +173,7 @@ class HybridLoggingTests(unittest.IsolatedAsyncioTestCase):
         with patch("app.services.vector_store.settings") as mock_settings:
             mock_settings.multi_scale_indexing_enabled = False
             mock_settings.sparse_search_max_candidates = 1000
+            mock_settings.vector_search_concurrency = 4
 
             vs = self._make_vs()
             vs.table.search = MagicMock(side_effect=search_side_effect)
@@ -221,6 +223,7 @@ class HybridLoggingTests(unittest.IsolatedAsyncioTestCase):
         with patch("app.services.vector_store.settings") as mock_settings:
             mock_settings.multi_scale_indexing_enabled = False
             mock_settings.sparse_search_max_candidates = 1000
+            mock_settings.vector_search_concurrency = 4
 
             vs = self._make_vs()
             vs.table.search = MagicMock(side_effect=search_side_effect)
@@ -259,6 +262,7 @@ class HybridLoggingTests(unittest.IsolatedAsyncioTestCase):
         with patch("app.services.vector_store.settings") as mock_settings:
             mock_settings.multi_scale_indexing_enabled = False
             mock_settings.sparse_search_max_candidates = 1000
+            mock_settings.vector_search_concurrency = 4
 
             vs = self._make_vs()
             vs.table.search = MagicMock(side_effect=search_side_effect)
@@ -455,6 +459,7 @@ async def test_bm25_fts_returns_empty_no_success_log_pytest(caplog):
     with patch("app.services.vector_store.settings") as mock_settings:
         mock_settings.multi_scale_indexing_enabled = False
         mock_settings.sparse_search_max_candidates = 1000
+        mock_settings.vector_search_concurrency = 4
 
         vs = _standalone_make_vs()
         vs.table.search = MagicMock(side_effect=search_side_effect)

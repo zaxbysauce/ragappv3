@@ -32,12 +32,12 @@ class TestOptionalCurrentUser(unittest.TestCase):
 
     def test_returns_none_when_users_disabled(self):
         """When users_enabled=False, _optional_current_user must return None."""
-        with patch.object(settings, "users_enabled", False):
-            # Call with a fake authorization header - should still return None
-            import asyncio
+        import asyncio
 
-            result = asyncio.get_event_loop().run_until_complete(
+        with patch.object(settings, "users_enabled", False):
+            result = asyncio.run(
                 _optional_current_user(
+                    request=MagicMock(),
                     authorization="Bearer sometoken",
                     db=MagicMock(),
                 )
@@ -46,11 +46,12 @@ class TestOptionalCurrentUser(unittest.TestCase):
 
     def test_returns_none_when_no_authorization_header(self):
         """When no authorization header, returns None regardless of users_enabled."""
-        with patch.object(settings, "users_enabled", True):
-            import asyncio
+        import asyncio
 
-            result = asyncio.get_event_loop().run_until_complete(
+        with patch.object(settings, "users_enabled", True):
+            result = asyncio.run(
                 _optional_current_user(
+                    request=MagicMock(),
                     authorization=None,
                     db=MagicMock(),
                 )
@@ -59,6 +60,8 @@ class TestOptionalCurrentUser(unittest.TestCase):
 
     def test_returns_none_when_jwt_raises_httpexception(self):
         """When get_current_active_user raises HTTPException, returns None."""
+        import asyncio
+
         from fastapi import HTTPException
 
         with patch.object(settings, "users_enabled", True):
@@ -67,10 +70,9 @@ class TestOptionalCurrentUser(unittest.TestCase):
                 new_callable=AsyncMock,
                 side_effect=HTTPException(status_code=401, detail="bad token"),
             ):
-                import asyncio
-
-                result = asyncio.get_event_loop().run_until_complete(
+                result = asyncio.run(
                     _optional_current_user(
+                        request=MagicMock(),
                         authorization="Bearer badtoken",
                         db=MagicMock(),
                     )
@@ -79,6 +81,8 @@ class TestOptionalCurrentUser(unittest.TestCase):
 
     def test_returns_user_dict_when_jwt_valid(self):
         """When JWT is valid, returns the user dict."""
+        import asyncio
+
         fake_user = {"id": 42, "username": "testuser"}
         with patch.object(settings, "users_enabled", True):
             with patch(
@@ -86,10 +90,9 @@ class TestOptionalCurrentUser(unittest.TestCase):
                 new_callable=AsyncMock,
                 return_value=fake_user,
             ):
-                import asyncio
-
-                result = asyncio.get_event_loop().run_until_complete(
+                result = asyncio.run(
                     _optional_current_user(
+                        request=MagicMock(),
                         authorization="Bearer validtoken",
                         db=MagicMock(),
                     )
@@ -193,9 +196,9 @@ class TestRetryDocumentAuditWiring(unittest.IsolatedAsyncioTestCase):
         self.assertIn("str(current_user", source)
 
     async def test_user_id_fallback_to_auth(self):
-        """When current_user is None, falls back to auth.get('user_id', 'unknown')."""
+        """When current_user is None, falls back to user.get('id', 'unknown')."""
         source = inspect.getsource(retry_document)
-        self.assertIn("auth.get", source)
+        self.assertIn("user.get", source)
         self.assertIn('"unknown"', source)
 
     async def test_both_call_sites_compute_user_id(self):

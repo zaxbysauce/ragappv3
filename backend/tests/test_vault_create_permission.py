@@ -110,6 +110,11 @@ class TestVaultCreatePermissionAutoGrant(unittest.TestCase):
         self._db_path = db_path
         self._next_user_id = 100  # auto-increment for test users
 
+        # Reset rate limiter storage so tests that run after heavy vault-creation
+        # test suites don't inherit an exhausted bucket.
+        from app.limiter import limiter as _limiter
+        _limiter.reset()
+
     def tearDown(self):
         app.dependency_overrides.pop(get_db, None)
         app.dependency_overrides.pop(get_vector_store, None)
@@ -283,7 +288,7 @@ class TestVaultCreatePermissionAutoGrant(unittest.TestCase):
         vault_id = resp.json()["id"]
 
         # List vaults as the same member user
-        list_resp = self.client.get("/api/vaults")
+        list_resp = self.client.get("/api/vaults/accessible")
         self.assertEqual(list_resp.status_code, 200)
         vault_ids = [v["id"] for v in list_resp.json()["vaults"]]
         self.assertIn(vault_id, vault_ids)
@@ -300,7 +305,7 @@ class TestVaultCreatePermissionAutoGrant(unittest.TestCase):
         # User B lists vaults — should NOT see user A's vault
         user_b, override_b = self._create_member_user()
         app.dependency_overrides[get_current_active_user] = override_b
-        list_resp = self.client.get("/api/vaults")
+        list_resp = self.client.get("/api/vaults/accessible")
         vault_ids = [v["id"] for v in list_resp.json()["vaults"]]
         self.assertNotIn(vault_id, vault_ids)
 

@@ -53,6 +53,7 @@ class TestTableJustCreatedTracking(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
 
                 with patch("app.services.vector_store.FTS") as mock_fts:
                     mock_fts.return_value = MagicMock()
@@ -101,6 +102,7 @@ class TestTableJustCreatedTracking(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
 
                 with patch("app.services.vector_store.FTS") as mock_fts:
                     mock_fts.return_value = MagicMock()
@@ -148,6 +150,7 @@ class TestTableJustCreatedTracking(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
 
                 with patch("app.services.vector_store.logger") as mock_logger:
                     await store.init_table(embedding_dim=384)
@@ -200,6 +203,7 @@ class TestFTSIndexReplaceFalse(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
 
                 with patch("app.services.vector_store.FTS") as mock_fts:
                     mock_fts.return_value = MagicMock()
@@ -247,6 +251,7 @@ class TestFTSIndexReplaceFalse(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
 
                 await store.init_table(embedding_dim=384)
 
@@ -282,6 +287,7 @@ class TestFTSIndexReplaceFalse(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
 
                 with patch("app.services.vector_store.logger") as mock_logger:
                     await store.init_table(embedding_dim=384)
@@ -326,6 +332,7 @@ class TestFTSIndexCreationFailure(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
 
                 with patch("app.services.vector_store.FTS") as mock_fts:
                     mock_fts.return_value = MagicMock()
@@ -369,6 +376,7 @@ class TestDeferredIndexLogMessage(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.vector_store.settings") as mock_settings:
                 mock_settings.vector_metric = "cosine"
+                mock_settings.write_lock_timeout_seconds = 30
 
                 with patch("app.services.vector_store.FTS") as mock_fts:
                     mock_fts.return_value = MagicMock()

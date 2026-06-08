@@ -111,6 +111,18 @@ def setup_test_db(db_path: str) -> sqlite3.Connection:
         )
     """)
 
+    # Create org_members table (needed by delete_user route's org-owner check)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS org_members (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            org_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            role TEXT NOT NULL DEFAULT 'member',
+            joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(org_id, user_id)
+        )
+    """)
+
     # Create indexes
     conn.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)")
@@ -220,6 +232,12 @@ class TestUserRoutes:
         self.test_pool = test_pool
         self.original_get_pool = original_get_pool
 
+        from app.config import settings
+        self._orig_users_enabled = settings.users_enabled
+        self._orig_jwt_secret = settings.jwt_secret_key
+        settings.users_enabled = True
+        settings.jwt_secret_key = os.environ["JWT_SECRET_KEY"]
+
         self.client = TestClient(app)
 
         yield
@@ -234,6 +252,8 @@ class TestUserRoutes:
 
         users.get_pool = self.original_get_pool
         self.test_pool.close_all()
+        settings.users_enabled = self._orig_users_enabled
+        settings.jwt_secret_key = self._orig_jwt_secret
 
         # Clean up temp directory
         import shutil

@@ -193,13 +193,14 @@ class FakeLLMClient:
         self._stream_chunks = stream_chunks if stream_chunks is not None else []
         self.last_messages: Optional[List[Dict[str, str]]] = None
 
-    async def chat_completion(self, messages: List[Dict[str, str]]) -> str:
+    async def chat_completion(self, messages: List[Dict[str, str]], **kwargs) -> str:
         self.last_messages = messages
         return self._response
 
     async def chat_completion_stream(
         self,
-        messages: List[Dict[str, str]]
+        messages: List[Dict[str, str]],
+        **kwargs,
     ) -> AsyncIterator[str]:
         self.last_messages = messages
         for chunk in self._stream_chunks:
@@ -271,7 +272,8 @@ class TestRerankingService(unittest.IsolatedAsyncioTestCase):
             {"text": "Third chunk"}
         ]
 
-        with patch('app.services.reranking.httpx.AsyncClient', return_value=mock_client):
+        with patch('app.services.reranking.httpx.AsyncClient', return_value=mock_client), \
+             patch('app.services.reranking.assert_url_safe'):
             reranked_chunks, rerank_success = await service.rerank("test query", chunks)
 
         self.assertTrue(rerank_success)
@@ -281,10 +283,14 @@ class TestRerankingService(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reranked_chunks[1]["text"], "First chunk")
         self.assertEqual(reranked_chunks[2]["text"], "Third chunk")
 
-        # Verify scores are attached
-        self.assertAlmostEqual(reranked_chunks[0]["_rerank_score"], 0.95, places=2)
-        self.assertAlmostEqual(reranked_chunks[1]["_rerank_score"], 0.85, places=2)
-        self.assertAlmostEqual(reranked_chunks[2]["_rerank_score"], 0.75, places=2)
+        # Verify scores are attached and monotonically decreasing (sigmoid-normalized)
+        s0 = reranked_chunks[0]["_rerank_score"]
+        s1 = reranked_chunks[1]["_rerank_score"]
+        s2 = reranked_chunks[2]["_rerank_score"]
+        self.assertGreater(s0, s1)
+        self.assertGreater(s1, s2)
+        self.assertGreater(s0, 0.0)
+        self.assertLessEqual(s0, 1.0)
 
     async def test_rerank_with_endpoint_empty_chunks(self):
         """Test reranking with empty chunks list."""
@@ -425,7 +431,8 @@ class TestRerankingService(unittest.IsolatedAsyncioTestCase):
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=None)
 
-        with patch('app.services.reranking.httpx.AsyncClient', return_value=mock_client):
+        with patch('app.services.reranking.httpx.AsyncClient', return_value=mock_client), \
+             patch('app.services.reranking.assert_url_safe'):
             # Override top_n to 3
             reranked_chunks, rerank_success = await service.rerank("test query", chunks, top_n=3)
 
@@ -696,7 +703,11 @@ class TestRAGEnginePipeline(unittest.IsolatedAsyncioTestCase):
         async def mock_get_chunks_by_uid(chunk_uids):
             return adjacent_chunks
 
-        with patch.object(fake_vector, 'get_chunks_by_uid', side_effect=mock_get_chunks_by_uid):
+        from app.config import settings as app_settings
+
+        with patch.object(fake_vector, 'get_chunks_by_uid', side_effect=mock_get_chunks_by_uid), \
+             patch.object(app_settings, 'context_distillation_enabled', False), \
+             patch.object(app_settings, 'parent_retrieval_enabled', False):
             engine = RAGEngine(
                 embedding_service=fake_embedding,
                 vector_store=fake_vector,
@@ -717,7 +728,7 @@ class TestRAGEnginePipeline(unittest.IsolatedAsyncioTestCase):
             # Debug: print what we got
             print(f"DEBUG: Got {len(done_msg.get('sources', []))} sources")
             for s in done_msg.get("sources", []):
-                print(f"  Source: {s.file_id}, chunk_index={s.metadata.get('chunk_index')}")
+                print(f"  Source: {s.get('file_id')}, chunk_index={s.get('metadata', {}).get('chunk_index')}")
 
             # Should include main chunk plus adjacent chunks (3 total)
             # Note: This test may fail due to distance threshold filtering.

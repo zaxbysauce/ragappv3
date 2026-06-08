@@ -17,6 +17,16 @@ def make_source(file_id: str) -> RAGSource:
 class TestSupersessionDetection(unittest.IsolatedAsyncioTestCase):
     """Test suite for _check_supersession method."""
 
+    def setUp(self):
+        self._ssrf_embed = patch("app.services.embeddings.assert_url_safe")
+        self._ssrf_llm = patch("app.services.llm_client.assert_url_safe")
+        self._ssrf_embed.start()
+        self._ssrf_llm.start()
+
+    def tearDown(self):
+        self._ssrf_embed.stop()
+        self._ssrf_llm.stop()
+
     @patch("app.services.rag_engine._get_pool")
     async def test_supersession_no_sources(self, mock_get_pool):
         """Empty sources returns None."""

@@ -40,7 +40,8 @@ class AsyncMock(MagicMock):
 @pytest.fixture(autouse=True)
 def mock_settings():
     """Mock settings for all tests."""
-    with patch('app.services.embeddings.settings') as mock_settings:
+    with patch('app.services.embeddings.settings') as mock_settings, \
+         patch('app.services.embeddings.assert_url_safe'):
         mock_settings.ollama_embedding_url = "http://localhost:11434/api/embeddings"
         mock_settings.embedding_model = "nomic-embed-text"
         mock_settings.embedding_doc_prefix = ""
@@ -217,6 +218,11 @@ class TestOptimizeMode:
             mock_s.vector_metric = "cosine"
             mock_s.embedding_dim = 1024
             mock_s.index_rebuild_delta = 0.1
+            mock_s.write_lock_timeout_seconds = 30.0
+            mock_s.vector_search_concurrency = 4
+            mock_s.rrf_legacy_mode = False
+            mock_s.hybrid_rrf_k = 60
+            mock_s.multi_scale_rrf_k = 60
 
             # Add a record
             await vs.add_chunks([{
@@ -251,6 +257,11 @@ class TestOptimizeMode:
             mock_s.vector_metric = "cosine"
             mock_s.embedding_dim = 1024
             mock_s.index_rebuild_delta = 0.1
+            mock_s.write_lock_timeout_seconds = 30.0
+            mock_s.vector_search_concurrency = 4
+            mock_s.rrf_legacy_mode = False
+            mock_s.hybrid_rrf_k = 60
+            mock_s.multi_scale_rrf_k = 60
 
             # Add first record - counter becomes 1, no optimize yet
             await vs.add_chunks([{
@@ -296,6 +307,11 @@ class TestOptimizeMode:
             mock_s.vector_metric = "cosine"
             mock_s.embedding_dim = 1024
             mock_s.index_rebuild_delta = 0.1
+            mock_s.write_lock_timeout_seconds = 30.0
+            mock_s.vector_search_concurrency = 4
+            mock_s.rrf_legacy_mode = False
+            mock_s.hybrid_rrf_k = 60
+            mock_s.multi_scale_rrf_k = 60
 
             # Add a record
             await vs.add_chunks([{
@@ -328,6 +344,11 @@ class TestOptimizeMode:
             mock_s.vector_metric = "cosine"
             mock_s.embedding_dim = 1024
             mock_s.index_rebuild_delta = 0.1
+            mock_s.write_lock_timeout_seconds = 30.0
+            mock_s.vector_search_concurrency = 4
+            mock_s.rrf_legacy_mode = False
+            mock_s.hybrid_rrf_k = 60
+            mock_s.multi_scale_rrf_k = 60
 
             # Add a record
             await vs.add_chunks([{

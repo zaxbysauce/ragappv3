@@ -84,6 +84,9 @@ async def test_rerank_returns_tuple_of_list_and_bool(service_with_url, sample_ch
 @pytest.mark.asyncio
 async def test_rerank_success_chunks_have_scores_in_01(service_with_url, sample_chunks, monkeypatch):
     """On success, every returned chunk has _rerank_score in [0, 1]."""
+    import app.services.reranking as _reranking_module
+    monkeypatch.setattr(_reranking_module, "assert_url_safe", lambda url: None)
+
     mock_response = MagicMock()
     mock_response.json.return_value = [
         {"index": 0, "score": 5.0},
@@ -270,6 +273,9 @@ class TestSigmoidNormalization:
 @pytest.mark.asyncio
 async def test_rerank_endpoint_raw_logits_produce_sigmoid_scores(service_with_url, sample_chunks, monkeypatch):
     """Endpoint scores that are raw logits must be sigmoid-normalized to [0,1]."""
+    import app.services.reranking as _reranking_module
+    monkeypatch.setattr(_reranking_module, "assert_url_safe", lambda url: None)
+
     # Return raw logits (not bounded in [0,1])
     mock_response = MagicMock()
     mock_response.json.return_value = [
@@ -392,6 +398,9 @@ async def test_rerank_local_negative_logits_trigger_sigmoid(service_without_url,
 @pytest.mark.asyncio
 async def test_rerank_top_n_larger_than_chunks(service_with_url, sample_chunks, monkeypatch):
     """top_n > len(chunks) must not raise; returns all reranked chunks."""
+    import app.services.reranking as _reranking_module
+    monkeypatch.setattr(_reranking_module, "assert_url_safe", lambda url: None)
+
     mock_response = MagicMock()
     mock_response.json.return_value = [
         {"index": 0, "score": 1.0},
@@ -415,6 +424,9 @@ async def test_rerank_top_n_larger_than_chunks(service_with_url, sample_chunks, 
 @pytest.mark.asyncio
 async def test_rerank_preserves_order_when_scores_equal(service_with_url, sample_chunks, monkeypatch):
     """When two chunks have identical scores, their relative order is determined by sort."""
+    import app.services.reranking as _reranking_module
+    monkeypatch.setattr(_reranking_module, "assert_url_safe", lambda url: None)
+
     mock_response = MagicMock()
     # All scores equal — sort by original index (stable sort / insertion order)
     mock_response.json.return_value = [

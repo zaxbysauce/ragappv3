@@ -257,6 +257,15 @@ class TestProcessExistingFileSkipsDuplicateCheck(unittest.TestCase):
         self._original_data_dir = settings.data_dir
         settings.data_dir = Path(self.tmp)
         self.pool = SQLiteConnectionPool(self.db, max_size=2)
+        # Seed vault so files FK constraint is satisfied
+        conn = self.pool.get_connection()
+        try:
+            conn.execute(
+                "INSERT OR IGNORE INTO vaults (id, name, visibility) VALUES (1, 'Default', 'private')"
+            )
+            conn.commit()
+        finally:
+            self.pool.release_connection(conn)
         self.processor = DocumentProcessor(
             chunk_size_chars=2000, chunk_overlap_chars=200, pool=self.pool
         )

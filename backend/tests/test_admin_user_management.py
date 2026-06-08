@@ -4,7 +4,7 @@ Tests for admin user management endpoints (backend/app/api/routes/users.py).
 These tests verify:
 - PATCH /users/{user_id}: Admin can update username, full_name, role; non-admin gets 403; cannot change own role; invalid role returns 400; user not found returns 404
 - PATCH /users/{user_id}/password: Admin can reset password; must_change_password is set; non-admin gets 403; weak password returns 400; user not found returns 404
-- PATCH /users/{user_id}/active-status: Admin can activate/deactivate; cannot deactivate self; cannot deactivate last admin; non-admin gets 403; user not found returns 404
+- PATCH /users/{user_id}/active: Admin can activate/deactivate; cannot deactivate self; cannot deactivate last admin; non-admin gets 403; user not found returns 404
 """
 
 import os
@@ -149,6 +149,12 @@ class TestUpdateUser:
         self.test_pool = test_pool
         self.original_get_pool = original_get_pool
 
+        from app.config import settings
+        self._orig_users_enabled = settings.users_enabled
+        self._orig_jwt_secret = settings.jwt_secret_key
+        settings.users_enabled = True
+        settings.jwt_secret_key = os.environ["JWT_SECRET_KEY"]
+
         self.client = TestClient(app)
 
         yield
@@ -161,6 +167,8 @@ class TestUpdateUser:
         # Restore original get_pool
         users.get_pool = self.original_get_pool
         self.test_pool.close_all()
+        settings.users_enabled = self._orig_users_enabled
+        settings.jwt_secret_key = self._orig_jwt_secret
 
         # Clean up temp directory
         try:
@@ -369,6 +377,12 @@ class TestAdminResetPassword:
         self.test_pool = test_pool
         self.original_get_pool = original_get_pool
 
+        from app.config import settings
+        self._orig_users_enabled = settings.users_enabled
+        self._orig_jwt_secret = settings.jwt_secret_key
+        settings.users_enabled = True
+        settings.jwt_secret_key = os.environ["JWT_SECRET_KEY"]
+
         self.client = TestClient(app)
 
         yield
@@ -381,6 +395,8 @@ class TestAdminResetPassword:
         # Restore original get_pool
         users.get_pool = self.original_get_pool
         self.test_pool.close_all()
+        settings.users_enabled = self._orig_users_enabled
+        settings.jwt_secret_key = self._orig_jwt_secret
 
         # Clean up temp directory
         try:
@@ -524,7 +540,7 @@ class TestAdminResetPassword:
 
 
 class TestUpdateUserActiveStatus:
-    """Tests for PATCH /users/{user_id}/active-status endpoint."""
+    """Tests for PATCH /users/{user_id}/active endpoint."""
 
     @pytest.fixture(autouse=True)
     def setup(self):
@@ -587,6 +603,12 @@ class TestUpdateUserActiveStatus:
         self.test_pool = test_pool
         self.original_get_pool = original_get_pool
 
+        from app.config import settings
+        self._orig_users_enabled = settings.users_enabled
+        self._orig_jwt_secret = settings.jwt_secret_key
+        settings.users_enabled = True
+        settings.jwt_secret_key = os.environ["JWT_SECRET_KEY"]
+
         self.client = TestClient(app)
 
         yield
@@ -599,6 +621,8 @@ class TestUpdateUserActiveStatus:
         # Restore original get_pool
         users.get_pool = self.original_get_pool
         self.test_pool.close_all()
+        settings.users_enabled = self._orig_users_enabled
+        settings.jwt_secret_key = self._orig_jwt_secret
 
         # Clean up temp directory
         try:
@@ -610,14 +634,14 @@ class TestUpdateUserActiveStatus:
         """Admin can deactivate a user."""
         token = get_token(self.admin_id, "admin", "admin")
         response = self.client.patch(
-            f"/users/{self.member_id}/active-status",
+            f"/users/{self.member_id}/active",
             json={"is_active": False},
             headers={"Authorization": f"Bearer {token}"},
         )
 
         assert response.status_code == 200
         data = response.json()
-        assert data["id"] == self.member_id
+        assert data["user_id"] == self.member_id
         assert data["is_active"] is False
         assert data["message"] == "User deactivated"
 
@@ -637,7 +661,7 @@ class TestUpdateUserActiveStatus:
 
         token = get_token(self.admin_id, "admin", "admin")
         response = self.client.patch(
-            f"/users/{self.member_id}/active-status",
+            f"/users/{self.member_id}/active",
             json={"is_active": True},
             headers={"Authorization": f"Bearer {token}"},
         )
@@ -651,7 +675,7 @@ class TestUpdateUserActiveStatus:
         """Cannot deactivate your own account (returns 400)."""
         token = get_token(self.admin_id, "admin", "admin")
         response = self.client.patch(
-            f"/users/{self.admin_id}/active-status",
+            f"/users/{self.admin_id}/active",
             json={"is_active": False},
             headers={"Authorization": f"Bearer {token}"},
         )
@@ -667,7 +691,7 @@ class TestUpdateUserActiveStatus:
         """
         token = get_token(self.admin_id, "admin", "admin")
         response = self.client.patch(
-            f"/users/{self.admin_id}/active-status",
+            f"/users/{self.admin_id}/active",
             json={"is_active": False},
             headers={"Authorization": f"Bearer {token}"},
         )
@@ -683,7 +707,7 @@ class TestUpdateUserActiveStatus:
         """
         token = get_token(self.superadmin_id, "superadmin", "superadmin")
         response = self.client.patch(
-            f"/users/{self.superadmin_id}/active-status",
+            f"/users/{self.superadmin_id}/active",
             json={"is_active": False},
             headers={"Authorization": f"Bearer {token}"},
         )
@@ -722,7 +746,7 @@ class TestUpdateUserActiveStatus:
         """Can deactivate an admin when other admins/superadmins exist."""
         token = get_token(self.superadmin_id, "superadmin", "superadmin")
         response = self.client.patch(
-            f"/users/{self.admin_id}/active-status",
+            f"/users/{self.admin_id}/active",
             json={"is_active": False},
             headers={"Authorization": f"Bearer {token}"},
         )
@@ -735,7 +759,7 @@ class TestUpdateUserActiveStatus:
         """Non-admin user gets 403 Forbidden."""
         token = get_token(self.member_id, "member", "member")
         response = self.client.patch(
-            f"/users/{self.viewer_id}/active-status",
+            f"/users/{self.viewer_id}/active",
             json={"is_active": False},
             headers={"Authorization": f"Bearer {token}"},
         )
@@ -746,7 +770,7 @@ class TestUpdateUserActiveStatus:
         """Updating non-existent user returns 404."""
         token = get_token(self.admin_id, "admin", "admin")
         response = self.client.patch(
-            "/users/99999/active-status",
+            "/users/99999/active",
             json={"is_active": False},
             headers={"Authorization": f"Bearer {token}"},
         )
@@ -757,7 +781,7 @@ class TestUpdateUserActiveStatus:
     def test_unauthenticated_returns_401(self):
         """Request without token returns 401."""
         response = self.client.patch(
-            f"/users/{self.member_id}/active-status",
+            f"/users/{self.member_id}/active",
             json={"is_active": False},
         )
         assert response.status_code == 401
@@ -766,7 +790,7 @@ class TestUpdateUserActiveStatus:
         """Viewer can be deactivated by admin."""
         token = get_token(self.admin_id, "admin", "admin")
         response = self.client.patch(
-            f"/users/{self.viewer_id}/active-status",
+            f"/users/{self.viewer_id}/active",
             json={"is_active": False},
             headers={"Authorization": f"Bearer {token}"},
         )
@@ -835,6 +859,12 @@ class TestActiveStatusWithMultipleAdmins:
         self.test_pool = test_pool
         self.original_get_pool = original_get_pool
 
+        from app.config import settings
+        self._orig_users_enabled = settings.users_enabled
+        self._orig_jwt_secret = settings.jwt_secret_key
+        settings.users_enabled = True
+        settings.jwt_secret_key = os.environ["JWT_SECRET_KEY"]
+
         self.client = TestClient(app)
 
         yield
@@ -847,6 +877,8 @@ class TestActiveStatusWithMultipleAdmins:
         # Restore original get_pool
         users.get_pool = self.original_get_pool
         self.test_pool.close_all()
+        settings.users_enabled = self._orig_users_enabled
+        settings.jwt_secret_key = self._orig_jwt_secret
 
         # Clean up temp directory
         try:
@@ -858,7 +890,7 @@ class TestActiveStatusWithMultipleAdmins:
         """With multiple admins, one can deactivate another admin."""
         token = get_token(self.superadmin_id, "superadmin", "superadmin")
         response = self.client.patch(
-            f"/users/{self.admin2_id}/active-status",
+            f"/users/{self.admin2_id}/active",
             json={"is_active": False},
             headers={"Authorization": f"Bearer {token}"},
         )
@@ -879,7 +911,7 @@ class TestActiveStatusWithMultipleAdmins:
 
         # Deactivate admin2
         response = self.client.patch(
-            f"/users/{self.admin2_id}/active-status",
+            f"/users/{self.admin2_id}/active",
             json={"is_active": False},
             headers={"Authorization": f"Bearer {token}"},
         )

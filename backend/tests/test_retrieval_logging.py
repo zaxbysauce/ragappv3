@@ -45,9 +45,18 @@ sys.modules["unstructured.documents"] = _unstructured.documents
 sys.modules["unstructured.documents.elements"] = _unstructured.documents.elements
 
 
+import pytest
+
 from app.services.embeddings import EmbeddingService
 from app.services.rag_engine import RAGEngine
 from app.services.vector_store import VectorStore
+
+
+@pytest.fixture(autouse=True)
+def _patch_ssrf():
+    with patch("app.services.embeddings.assert_url_safe"), \
+         patch("app.services.llm_client.assert_url_safe"):
+        yield
 
 
 class FakeEmbeddingService:
@@ -106,7 +115,7 @@ class RetrievalLoggingTests(unittest.IsolatedAsyncioTestCase):
 
         # Capture logs
         with self.assertLogs("app.services.rag_engine", level="INFO") as log:
-            result, _, _, _, _, _, _, _, _, _ = await engine._execute_retrieval(
+            result, *_ = await engine._execute_retrieval(
                 query_embeddings, "test query", vault_id=1
             )
 
@@ -142,7 +151,7 @@ class RetrievalLoggingTests(unittest.IsolatedAsyncioTestCase):
 
         # Capture logs
         with self.assertLogs("app.services.rag_engine", level="INFO") as log:
-            result, _, _, _, _, _, _, _, _, _ = await engine._execute_retrieval(
+            result, *_ = await engine._execute_retrieval(
                 query_embeddings, "test query", vault_id=42
             )
 
@@ -197,7 +206,7 @@ class RetrievalLoggingTests(unittest.IsolatedAsyncioTestCase):
 
             # Capture logs
             with self.assertLogs("app.services.rag_engine", level="INFO") as log:
-                result, _, _, _, _, _, _, _, _, _ = await engine._execute_retrieval(
+                result, *_ = await engine._execute_retrieval(
                     query_embeddings, "test query", vault_id=1
                 )
 
@@ -251,7 +260,7 @@ class RetrievalLoggingTests(unittest.IsolatedAsyncioTestCase):
 
             # Capture logs
             with self.assertLogs("app.services.rag_engine", level="INFO") as log:
-                result, _, _, _, _, _, _, _, _, _ = await engine._execute_retrieval(
+                result, *_ = await engine._execute_retrieval(
                     query_embeddings, "test query", vault_id=1
                 )
 
@@ -299,7 +308,7 @@ class RetrievalLoggingTests(unittest.IsolatedAsyncioTestCase):
 
             # Capture logs
             with self.assertLogs("app.services.rag_engine", level="INFO") as log:
-                result, _, _, _, _, _, _, _, _, _ = await engine._execute_retrieval(
+                result, *_ = await engine._execute_retrieval(
                     query_embeddings, "test query", vault_id=1
                 )
 

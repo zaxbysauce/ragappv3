@@ -169,17 +169,17 @@ class TestAuthIntegration(unittest.TestCase):
         self.assertEqual(data["role"], "admin")
 
     def test_invalid_bearer_token_rejected_with_403(self):
-        """Test that invalid JWT Bearer token returns 403."""
+        """Test that invalid JWT Bearer token returns 401."""
         # Make request with invalid Bearer token
         headers = {"Authorization": "Bearer invalid-token"}
         response = self.client.get("/api/auth/me", headers=headers)
 
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 401)
         data = response.json()
         self.assertIn("detail", data)
 
     def test_expired_jwt_token_rejected_with_403(self):
-        """Test that expired JWT token returns 403."""
+        """Test that expired JWT token returns 401."""
         from datetime import datetime, timedelta, timezone
 
         import jwt
@@ -198,7 +198,7 @@ class TestAuthIntegration(unittest.TestCase):
         headers = {"Authorization": f"Bearer {expired_token}"}
         response = self.client.get("/api/auth/me", headers=headers)
 
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 401)
         data = response.json()
         self.assertIn("detail", data)
 

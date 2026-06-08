@@ -56,6 +56,7 @@ class TestMultiScaleSearchSemaphore(unittest.IsolatedAsyncioTestCase):
         store.table.list_indices = AsyncMock(return_value=[])
         store.table.count_rows = AsyncMock(return_value=0)
         store._embedding_dim = self.embedding_dim
+        store._search_semaphore = asyncio.Semaphore(4)
         return store
 
     @pytest.mark.asyncio
@@ -82,6 +83,7 @@ class TestMultiScaleSearchSemaphore(unittest.IsolatedAsyncioTestCase):
             query_text="",
             hybrid=True,
             hybrid_alpha=0.5,
+            **kwargs,
         ):
             return [{"id": f"doc_{scale}", "text": f"From {scale}", "_rrf_score": 0.5}]
 
@@ -98,6 +100,7 @@ class TestMultiScaleSearchSemaphore(unittest.IsolatedAsyncioTestCase):
         # Use 3 scales
         with patch("app.services.vector_store.settings") as mock_settings:
             mock_settings.multi_scale_indexing_enabled = True
+            mock_settings.multi_scale_rrf_k = 60
             mock_settings.multi_scale_chunk_sizes = "512,1024,2048"
 
             # Search should NOT raise - should handle the exception gracefully
@@ -127,6 +130,7 @@ class TestMultiScaleSearchSemaphore(unittest.IsolatedAsyncioTestCase):
             query_text="",
             hybrid=True,
             hybrid_alpha=0.5,
+            **kwargs,
         ):
             # All scales fail
             raise RuntimeError(f"Simulated failure for scale {scale}")
@@ -143,6 +147,7 @@ class TestMultiScaleSearchSemaphore(unittest.IsolatedAsyncioTestCase):
         # Use 3 scales that all will fail
         with patch("app.services.vector_store.settings") as mock_settings:
             mock_settings.multi_scale_indexing_enabled = True
+            mock_settings.multi_scale_rrf_k = 60
             mock_settings.multi_scale_chunk_sizes = "512,1024,2048"
 
             # Should NOT raise - should return empty list gracefully
@@ -179,6 +184,7 @@ class TestMultiScaleSemaphoreConcurrency(unittest.IsolatedAsyncioTestCase):
         store.table.list_indices = AsyncMock(return_value=[])
         store.table.count_rows = AsyncMock(return_value=0)
         store._embedding_dim = self.embedding_dim
+        store._search_semaphore = asyncio.Semaphore(4)
         return store
 
     @pytest.mark.asyncio
@@ -203,6 +209,7 @@ class TestMultiScaleSemaphoreConcurrency(unittest.IsolatedAsyncioTestCase):
             query_text="",
             hybrid=True,
             hybrid_alpha=0.5,
+            **kwargs,
         ):
             nonlocal max_concurrent, current_concurrent
 
@@ -228,6 +235,7 @@ class TestMultiScaleSemaphoreConcurrency(unittest.IsolatedAsyncioTestCase):
         # Use 6 scales to test concurrency limiting
         with patch("app.services.vector_store.settings") as mock_settings:
             mock_settings.multi_scale_indexing_enabled = True
+            mock_settings.multi_scale_rrf_k = 60
             mock_settings.multi_scale_chunk_sizes = "256,512,768,1024,1536,2048"
 
             await store.search(
@@ -256,6 +264,7 @@ class TestMultiScaleSemaphoreConcurrency(unittest.IsolatedAsyncioTestCase):
             query_text="",
             hybrid=True,
             hybrid_alpha=0.5,
+            **kwargs,
         ):
             # Each task takes 0.01s
             await asyncio.sleep(0.01)
@@ -273,6 +282,7 @@ class TestMultiScaleSemaphoreConcurrency(unittest.IsolatedAsyncioTestCase):
         # Use 6 scales to test parallel execution
         with patch("app.services.vector_store.settings") as mock_settings:
             mock_settings.multi_scale_indexing_enabled = True
+            mock_settings.multi_scale_rrf_k = 60
             mock_settings.multi_scale_chunk_sizes = "256,512,768,1024,1536,2048"
 
             start_time = time.perf_counter()
@@ -310,6 +320,7 @@ class TestMultiScaleSemaphoreConcurrency(unittest.IsolatedAsyncioTestCase):
             query_text="",
             hybrid=True,
             hybrid_alpha=0.5,
+            **kwargs,
         ):
             nonlocal max_concurrent, current_concurrent
 
@@ -333,6 +344,7 @@ class TestMultiScaleSemaphoreConcurrency(unittest.IsolatedAsyncioTestCase):
         # Use exactly 4 scales (boundary test)
         with patch("app.services.vector_store.settings") as mock_settings:
             mock_settings.multi_scale_indexing_enabled = True
+            mock_settings.multi_scale_rrf_k = 60
             mock_settings.multi_scale_chunk_sizes = "256,512,1024,2048"
 
             await store.search(
@@ -367,6 +379,7 @@ class TestMultiScaleSearchEdgeCases(unittest.IsolatedAsyncioTestCase):
         store.table.list_indices = AsyncMock(return_value=[])
         store.table.count_rows = AsyncMock(return_value=0)
         store._embedding_dim = self.embedding_dim
+        store._search_semaphore = asyncio.Semaphore(4)
         return store
 
     @pytest.mark.asyncio
@@ -396,6 +409,10 @@ class TestMultiScaleSearchEdgeCases(unittest.IsolatedAsyncioTestCase):
         store.table = MagicMock()
         store.table.list_indices = AsyncMock(return_value=[])
         store.table.count_rows = AsyncMock(return_value=0)
+        query_mock = MagicMock()
+        query_mock.where.return_value = query_mock
+        query_mock.limit.return_value.to_list = AsyncMock(return_value=[])
+        store.table.search = AsyncMock(return_value=query_mock)
 
         # Disable multi-scale
         with patch("app.services.vector_store.settings") as mock_settings:
@@ -435,6 +452,7 @@ class TestMultiScaleSearchEdgeCases(unittest.IsolatedAsyncioTestCase):
             query_text="",
             hybrid=True,
             hybrid_alpha=0.5,
+            **kwargs,
         ):
             queried_scales.append(scale)
             return scale_results.get(scale, [])
@@ -450,6 +468,7 @@ class TestMultiScaleSearchEdgeCases(unittest.IsolatedAsyncioTestCase):
 
         with patch("app.services.vector_store.settings") as mock_settings:
             mock_settings.multi_scale_indexing_enabled = True
+            mock_settings.multi_scale_rrf_k = 60
             mock_settings.multi_scale_chunk_sizes = "512,1024"
 
             await store.search(
@@ -484,6 +503,7 @@ class TestMultiScaleSearchEdgeCases(unittest.IsolatedAsyncioTestCase):
             query_text="",
             hybrid=True,
             hybrid_alpha=0.5,
+            **kwargs,
         ):
             queried_scales.append(scale)
             return scale_results.get(scale, [])
@@ -500,6 +520,7 @@ class TestMultiScaleSearchEdgeCases(unittest.IsolatedAsyncioTestCase):
         # Test with whitespace around scale values
         with patch("app.services.vector_store.settings") as mock_settings:
             mock_settings.multi_scale_indexing_enabled = True
+            mock_settings.multi_scale_rrf_k = 60
             mock_settings.multi_scale_chunk_sizes = " 512 , 1024 "  # Whitespace
 
             await store.search(
@@ -536,6 +557,7 @@ class TestMultiScaleSearchEdgeCases(unittest.IsolatedAsyncioTestCase):
             query_text="",
             hybrid=True,
             hybrid_alpha=0.5,
+            **kwargs,
         ):
             queried_scales.append(scale)
             return scale_results.get(scale, [])
@@ -552,6 +574,7 @@ class TestMultiScaleSearchEdgeCases(unittest.IsolatedAsyncioTestCase):
         # Test with empty values between commas
         with patch("app.services.vector_store.settings") as mock_settings:
             mock_settings.multi_scale_indexing_enabled = True
+            mock_settings.multi_scale_rrf_k = 60
             mock_settings.multi_scale_chunk_sizes = "512,,1024"  # Empty value
 
             await store.search(
@@ -613,6 +636,7 @@ class TestMultiScaleSearchEdgeCases(unittest.IsolatedAsyncioTestCase):
             query_text="",
             hybrid=True,
             hybrid_alpha=0.5,
+            **kwargs,
         ):
             return scale_results.get(scale, [])
 
@@ -624,6 +648,7 @@ class TestMultiScaleSearchEdgeCases(unittest.IsolatedAsyncioTestCase):
 
         with patch("app.services.vector_store.settings") as mock_settings:
             mock_settings.multi_scale_indexing_enabled = True
+            mock_settings.multi_scale_rrf_k = 60
             mock_settings.multi_scale_chunk_sizes = "512,1024,2048"
 
             results = await store.search(

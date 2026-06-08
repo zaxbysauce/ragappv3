@@ -1,0 +1,211 @@
+module,total,passed,failed,error,skipped,dominant_signature
+tests.test_31_auto_assign_removal,6,6,0,0,0,
+tests.test_admin_token_warning,15,15,0,0,0,
+tests.test_admin_user_management,33,21,12,0,0, +  where N = <Response [N Not Found]>.status_code
+tests.test_adversarial_rag_fixes,20,20,0,0,0,
+tests.test_adversarial_security,58,21,37,0,0,app.services.ssrf.URLBlocked: URL host 'harrier-embed' did not resolve: [Errno -N] Name or service not known
+tests.test_api,3,1,2,0,0,RecursionError: maximum recursion depth exceeded in comparison
+tests.test_api_routes,24,3,21,0,0,AssertionError: N != N
+tests.test_assistant_sanitizer,13,13,0,0,0,
+tests.test_auth_integration,11,9,2,0,0,AssertionError: N != N
+tests.test_auth_rate_limiting,14,14,0,0,0,
+tests.test_auth_register,8,8,0,0,0,
+tests.test_auth_routes,25,24,1,0,0,AssertionError: 'Path=/knowledgevault/api/auth/refresh' not found in 'refresh_token=9LZUDLFa-TIB4_GFsxz0NP5fJQPOyHZMIah569aC0L0; HttpOnly; Max-Age=N; Path=/api/
+tests.test_auth_routes_adversarial,10,8,2,0,0,KeyError: 'access_token'
+tests.test_auth_service,16,16,0,0,0,
+tests.test_auth_service_async,11,11,0,0,0,
+tests.test_auth_service_async_adversarial,17,17,0,0,0,
+tests.test_auth_service_async_hash,20,19,1,0,0,AssertionError: N.N not less than N.N : Thread pool may be serializing: N calls took N.55s
+tests.test_auth_table_migration,22,21,1,0,0,  Use -v to get more diff
+tests.test_auto_name_default_title_guard,8,8,0,0,0,
+tests.test_auto_name_session,11,10,1,0,0,AssertionError: N != N
+tests.test_bottleneck_fixes,19,19,0,0,0,
+tests.test_build_files_fts_query,17,17,0,0,0,
+tests.test_build_files_fts_query_adversarial,37,37,0,0,0,
+tests.test_calculate_primary_count,14,13,1,0,0,AssertionError: N != N
+tests.test_change_password,12,12,0,0,0,
+tests.test_change_password_must_change_flag,2,2,0,0,0,
+tests.test_chat_auth,15,15,0,0,0,
+tests.test_chat_fork,3,3,0,0,0,
+tests.test_chat_list_sessions_user_filter,9,9,0,0,0,
+tests.test_chat_message_cleanup_migration,3,3,0,0,0,
+tests.test_chat_message_sanitization,3,0,3,0,0,sqlite3.OperationalError: no such table: vault_members
+tests.test_chat_mode,3,3,0,0,0,
+tests.test_chat_mode_dispatch,9,3,6,0,0,AssertionError: Expected 'RetrievalEvaluator' to be called once. Called N times.
+tests.test_chat_route_policy_di,3,3,0,0,0,
+tests.test_chat_sessions_adversarial,17,17,0,0,0,
+tests.test_chat_streaming,14,4,10,0,0,AttributeError: 'State' object has no attribute 'rag_engine'
+tests.test_circuit_breaker,32,29,3,0,0,AssertionError: Expected 'info' to be called once. Called N times.
+tests.test_citation_and_score_type,14,8,6,0,0,app.services.ssrf.URLBlocked: URL host 'harrier-embed' did not resolve: [Errno -N] Name or service not known
+tests.test_citation_validator,12,12,0,0,0,
+tests.test_config,9,3,6,0,0,AssertionError: PosixPath('data') != PosixPath('/data/knowledgevault')
+tests.test_config_alignment,110,108,0,0,2,
+tests.test_config_defaults_phase2,10,10,0,0,0,
+tests.test_config_health_api_key,11,11,0,0,0,
+tests.test_config_optimize_mode_default,15,15,0,0,0,
+tests.test_config_validators,16,16,0,0,0,
+tests.test_context_distiller,29,29,0,0,0,
+tests.test_contextual_chunking,42,37,5,0,0,app.services.llm_client.LLMError: LLM service unavailable
+tests.test_csrf,5,5,0,0,0,
+tests.test_csrf_adversarial,45,0,0,0,45,
+tests.test_csrf_auth,12,12,0,0,0,
+tests.test_csrf_integration,12,0,0,0,12,
+tests.test_csrf_runtime_error,6,6,0,0,0,
+tests.test_database,6,6,0,0,0,
+tests.test_deferred_index,17,8,9,0,0,TypeError: IvfPq() takes no arguments
+tests.test_deps_auth,50,38,12,0,0,TypeError: 'coroutine' object is not iterable
+tests.test_deps_auth_adversarial,36,15,21,0,0,sqlite3.OperationalError: no such table: vault_members
+tests.test_deps_auth_must_change_password,14,14,0,0,0,
+tests.test_deps_auth_to_thread,35,35,0,0,0,
+tests.test_deps_visibility_org,14,0,14,0,0," +  where <coroutine object get_effective_vault_permission at 0xADDR> = get_effective_vault_permission(<sqlite3.Connection object at 0xADDR>, {'id': N, 'role': "
+tests.test_document_actions_audit,15,10,5,0,0,RuntimeError: There is no current event loop in thread 'MainThread'.
+tests.test_document_processor,30,24,6,0,0,AttributeError: module 'pyarrow' has no attribute 'Array'
+tests.test_document_progress_async,17,15,2,0,0,app.services.document_processor.DocumentProcessingError: Database integrity error: FOREIGN KEY constraint failed
+tests.test_documents_auth,35,34,1,0,0,AttributeError: 'State' object has no attribute 'secret_manager'
+tests.test_documents_content_search,5,5,0,0,0,
+tests.test_documents_delete_audit,6,6,0,0,0,
+tests.test_email_service,67,66,1,0,0,+ sam
+tests.test_email_service_adversarial_fd_close,8,8,0,0,0,
+tests.test_email_service_imap_search_charset,5,5,0,0,0,
+tests.test_embeddings,13,0,13,0,0,app.services.ssrf.URLBlocked: URL host 'harrier-embed' did not resolve: [Errno -N] Name or service not known
+tests.test_embeddings_cache,34,21,13,0,0,app.services.ssrf.URLBlocked: URL host 'harrier-embed' did not resolve: [Errno -N] Name or service not known
+tests.test_embeddings_pooling,17,1,16,0,0,app.services.ssrf.URLBlocked: URL host 'harrier-embed' did not resolve: [Errno -N] Name or service not known
+tests.test_embeddings_pooling_adversarial,27,2,25,0,0,app.services.ssrf.URLBlocked: URL host 'harrier-embed' did not resolve: [Errno -N] Name or service not known
+tests.test_eval_endpoint,68,62,6,0,0,AssertionError: N != N
+tests.test_eval_feature_gate,3,1,2,0,0, +  where N = <Response [N Unauthorized]>.status_code
+tests.test_eval_harness,15,15,0,0,0,
+tests.test_exact_match_promote,8,0,8,0,0,app.services.ssrf.URLBlocked: URL host 'harrier-embed' did not resolve: [Errno -N] Name or service not known
+tests.test_exact_match_promote_adversarial,7,0,7,0,0,app.services.ssrf.URLBlocked: URL host 'host.docker.internal' did not resolve: [Errno -N] Name or service not known
+tests.test_file_watcher_adversarial,17,17,0,0,0,
+tests.test_file_watcher_path_alignment,7,7,0,0,0,
+tests.test_filter_relevant_reranked,10,10,0,0,0,
+tests.test_folders_routes,19,19,0,0,0,
+tests.test_fts_status_tracking,10,6,4,0,0,AttributeError: 'VectorStore' object has no attribute '_search_semaphore'
+tests.test_groups_auth,52,0,52,0,0,sqlite3.OperationalError: no such table: users
+tests.test_groups_eligible_members_policy,9,2,7,0,0,sqlite3.OperationalError: no such table: users
+tests.test_groups_membership,43,43,0,0,0,
+tests.test_groups_new_features,22,0,22,0,0,sqlite3.OperationalError: no such table: users
+tests.test_groups_policy_wiring,14,9,5,0,0,sqlite3.OperationalError: no such table: users
+tests.test_hybrid_logging,8,6,2,0,0,"AssertionError: False is not true : Expected dense-only DEBUG log. Got: ['INFO:app.services.vector_store:Multi-scale search: queried N scales, returning N resul"
+tests.test_hyde,22,20,2,0,0," +  where N = len([('original', 'What is gradient descent in neural networks?'), ('step_back', 'What are the general concepts in machine learning?')])"
+tests.test_ingestion_config_adversarial,59,59,0,0,0,
+tests.test_ingestion_config_task1_1,31,29,2,0,0,  + periodic
+tests.test_ingestion_integrity,23,18,5,0,0,TypeError: IvfPq() takes no arguments
+tests.test_ingestion_llm_enrichment,6,6,0,0,0,
+tests.test_ingestion_performance,10,0,10,0,0,app.services.ssrf.URLBlocked: URL host 'harrier-embed' did not resolve: [Errno -N] Name or service not known
+tests.test_init_table_adversarial,23,2,21,0,0,AttributeError: module 'pyarrow' has no attribute 'schema'
+tests.test_init_table_guard,9,1,8,0,0,AttributeError: module 'pyarrow' has no attribute 'schema'
+tests.test_integration,24,5,19,0,0,AssertionError: N != N
+tests.test_kms_retrieval,9,2,7,0,0,sqlite3.IntegrityError: UNIQUE constraint failed: vaults.id
+tests.test_kms_routes,21,21,0,0,0,
+tests.test_kms_routes_crud,14,14,0,0,0,
+tests.test_library_vault_id_config,14,11,3,0,0,RuntimeError: There is no current event loop in thread 'MainThread'.
+tests.test_lifespan_fts_validation,6,6,0,0,0,
+tests.test_lifespan_model_assertion,4,4,0,0,0,
+tests.test_lifespan_wiki_settings_reload,19,19,0,0,0,
+tests.test_llm_client_per_instance_breaker,7,0,7,0,0,app.services.ssrf.URLBlocked: URL host 'old.example' did not resolve: [Errno -N] Name or service not known
+tests.test_llm_health_dual,3,3,0,0,0,
+tests.test_llm_integration,8,2,6,0,0,app.services.ssrf.URLBlocked: URL host 'harrier-embed' did not resolve: [Errno -N] Name or service not known
+tests.test_llm_pool_config,6,6,0,0,0,
+tests.test_llm_thinking_suppression,8,0,8,0,0,app.services.ssrf.URLBlocked: URL host 'host.docker.internal' did not resolve: [Errno -N] Name or service not known
+tests.test_main_catchall,10,10,0,0,0,
+tests.test_maintenance,9,9,0,0,0,
+tests.test_memories_auth,7,7,0,0,0,
+tests.test_memories_authz_listing,9,9,0,0,0,
+tests.test_memory_capture_patterns,11,11,0,0,0,
+tests.test_memory_dense_search,12,12,0,0,0,
+tests.test_memory_hybrid_retrieval,10,10,0,0,0,
+tests.test_memory_regression,9,9,0,0,0,
+tests.test_memory_store,18,18,0,0,0,
+tests.test_multi_scale_rrf,2,2,0,0,0,
+tests.test_multiscale_adversarial,14,1,13,0,0,TypeError: object MagicMock can't be used in 'await' expression
+tests.test_multiscale_integration,10,0,10,0,0,app.services.ssrf.URLBlocked: URL host 'harrier-embed' did not resolve: [Errno -N] Name or service not known
+tests.test_multiscale_search,11,4,7,0,0,AssertionError: N != N
+tests.test_must_change_password_exempt_paths,7,7,0,0,0,
+tests.test_no_match_behavior,13,13,0,0,0,
+tests.test_normalize_uid_dedup,26,26,0,0,0,
+tests.test_org_member_field_names,9,0,9,0,0,sqlite3.OperationalError: no such table: users
+tests.test_org_membership_helpers,11,11,0,0,0,
+tests.test_organizations_routes,34,0,34,0,0,sqlite3.OperationalError: no such table: users
+tests.test_orphan_vault_id_removal,9,9,0,0,0,
+tests.test_parent_retrieval,23,23,0,0,0,
+tests.test_parent_window_prompt,3,3,0,0,0,
+tests.test_password_strength,40,39,1,0,0,KeyError: 'username'
+tests.test_path_prefix,32,30,2,0,0,  + /api/auth/refresh
+tests.test_phase2_coverage,11,11,0,0,0,
+tests.test_prompt_builder_citations,11,11,0,0,0,
+tests.test_prompt_builder_memory_labels,4,4,0,0,0,
+tests.test_prompt_injection,15,15,0,0,0,
+tests.test_query_transformer_conditional,10,10,0,0,0,
+tests.test_rag_engine,14,0,14,0,0,app.services.ssrf.URLBlocked: URL host 'harrier-embed' did not resolve: [Errno -N] Name or service not known
+tests.test_rag_engine_fallback_log,9,9,0,0,0,
+tests.test_rag_engine_filtering_adversarial,29,0,0,29,0,"failed on setup with ""app.services.ssrf.URLBlocked: URL host 'harrier-embed' did not resolve: [Errno -N] Name or service not known"""
+tests.test_rag_engine_hybrid_status,16,10,6,0,0,AttributeError: 'RAGEngine' object has no attribute '_kms_retrieval'
+tests.test_rag_engine_none_threshold_adversarial,7,0,0,7,0,"failed on setup with ""app.services.ssrf.URLBlocked: URL host 'harrier-embed' did not resolve: [Errno -N] Name or service not known"""
+tests.test_rag_engine_score_tracking,9,0,9,0,0,TypeError: FakeLLMClient.chat_completion() got an unexpected keyword argument 'max_tokens'
+tests.test_rag_engine_structured_memories,1,1,0,0,0,
+tests.test_rag_pipeline,20,10,10,0,0,TypeError: FakeLLMClient.chat_completion() got an unexpected keyword argument 'max_tokens'
+tests.test_rag_trace,2,2,0,0,0,
+tests.test_rate_limiting,46,46,0,0,0,
+tests.test_reconcile_lancedb_sqlite,18,18,0,0,0,
+tests.test_reranking_contract,26,18,8,0,0,assert False is True
+tests.test_retrieval_evaluator_failopen,3,3,0,0,0,
+tests.test_retrieval_logging,5,0,5,0,0,app.services.ssrf.URLBlocked: URL host 'harrier-embed' did not resolve: [Errno -N] Name or service not known
+tests.test_retrieval_regression,7,7,0,0,0,
+tests.test_retrieval_top_k_migration,9,8,1,0,0,app.services.ssrf.URLBlocked: URL host 'harrier-embed' did not resolve: [Errno -N] Name or service not known
+tests.test_rrf_fusion_config,6,6,0,0,0,
+tests.test_rrf_recency,9,9,0,0,0,
+tests.test_rrf_weights,12,12,0,0,0,
+tests.test_safe_concurrent_ingestion,4,2,2,0,0,  Use -v to get more diff
+tests.test_scan_directories_auth_change,7,7,0,0,0,
+tests.test_schema_unification,25,25,0,0,0,
+tests.test_score_sourcing,11,11,0,0,0,
+tests.test_search_auth,12,1,11,0,0,"AssertionError: N not found in [N, N]"
+tests.test_semantic_chunker,49,48,1,0,0,AssertionError: N not greater than N
+tests.test_session_backend_changes,38,22,16,0,0,AttributeError: module 'app.api.deps' has no attribute 'csrf_protect'
+tests.test_settings,24,0,24,0,0,AssertionError: N != N
+tests.test_settings_curator,17,16,1,0,0,"AssertionError: N != N : {""port"":N,""data_dir"":""/tmp/PATH"",""ollama_embedding_url"":""http://harrier-embed:N/v1/embeddings"",""ollama_chat_url"":""http://host.docker.in"
+tests.test_settings_live_propagation,27,16,11,0,0,app.services.ssrf.URLBlocked: URL host 'harrier-embed' did not resolve: [Errno -N] Name or service not known
+tests.test_settings_ssrf,18,14,4,0,0,AssertionError: N != N
+tests.test_sqlite_async,14,14,0,0,0,
+tests.test_ssrf,45,45,0,0,0,
+tests.test_ssrf_services,20,4,16,0,0,app.services.ssrf.URLBlocked: URL host 'N.N.N.N' resolves to a private / loopback / link-local address. Local service endpoints require ALLOW_LOCAL_SERVICES=N.
+tests.test_supersession,6,0,6,0,0,app.services.ssrf.URLBlocked: URL host 'harrier-embed' did not resolve: [Errno -N] Name or service not known
+tests.test_tags_routes,21,21,0,0,0,
+tests.test_token_packing,19,0,19,0,0,app.services.ssrf.URLBlocked: URL host 'harrier-embed' did not resolve: [Errno -N] Name or service not known
+tests.test_upload_path,4,1,3,0,0, +  where PosixPath('/data/vaults/N/uploads') = Path('/data/vaults/N/uploads')
+tests.test_upload_path_refactor,10,3,7,0,0,AssertionError: assert PosixPath('data/vaults/N/uploads') == PosixPath('/mocked/vaults/N/uploads')
+tests.test_user_org_roles,15,1,14,0,0, +  where N = <Response [N Unauthorized]>.status_code
+tests.test_users_routes,60,58,2,0,0,sqlite3.OperationalError: no such table: org_members
+tests.test_users_routes_adversarial,46,5,41,0,0,sqlite3.OperationalError: no such column: must_change_password
+tests.test_vault_create_permission,9,7,2,0,0,AssertionError: N != N
+tests.test_vault_document_permissions_regression,6,0,0,6,0,"failed on setup with ""sqlite3.IntegrityError: UNIQUE constraint failed: vaults.id"""
+tests.test_vault_group_access_routes,25,0,25,0,0,sqlite3.OperationalError: no such table: users
+tests.test_vault_id_schema,4,4,0,0,0,
+tests.test_vault_list_endpoint_distinction,18,12,6,0,0,"AssertionError: N != N : Expected N for member with no access on /vaults, got N: {'vaults': [{'id': N, 'name': 'Default', 'description': 'Default vault for all "
+tests.test_vault_members_integrity_error,10,8,2,0,0, +  where N = <Response [N Internal Server Error]>.status_code
+tests.test_vault_members_routes,14,1,13,0,0,sqlite3.OperationalError: no such table: users
+tests.test_vault_org_routes_adversarial,41,1,40,0,0,sqlite3.OperationalError: no such table: users
+tests.test_vault_path_migration,10,3,7,0,0, +    where exists = PosixPath('/tmp/PATH').exists
+tests.test_vault_permission_migration,11,11,0,0,0,
+tests.test_vault_query_limit,14,14,0,0,0,
+tests.test_vault_transaction_adversarial,14,13,1,0,0,AssertionError: N != N : Expected N but got N: {'detail': 'You are not a member of that organization'}
+tests.test_vault_transaction_fix,5,5,0,0,0,
+tests.test_vaults,68,38,30,0,0,AssertionError: N != N
+tests.test_vaults_auth,21,18,3,0,0,AssertionError: N != N
+tests.test_vaults_deps_async_await_fix,14,14,0,0,0,
+tests.test_vector_index_freshness_probe,6,6,0,0,0,
+tests.test_vector_index_seed_baseline,2,0,2,0,0,AttributeError: module 'pyarrow' has no attribute 'schema'
+tests.test_vector_store_async,46,45,1,0,0,TypeError: IvfPq() takes no arguments
+tests.test_vector_store_lock,11,10,1,0,0,AssertionError: N != N
+tests.test_vector_store_lock_adversarial,12,10,2,0,0,AssertionError: N.N != N.N
+tests.test_vector_store_search_guard,14,14,0,0,0,
+tests.test_wiki_compile_processor,67,67,0,0,0,
+tests.test_wiki_compiler,16,16,0,0,0,
+tests.test_wiki_curator,37,34,3,0,0,app.services.curator_ssrf.CuratorURLBlocked: Curator URL host 'N.N.N.N' resolves to a private / loopback / link-local address. Local curator endpoints require A
+tests.test_wiki_job_enqueue_gating,5,5,0,0,0,
+tests.test_wiki_linter,7,7,0,0,0,
+tests.test_wiki_retrieval,17,15,2,0,0,sqlite3.IntegrityError: UNIQUE constraint failed: vaults.id
+tests.test_wiki_routes,90,89,1,0,0,"AssertionError: N != N : {""id"":N,""vault_id"":N,""slug"":""boom"",""title"":""Boom"",""page_type"":""entity"",""markdown"":"""",""summary"":"""",""status"":""draft"",""confidence"":N.N,""cr"
+tests.test_wiki_store,58,58,0,0,0,
+tests.unit.api.test_deps_admin_baseline,18,0,18,0,0,TypeError: 'coroutine' object is not subscriptable

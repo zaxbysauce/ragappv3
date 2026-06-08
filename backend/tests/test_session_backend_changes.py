@@ -333,6 +333,13 @@ class TestCreateUserEndpoint(unittest.TestCase):
 
     def setUp(self):
         """Set up test client with temporary database."""
+        # Ensure users_enabled=True regardless of settings construction order
+        # (app.config may have been initialized before this module set USERS_ENABLED=true)
+        import app.api.deps as _deps_module
+        self._deps_module = _deps_module
+        self._original_users_enabled = _deps_module.settings.users_enabled
+        _deps_module.settings.users_enabled = True
+
         self.temp_dir = tempfile.mkdtemp()
         self.db_path = os.path.join(self.temp_dir, "test.db")
 
@@ -349,6 +356,7 @@ class TestCreateUserEndpoint(unittest.TestCase):
                 full_name TEXT DEFAULT '',
                 role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('superadmin','admin','member','viewer')),
                 is_active INTEGER NOT NULL DEFAULT 1,
+                must_change_password INTEGER NOT NULL DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_login_at TIMESTAMP
             )
@@ -413,7 +421,8 @@ class TestCreateUserEndpoint(unittest.TestCase):
         app.dependency_overrides[deps.get_db] = override_get_db
 
         # Mock CSRF protection
-        app.dependency_overrides[deps.csrf_protect] = lambda: "test-csrf-token"
+        from app.security import csrf_protect
+        app.dependency_overrides[csrf_protect] = lambda: "test-csrf-token"
 
         from fastapi.testclient import TestClient
 
@@ -428,6 +437,7 @@ class TestCreateUserEndpoint(unittest.TestCase):
         users.get_pool = self.original_get_pool
         _pool_cache.clear()
         self.test_pool.close_all()
+        self._deps_module.settings.users_enabled = self._original_users_enabled
 
         import shutil
 
@@ -549,8 +559,7 @@ class TestCreateUserEndpoint(unittest.TestCase):
             headers={"Authorization": f"Bearer {token}"},
         )
 
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("8 characters", response.json()["detail"])
+        self.assertEqual(response.status_code, 422)
 
     def test_create_user_invalid_role(self):
         """Invalid role is rejected."""

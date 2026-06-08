@@ -10,8 +10,17 @@ Two strategies are supported via settings.token_pack_strategy:
 
 from unittest.mock import patch
 
+import pytest
+
 from app.services.document_retrieval import RAGSource
 from app.services.rag_engine import RAGEngine
+
+
+@pytest.fixture(autouse=True)
+def _patch_ssrf():
+    with patch("app.services.embeddings.assert_url_safe"), \
+         patch("app.services.llm_client.assert_url_safe"):
+        yield
 
 
 def make_chunk(text: str, file_id: str = "file1", score: float = 0.9) -> RAGSource:

@@ -27,7 +27,7 @@ from app.api.deps import VAULT_PERMISSION_LEVELS, get_effective_vault_permission
 @pytest.fixture
 def db_conn():
     """Create an in-memory SQLite DB with the required schema."""
-    conn = sqlite3.connect(":memory:")
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
     conn.execute("PRAGMA foreign_keys = ON")
 
     # vaults table
@@ -108,7 +108,7 @@ def db_conn():
 # ─────────────────────────────────────────────────────────────────────────────
 # Test 1: Admin user, no explicit vault membership → gets write (level 2)
 # ─────────────────────────────────────────────────────────────────────────────
-def test_admin_user_no_vault_membership_gets_write(db_conn):
+async def test_admin_user_no_vault_membership_gets_write(db_conn):
     """
     System admin users get vault-level write as a baseline floor, not full admin.
     This means they can read/write all vaults but cannot delete or manage members
@@ -116,7 +116,7 @@ def test_admin_user_no_vault_membership_gets_write(db_conn):
     """
     admin_principal = {"id": 10, "role": "admin"}
 
-    result = get_effective_vault_permissions(db_conn, admin_principal, [1, 2, 3, 4])
+    result = await get_effective_vault_permissions(db_conn, admin_principal, [1, 2, 3, 4])
 
     # Admin floor is level 2 ("write") with no vault_members entry
     assert result[1] == "write"
@@ -129,7 +129,7 @@ def test_admin_user_no_vault_membership_gets_write(db_conn):
 # Test 2: Admin user with explicit read membership → baseline write wins (level 2)
 # max of baseline floor and explicit membership
 # ─────────────────────────────────────────────────────────────────────────────
-def test_admin_user_with_explicit_read_membership_still_gets_write(db_conn):
+async def test_admin_user_with_explicit_read_membership_still_gets_write(db_conn):
     """
     When an admin has an explicit 'read' vault_members entry,
     the admin baseline floor (level 2) should win via max().
@@ -141,7 +141,7 @@ def test_admin_user_with_explicit_read_membership_still_gets_write(db_conn):
     db_conn.commit()
 
     admin_principal = {"id": 10, "role": "admin"}
-    result = get_effective_vault_permissions(db_conn, admin_principal, [1])
+    result = await get_effective_vault_permissions(db_conn, admin_principal, [1])
 
     # max(admin_baseline=2, explicit_read=1) = write
     assert result[1] == "write"
@@ -150,7 +150,7 @@ def test_admin_user_with_explicit_read_membership_still_gets_write(db_conn):
 # ─────────────────────────────────────────────────────────────────────────────
 # Test 3: Admin user with explicit write membership → write (level 2)
 # ─────────────────────────────────────────────────────────────────────────────
-def test_admin_user_with_explicit_write_membership_still_gets_write(db_conn):
+async def test_admin_user_with_explicit_write_membership_still_gets_write(db_conn):
     """
     When an admin has an explicit 'write' vault_members entry,
     the admin baseline floor (level 2) matches.
@@ -161,7 +161,7 @@ def test_admin_user_with_explicit_write_membership_still_gets_write(db_conn):
     db_conn.commit()
 
     admin_principal = {"id": 10, "role": "admin"}
-    result = get_effective_vault_permissions(db_conn, admin_principal, [1])
+    result = await get_effective_vault_permissions(db_conn, admin_principal, [1])
 
     # max(admin_baseline=2, explicit_write=2) = write
     assert result[1] == "write"
@@ -170,14 +170,14 @@ def test_admin_user_with_explicit_write_membership_still_gets_write(db_conn):
 # ─────────────────────────────────────────────────────────────────────────────
 # Test 4: Member user, no explicit vault membership → gets nothing (level 0)
 # ─────────────────────────────────────────────────────────────────────────────
-def test_member_user_no_vault_membership_gets_nothing(db_conn):
+async def test_member_user_no_vault_membership_gets_nothing(db_conn):
     """
     A regular 'member' user with no vault_members entry,
     no group access, and no org membership gets None (level 0).
     """
     member_principal = {"id": 20, "role": "member"}
 
-    result = get_effective_vault_permissions(db_conn, member_principal, [1, 2, 3, 4])
+    result = await get_effective_vault_permissions(db_conn, member_principal, [1, 2, 3, 4])
 
     # All private vaults should be None (no membership, no org membership for user 20)
     assert result[1] is None
@@ -191,7 +191,7 @@ def test_member_user_no_vault_membership_gets_nothing(db_conn):
 # ─────────────────────────────────────────────────────────────────────────────
 # Test 5: Superadmin user → still gets admin (level 3), superadmin bypass
 # ─────────────────────────────────────────────────────────────────────────────
-def test_superadmin_user_gets_admin_on_all_vaults(db_conn):
+async def test_superadmin_user_gets_admin_on_all_vaults(db_conn):
     """
     Superadmin role bypasses vault_members entirely and always gets admin.
     """
@@ -203,7 +203,7 @@ def test_superadmin_user_gets_admin_on_all_vaults(db_conn):
 
     superadmin_principal = {"id": 99, "role": "superadmin"}
 
-    result = get_effective_vault_permissions(db_conn, superadmin_principal, [1, 2, 3, 4])
+    result = await get_effective_vault_permissions(db_conn, superadmin_principal, [1, 2, 3, 4])
 
     # Superadmin bypasses vault_members — gets admin on all vaults regardless
     assert result[1] == "admin"
@@ -215,7 +215,7 @@ def test_superadmin_user_gets_admin_on_all_vaults(db_conn):
 # ─────────────────────────────────────────────────────────────────────────────
 # Test 6: Regular user with explicit admin membership → still gets admin
 # ─────────────────────────────────────────────────────────────────────────────
-def test_regular_user_with_explicit_admin_membership_gets_admin(db_conn):
+async def test_regular_user_with_explicit_admin_membership_gets_admin(db_conn):
     """
     A non-admin user with an explicit 'admin' vault_members entry
     still gets admin (unchanged behavior).
@@ -227,7 +227,7 @@ def test_regular_user_with_explicit_admin_membership_gets_admin(db_conn):
 
     regular_principal = {"id": 30, "role": "member"}
 
-    result = get_effective_vault_permissions(db_conn, regular_principal, [1])
+    result = await get_effective_vault_permissions(db_conn, regular_principal, [1])
 
     assert result[1] == "admin"
 
@@ -235,14 +235,14 @@ def test_regular_user_with_explicit_admin_membership_gets_admin(db_conn):
 # ─────────────────────────────────────────────────────────────────────────────
 # Test 7: Member user gets read on public vault (org membership not needed)
 # ─────────────────────────────────────────────────────────────────────────────
-def test_member_user_gets_read_on_public_vault(db_conn):
+async def test_member_user_gets_read_on_public_vault(db_conn):
     """
     Even without vault_members entry, a user gets read on public vaults
     if they are an org member (or no org_id is required for truly public).
     """
     member_principal = {"id": 20, "role": "member"}
 
-    result = get_effective_vault_permissions(db_conn, member_principal, [2])
+    result = await get_effective_vault_permissions(db_conn, member_principal, [2])
 
     # Public vault grants read to any user
     assert result[2] == "read"
@@ -251,13 +251,13 @@ def test_member_user_gets_read_on_public_vault(db_conn):
 # ─────────────────────────────────────────────────────────────────────────────
 # Test 8: Member user with org membership gets read on org vault
 # ─────────────────────────────────────────────────────────────────────────────
-def test_member_user_with_org_membership_gets_read_on_org_vault(db_conn):
+async def test_member_user_with_org_membership_gets_read_on_org_vault(db_conn):
     """
     User 999 is an org_member of org 100, so they get read on org_vault (id=3).
     """
     member_principal = {"id": 999, "role": "member"}
 
-    result = get_effective_vault_permissions(db_conn, member_principal, [3])
+    result = await get_effective_vault_permissions(db_conn, member_principal, [3])
 
     assert result[3] == "read"
 
@@ -265,14 +265,14 @@ def test_member_user_with_org_membership_gets_read_on_org_vault(db_conn):
 # ─────────────────────────────────────────────────────────────────────────────
 # Test 9: Admin user on public vault — baseline write floor applies
 # ─────────────────────────────────────────────────────────────────────────────
-def test_admin_user_on_public_vault_still_gets_write(db_conn):
+async def test_admin_user_on_public_vault_still_gets_write(db_conn):
     """
     Even on a public vault where regular users get 'read',
     admin users should still get 'write' via the baseline floor.
     """
     admin_principal = {"id": 10, "role": "admin"}
 
-    result = get_effective_vault_permissions(db_conn, admin_principal, [2])
+    result = await get_effective_vault_permissions(db_conn, admin_principal, [2])
 
     # max(admin_baseline=2, public_read=1) = write
     assert result[2] == "write"
@@ -281,7 +281,7 @@ def test_admin_user_on_public_vault_still_gets_write(db_conn):
 # ─────────────────────────────────────────────────────────────────────────────
 # Test 10: Admin user with group-based read access still gets write floor
 # ─────────────────────────────────────────────────────────────────────────────
-def test_admin_user_with_group_read_still_gets_write_floor(db_conn):
+async def test_admin_user_with_group_read_still_gets_write_floor(db_conn):
     """
     Admin with only group-based 'read' access still gets write floor
     because max(baseline=2, group_read=1) = write.
@@ -297,7 +297,7 @@ def test_admin_user_with_group_read_still_gets_write_floor(db_conn):
 
     admin_principal = {"id": 10, "role": "admin"}
 
-    result = get_effective_vault_permissions(db_conn, admin_principal, [1])
+    result = await get_effective_vault_permissions(db_conn, admin_principal, [1])
 
     # max(admin_baseline=2, group_read=1) = write
     assert result[1] == "write"
@@ -306,11 +306,11 @@ def test_admin_user_with_group_read_still_gets_write_floor(db_conn):
 # ─────────────────────────────────────────────────────────────────────────────
 # Test 11: Empty vault_ids list → returns empty dict
 # ─────────────────────────────────────────────────────────────────────────────
-def test_empty_vault_ids_returns_empty_dict(db_conn):
+async def test_empty_vault_ids_returns_empty_dict(db_conn):
     """Empty input returns empty dict (unchanged behavior)."""
     admin_principal = {"id": 10, "role": "admin"}
 
-    result = get_effective_vault_permissions(db_conn, admin_principal, [])
+    result = await get_effective_vault_permissions(db_conn, admin_principal, [])
 
     assert result == {}
 
@@ -321,11 +321,11 @@ def test_empty_vault_ids_returns_empty_dict(db_conn):
 # ─────────────────────────────────────────────────────────────────────────────
 # Test 13: User with no id → returns empty dict
 # ─────────────────────────────────────────────────────────────────────────────
-def test_principal_without_id_returns_empty_dict(db_conn):
+async def test_principal_without_id_returns_empty_dict(db_conn):
     """Principal without 'id' key returns empty dict (unchanged)."""
     no_id_principal = {"role": "admin"}
 
-    result = get_effective_vault_permissions(db_conn, no_id_principal, [1])
+    result = await get_effective_vault_permissions(db_conn, no_id_principal, [1])
 
     assert result == {}
 
@@ -333,7 +333,7 @@ def test_principal_without_id_returns_empty_dict(db_conn):
 # ─────────────────────────────────────────────────────────────────────────────
 # Test 14: Multi-vault request with mixed explicit permissions for admin
 # ─────────────────────────────────────────────────────────────────────────────
-def test_admin_mixed_vaults_takes_max(db_conn):
+async def test_admin_mixed_vaults_takes_max(db_conn):
     """
     Admin user requesting multiple vaults: explicit membership on some,
     no membership on others.
@@ -354,7 +354,7 @@ def test_admin_mixed_vaults_takes_max(db_conn):
     # Vault 2: max(baseline=2, explicit=1, public_read=1) = write
     # Vault 3: no explicit, no public/org — baseline=2 = write
     # Vault 4: no explicit, no public/org — baseline=2 = write
-    result = get_effective_vault_permissions(db_conn, admin_principal, [1, 2, 3, 4])
+    result = await get_effective_vault_permissions(db_conn, admin_principal, [1, 2, 3, 4])
 
     assert result[1] == "write"
     assert result[2] == "write"
@@ -365,7 +365,7 @@ def test_admin_mixed_vaults_takes_max(db_conn):
 # ─────────────────────────────────────────────────────────────────────────────
 # Test 15: Member user with higher explicit permission via group
 # ─────────────────────────────────────────────────────────────────────────────
-def test_member_user_via_group_write_gets_write(db_conn):
+async def test_member_user_via_group_write_gets_write(db_conn):
     """
     Non-admin user gets 'write' via group membership.
     No baseline floor for member, so group_write=2 is the result.
@@ -381,7 +381,7 @@ def test_member_user_via_group_write_gets_write(db_conn):
 
     regular_principal = {"id": 30, "role": "member"}
 
-    result = get_effective_vault_permissions(db_conn, regular_principal, [1])
+    result = await get_effective_vault_permissions(db_conn, regular_principal, [1])
 
     # member baseline=0, group_write=2 → write
     assert result[1] == "write"
@@ -390,7 +390,7 @@ def test_member_user_via_group_write_gets_write(db_conn):
 # ─────────────────────────────────────────────────────────────────────────────
 # Test 16: User with explicit permission on a vault wins over group permission
 # ─────────────────────────────────────────────────────────────────────────────
-def test_explicit_vault_permission_beats_group_permission(db_conn):
+async def test_explicit_vault_permission_beats_group_permission(db_conn):
     """
     When user has both explicit vault_members permission AND group access,
     the higher of the two should win.
@@ -408,7 +408,7 @@ def test_explicit_vault_permission_beats_group_permission(db_conn):
 
     regular_principal = {"id": 40, "role": "member"}
 
-    result = get_effective_vault_permissions(db_conn, regular_principal, [1])
+    result = await get_effective_vault_permissions(db_conn, regular_principal, [1])
 
     # max(explicit_read=1, group_write=2) = write
     assert result[1] == "write"
@@ -417,13 +417,13 @@ def test_explicit_vault_permission_beats_group_permission(db_conn):
 # ─────────────────────────────────────────────────────────────────────────────
 # Test 17: get_effective_vault_permission (single vault) delegates correctly
 # ─────────────────────────────────────────────────────────────────────────────
-def test_get_effective_vault_permission_single_vault(db_conn):
+async def test_get_effective_vault_permission_single_vault(db_conn):
     """Single vault variant should return a single value, not a dict."""
     from app.api.deps import get_effective_vault_permission
 
     admin_principal = {"id": 10, "role": "admin"}
 
-    result = get_effective_vault_permission(db_conn, admin_principal, 1)
+    result = await get_effective_vault_permission(db_conn, admin_principal, 1)
 
     assert result == "write"
 
@@ -431,13 +431,13 @@ def test_get_effective_vault_permission_single_vault(db_conn):
 # ─────────────────────────────────────────────────────────────────────────────
 # Test 18: get_effective_vault_permission with None vault_id → None
 # ─────────────────────────────────────────────────────────────────────────────
-def test_get_effective_vault_permission_none_vault_id(db_conn):
+async def test_get_effective_vault_permission_none_vault_id(db_conn):
     """None vault_id returns None immediately (unchanged behavior)."""
     from app.api.deps import get_effective_vault_permission
 
     admin_principal = {"id": 10, "role": "admin"}
 
-    result = get_effective_vault_permission(db_conn, admin_principal, None)
+    result = await get_effective_vault_permission(db_conn, admin_principal, None)
 
     assert result is None
 
@@ -445,7 +445,7 @@ def test_get_effective_vault_permission_none_vault_id(db_conn):
 # ─────────────────────────────────────────────────────────────────────────────
 # Test 19: Admin user can have multiple vaults with different explicit perms
 # ─────────────────────────────────────────────────────────────────────────────
-def test_admin_user_multiple_vaults_mixed_explicit_and_no_membership(db_conn):
+async def test_admin_user_multiple_vaults_mixed_explicit_and_no_membership(db_conn):
     """
     Admin user on vault 1 has explicit 'read', vault 2 has no entry.
     Both should resolve to 'write' via max(baseline=2, explicit=1/0).
@@ -457,7 +457,7 @@ def test_admin_user_multiple_vaults_mixed_explicit_and_no_membership(db_conn):
 
     admin_principal = {"id": 10, "role": "admin"}
 
-    result = get_effective_vault_permissions(db_conn, admin_principal, [1, 2])
+    result = await get_effective_vault_permissions(db_conn, admin_principal, [1, 2])
 
     # vault 1: max(2, 1) = write
     # vault 2: max(2, 0) = write

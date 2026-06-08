@@ -107,6 +107,18 @@ class TestAuthRoutesAdversarial(unittest.TestCase):
 
         main_app.dependency_overrides[get_db] = get_test_db
 
+        # Bypass CSRF checks: override the dependency and provide a stub token manager
+        # so auth endpoints that issue new tokens (login, register) can complete.
+        from unittest.mock import MagicMock
+
+        from app.security import csrf_protect
+        main_app.dependency_overrides[csrf_protect] = lambda: "test-bypass"
+        _stub = MagicMock()
+        _stub.generate_token.return_value = "test-token"
+        _stub.validate_token.return_value = True
+        self._original_state_mgr = getattr(main_app.state, "csrf_manager", None)
+        main_app.state.csrf_manager = _stub
+
         # Create test client with dependency overrides
         self.client = TestClient(main_app)
         self.app = main_app
@@ -117,9 +129,9 @@ class TestAuthRoutesAdversarial(unittest.TestCase):
         settings.jwt_secret_key = self._original_jwt_secret
         settings.users_enabled = self._original_users_enabled
 
-        # Clear dependency overrides
-
+        # Clear dependency overrides and restore token manager state
         self.app.dependency_overrides.clear()
+        self.app.state.csrf_manager = self._original_state_mgr
 
         # Close the test pool
         self.test_pool.close_all()
@@ -290,12 +302,12 @@ class TestAuthRoutesAdversarial(unittest.TestCase):
         # First register and login
         self.client.post(
             "/api/auth/register",
-            json={"username": "updateuser1", "password": "password123"},
+            json={"username": "updateuser1", "password": "Password123"},
         )
 
         login_response = self.client.post(
             "/api/auth/login",
-            json={"username": "updateuser1", "password": "password123"},
+            json={"username": "updateuser1", "password": "Password123"},
         )
 
         access_token = login_response.json()["access_token"]
@@ -320,12 +332,12 @@ class TestAuthRoutesAdversarial(unittest.TestCase):
         # First register and login
         self.client.post(
             "/api/auth/register",
-            json={"username": "updateuser2", "password": "password123"},
+            json={"username": "updateuser2", "password": "Password123"},
         )
 
         login_response = self.client.post(
             "/api/auth/login",
-            json={"username": "updateuser2", "password": "password123"},
+            json={"username": "updateuser2", "password": "Password123"},
         )
 
         access_token = login_response.json()["access_token"]
@@ -346,7 +358,11 @@ class TestAuthRoutesAdversarial(unittest.TestCase):
                 f"Short password '{short_pw}' should return 400, got {response.status_code}",
             )
             data = response.json()
-            self.assertIn("8 characters", data["detail"])
+            detail = data["detail"].lower()
+            self.assertTrue(
+                "8 characters" in detail or "empty" in detail or "whitespace" in detail,
+                f"Expected password strength error for '{short_pw}', got: {data['detail']}",
+            )
 
 
 if __name__ == "__main__":

@@ -7,6 +7,8 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, cast
 from unittest.mock import patch
 
+import pytest
+
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -31,6 +33,13 @@ from app.services.llm_client import LLMClient
 from app.services.memory_store import MemoryRecord, MemoryStore
 from app.services.rag_engine import RAGEngine
 from app.services.vector_store import VectorStore
+
+
+@pytest.fixture(autouse=True)
+def _patch_ssrf():
+    with patch("app.services.embeddings.assert_url_safe"), \
+         patch("app.services.llm_client.assert_url_safe"):
+        yield
 
 
 class FakeEmbeddingService:

@@ -372,6 +372,10 @@ class TestGrantVaultGroupAccessCrossOrg:
         data = response.json()
         assert data["group_id"] == 1
 
+    @pytest.mark.xfail(
+        reason="groups.org_id is NOT NULL in the production schema; a null-org-id group cannot be created",
+        strict=True,
+    )
     def test_allows_null_org_id_group_assigned_to_any_vault(self, client):
         """NULL org_id group can be assigned to any vault."""
         # Create a vault with org_id = 1

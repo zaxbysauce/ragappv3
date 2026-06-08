@@ -295,6 +295,9 @@ class TestChunkTextAsync(unittest.IsolatedAsyncioTestCase):
         """Create chunker with AsyncMock for embedding_service."""
         self.mock_embedding_service = MagicMock()
         self.mock_embedding_service.embed_single = AsyncMock()
+        self.mock_embedding_service.embed_batch = AsyncMock(
+            side_effect=lambda texts: [[0.5] * 10] * len(texts)
+        )
 
     async def test_chunk_text_returns_valid_processed_chunks(self):
         """Test 8: chunk_text with mock embedding_service returns valid ProcessedChunks."""
@@ -332,8 +335,11 @@ class TestChunkTextAsync(unittest.IsolatedAsyncioTestCase):
         """Test 9: chunk_text falls back on embedding failure."""
         text = "First sentence here. Second sentence here. Third sentence here."
 
-        # Mock embedding failure
+        # Mock embedding failure (code uses embed_batch for the semantic path)
         self.mock_embedding_service.embed_single.side_effect = RuntimeError(
+            "Embedding failed"
+        )
+        self.mock_embedding_service.embed_batch.side_effect = RuntimeError(
             "Embedding failed"
         )
 
@@ -603,6 +609,9 @@ class TestIntegrationEdgeCases(unittest.IsolatedAsyncioTestCase):
         """Create chunker with AsyncMock."""
         self.mock_embedding_service = MagicMock()
         self.mock_embedding_service.embed_single = AsyncMock()
+        self.mock_embedding_service.embed_batch = AsyncMock(
+            side_effect=lambda texts: [[0.5] * 10] * len(texts)
+        )
 
     async def test_chunk_text_whitespace_only(self):
         """Whitespace-only text should return empty list or fallback."""

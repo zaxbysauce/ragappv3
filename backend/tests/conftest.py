@@ -64,17 +64,83 @@ def _bypass_csrf_for_csrf_naive_tests(request):
             os.environ[env_key] = prev
 
 
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter():
+    """Reset the in-memory rate limiter and circuit breakers before every test.
+
+    Tests that share the FastAPI app instance share the same MemoryStorage
+    bucket. Without a reset, a test file that issues many requests to a
+    rate-limited endpoint can exhaust the quota and cause 429 errors in
+    subsequent test files, producing spurious failures.
+
+    Similarly, tests that trip the embeddings circuit breaker leave it open for
+    subsequent tests.
+    """
+    try:
+        from app.limiter import limiter
+        limiter.reset()
+    except (ImportError, AttributeError):
+        pass
+    try:
+        from app.services.circuit_breaker import embeddings_cb
+        embeddings_cb.reset()
+    except (ImportError, AttributeError):
+        pass
+    yield
+    try:
+        from app.limiter import limiter
+        limiter.reset()
+    except (ImportError, AttributeError):
+        pass
+    try:
+        from app.services.circuit_breaker import embeddings_cb
+        embeddings_cb.reset()
+    except (ImportError, AttributeError):
+        pass
+
+
 def pytest_configure(config):
     """Called before test collection.
 
     Sets environment variables and clears all app.* modules from the
     import cache so they re-import with test-compatible settings.
     """
+    # pandas' is_pyarrow_array() looks up pyarrow.Array from sys.modules at
+    # call time. Many test files stub sys.modules['pyarrow'] with a bare
+    # types.ModuleType that has no Array attribute, causing AttributeError.
+    # Fix: import pandas first (while pyarrow is absent), THEN install a rich
+    # stub with __getattr__ so pandas can import cleanly and later calls to
+    # is_pyarrow_array() return False gracefully.
+    import sys
+    import types as _types
+
+    # Import pandas before any pyarrow stub so it initialises without errors.
+    try:
+        import pandas  # noqa: F401
+    except ImportError:
+        pass
+
+    try:
+        import pyarrow  # noqa: F401
+    except ImportError:
+        # pyarrow not installed — install a stub whose __getattr__ returns a
+        # dummy class with __instancecheck__ = False so isinstance() checks pass.
+        class _StubMeta(type):
+            def __instancecheck__(cls, instance):
+                return False
+
+        _stub_cls = _StubMeta('_PyArrowStub', (), {})
+
+        class _PyArrowModule(_types.ModuleType):
+            def __getattr__(self, name):
+                return _stub_cls
+
+        _pa = _PyArrowModule('pyarrow')
+        sys.modules['pyarrow'] = _pa
+
     os.environ["ADMIN_SECRET_TOKEN"] = "test-admin-key"
     os.environ["USERS_ENABLED"] = "false"
     os.environ["JWT_SECRET_KEY"] = "test-jwt-secret-key-for-testing-only"
-
-    import sys
 
     app_keys = [
         k for k in list(sys.modules.keys()) if k == "app" or k.startswith("app.")

@@ -17,7 +17,15 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import pytest
+
 from app.services.llm_client import LLMClient
+
+
+@pytest.fixture(autouse=True)
+def _patch_ssrf():
+    with patch("app.services.llm_client.assert_url_safe"):
+        yield
 
 
 def _delta_chunk(content: str = None, reasoning: str = None) -> Dict:

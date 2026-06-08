@@ -187,7 +187,7 @@ class TestSettingsEndpoints(unittest.TestCase):
         self._original_chunk_size = settings.chunk_size
         self._original_rag_threshold = settings.rag_relevance_threshold
         # Override get_db to use a pool that allows cross-thread usage
-        from app.api.deps import get_db
+        from app.api.deps import get_current_active_user, get_db
         from app.models.database import get_pool
 
         self._test_pool = get_pool(str(TEST_DB_PATH))
@@ -199,8 +199,17 @@ class TestSettingsEndpoints(unittest.TestCase):
             finally:
                 self._test_pool.release_connection(conn)
 
+        from app.security import csrf_protect
+
         app.dependency_overrides[get_db] = override_get_db
+        app.dependency_overrides[get_current_active_user] = lambda: {
+            "id": 0, "username": "admin", "role": "superadmin",
+            "is_active": 1, "must_change_password": 0,
+        }
+        app.dependency_overrides[csrf_protect] = lambda: "test-csrf-token"
         self._get_db = get_db
+        self._get_current_active_user = get_current_active_user
+        self._csrf_protect = csrf_protect
 
     def tearDown(self):
         # Restore original values
@@ -208,6 +217,8 @@ class TestSettingsEndpoints(unittest.TestCase):
         settings.rag_relevance_threshold = self._original_rag_threshold
         # Restore get_db dependency
         app.dependency_overrides.pop(self._get_db, None)
+        app.dependency_overrides.pop(self._get_current_active_user, None)
+        app.dependency_overrides.pop(self._csrf_protect, None)
 
     def test_get_settings(self):
         """Test GET /api/settings returns current settings."""
@@ -224,7 +235,7 @@ class TestSettingsEndpoints(unittest.TestCase):
         payload = {
             "chunk_size": 1024,
             "rag_relevance_threshold": 0.5,
-            "embedding_batch_size": 256,
+            "embedding_batch_size": 64,  # max is 128
         }
 
         response = self.client.post("/api/settings", json=payload)
@@ -233,7 +244,7 @@ class TestSettingsEndpoints(unittest.TestCase):
         data = response.json()
         self.assertEqual(data["chunk_size"], 1024)
         self.assertEqual(data["rag_relevance_threshold"], 0.5)
-        self.assertEqual(data["embedding_batch_size"], 256)
+        self.assertEqual(data["embedding_batch_size"], 64)
 
     def test_post_settings_invalid_chunk_size(self):
         """Test POST /api/settings with invalid chunk_size returns 422."""
@@ -303,16 +314,28 @@ class TestMemoriesEndpoints(unittest.TestCase):
             finally:
                 self._connection_pool.release_connection(conn)
 
+        from app.api.deps import get_current_active_user
+        from app.security import csrf_protect
+
         app.dependency_overrides[get_db] = override_get_db
         app.dependency_overrides[get_memory_store] = lambda: test_store
+        app.dependency_overrides[get_current_active_user] = lambda: {
+            "id": 0, "username": "admin", "role": "superadmin",
+            "is_active": 1, "must_change_password": 0,
+        }
+        app.dependency_overrides[csrf_protect] = lambda: "test-csrf-token"
         self._test_store = test_store
         self._db_path = db_path
         self._get_db = get_db
         self._get_memory_store = get_memory_store
+        self._get_current_active_user = get_current_active_user
+        self._csrf_protect = csrf_protect
 
     def tearDown(self):
         app.dependency_overrides.pop(self._get_db, None)
         app.dependency_overrides.pop(self._get_memory_store, None)
+        app.dependency_overrides.pop(self._get_current_active_user, None)
+        app.dependency_overrides.pop(self._csrf_protect, None)
         if hasattr(self, "test_pool"):
             self.test_pool.close_all()
         if hasattr(self, "_connection_pool"):
@@ -567,11 +590,23 @@ class TestChatEndpoint(unittest.TestCase):
 
     def setUp(self):
         self.client = TestClient(app)
+        from app.api.deps import get_current_active_user
+        from app.security import csrf_protect
+
+        app.dependency_overrides[get_current_active_user] = lambda: {
+            "id": 0, "username": "admin", "role": "superadmin",
+            "is_active": 1, "must_change_password": 0,
+        }
+        app.dependency_overrides[csrf_protect] = lambda: "test-csrf-token"
+        self._get_current_active_user = get_current_active_user
+        self._csrf_protect = csrf_protect
 
     def tearDown(self):
         from app.api.deps import get_rag_engine
 
         app.dependency_overrides.pop(get_rag_engine, None)
+        app.dependency_overrides.pop(self._get_current_active_user, None)
+        app.dependency_overrides.pop(self._csrf_protect, None)
 
     def _set_mock_rag_engine(self, mock_query_fn):
         """Helper to override get_rag_engine with a mock that uses the given query function."""
@@ -601,7 +636,13 @@ class TestChatEndpoint(unittest.TestCase):
                         "metadata": {"source_file": "test2.txt"},
                     },
                 ],
-                "memories_used": ["Memory 1"],
+                "memories_used": [
+                    {
+                        "id": "1",
+                        "memory_label": "M1",
+                        "content": "Memory 1",
+                    }
+                ],
             }
 
         self._set_mock_rag_engine(mock_query)

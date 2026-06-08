@@ -92,14 +92,20 @@ class TestVaultQueryLimit(unittest.TestCase):
         )
         self.conn.commit()
 
-        # Mock get_effective_vault_permission and get_effective_vault_permissions
-        self._original_get_effective_vault_permission = None
-        self._original_get_effective_vault_permissions = None
+        # Save originals so tearDown can fully restore them.
+        import app.api.routes.vaults as _vaults_module
+        self._original_get_effective_vault_permission = _vaults_module.get_effective_vault_permission
+        self._original_get_effective_vault_permissions = _vaults_module.get_effective_vault_permissions
 
     def tearDown(self):
         """Clean up database connection and temp directory."""
         if hasattr(self, 'conn') and self.conn:
             self.conn.close()
+        import app.api.routes.vaults as _vaults_module
+        if self._original_get_effective_vault_permission is not None:
+            _vaults_module.get_effective_vault_permission = self._original_get_effective_vault_permission
+        if self._original_get_effective_vault_permissions is not None:
+            _vaults_module.get_effective_vault_permissions = self._original_get_effective_vault_permissions
         import shutil
         shutil.rmtree(self._temp_dir, ignore_errors=True)
 
@@ -133,8 +139,8 @@ class TestVaultQueryLimit(unittest.TestCase):
 
         # Mock the permission functions to return "admin" for all
         import app.api.routes.vaults as vaults_module
-        vaults_module.get_effective_vault_permission = MagicMock(return_value="admin")
-        vaults_module.get_effective_vault_permissions = MagicMock(return_value={vid: "admin" for vid in vault_ids})
+        vaults_module.get_effective_vault_permission = AsyncMock(return_value="admin")
+        vaults_module.get_effective_vault_permissions = AsyncMock(return_value={vid: "admin" for vid in vault_ids})
 
         try:
             # Run the async function
@@ -149,8 +155,8 @@ class TestVaultQueryLimit(unittest.TestCase):
                 self.assertIn(f"vault_{i:03d}", vault_names)
         finally:
             # Restore mocks
-            vaults_module.get_effective_vault_permission = MagicMock(return_value=None)
-            vaults_module.get_effective_vault_permissions = MagicMock(return_value={})
+            vaults_module.get_effective_vault_permission = AsyncMock(return_value=None)
+            vaults_module.get_effective_vault_permissions = AsyncMock(return_value={})
 
     def test_fetch_all_vaults_exactly_1000(self):
         """When exactly 1000 vaults exist, all are returned."""
@@ -162,7 +168,7 @@ class TestVaultQueryLimit(unittest.TestCase):
             self._create_vault_member(vid, 1)
 
         import app.api.routes.vaults as vaults_module
-        vaults_module.get_effective_vault_permissions = MagicMock(return_value={vid: "admin" for vid in vault_ids})
+        vaults_module.get_effective_vault_permissions = AsyncMock(return_value={vid: "admin" for vid in vault_ids})
 
         try:
             loop = asyncio.new_event_loop()
@@ -172,7 +178,7 @@ class TestVaultQueryLimit(unittest.TestCase):
             # All 1000 vaults should be returned
             self.assertEqual(len(vaults), 1000)
         finally:
-            vaults_module.get_effective_vault_permissions = MagicMock(return_value={})
+            vaults_module.get_effective_vault_permissions = AsyncMock(return_value={})
 
     # ===== 2. LIMIT is syntactically valid SQL =====
 
@@ -202,7 +208,7 @@ class TestVaultQueryLimit(unittest.TestCase):
         self._create_vault_member(vid, 1)
 
         import app.api.routes.vaults as vaults_module
-        vaults_module.get_effective_vault_permission = MagicMock(return_value="admin")
+        vaults_module.get_effective_vault_permission = AsyncMock(return_value="admin")
 
         try:
             loop = asyncio.new_event_loop()
@@ -213,12 +219,12 @@ class TestVaultQueryLimit(unittest.TestCase):
             self.assertEqual(vault.name, "test_vault")
             self.assertEqual(vault.id, vid)
         finally:
-            vaults_module.get_effective_vault_permission = MagicMock(return_value=None)
+            vaults_module.get_effective_vault_permission = AsyncMock(return_value=None)
 
     def test_fetch_vault_with_counts_nonexistent(self):
         """_fetch_vault_with_counts returns None for non-existent vault."""
         import app.api.routes.vaults as vaults_module
-        vaults_module.get_effective_vault_permission = MagicMock(return_value=None)
+        vaults_module.get_effective_vault_permission = AsyncMock(return_value=None)
 
         try:
             loop = asyncio.new_event_loop()
@@ -227,7 +233,7 @@ class TestVaultQueryLimit(unittest.TestCase):
 
             self.assertIsNone(vault)
         finally:
-            vaults_module.get_effective_vault_permission = MagicMock(return_value=None)
+            vaults_module.get_effective_vault_permission = AsyncMock(return_value=None)
 
     # ===== 4. Adversarial: LIMIT 1000 may truncate large deployments =====
 
@@ -241,7 +247,7 @@ class TestVaultQueryLimit(unittest.TestCase):
             self._create_vault_member(vid, 1)
 
         import app.api.routes.vaults as vaults_module
-        vaults_module.get_effective_vault_permissions = MagicMock(return_value={vid: "admin" for vid in vault_ids})
+        vaults_module.get_effective_vault_permissions = AsyncMock(return_value={vid: "admin" for vid in vault_ids})
 
         try:
             loop = asyncio.new_event_loop()
@@ -260,7 +266,7 @@ class TestVaultQueryLimit(unittest.TestCase):
             for i in range(1000, 1050):
                 self.assertNotIn(f"vault_{i:04d}", vault_names)
         finally:
-            vaults_module.get_effective_vault_permissions = MagicMock(return_value={})
+            vaults_module.get_effective_vault_permissions = AsyncMock(return_value={})
 
     def test_1050_vaults_50_truncated(self):
         """Exactly 1050 vaults - 50 should be truncated due to LIMIT."""
@@ -272,7 +278,7 @@ class TestVaultQueryLimit(unittest.TestCase):
             self._create_vault_member(vid, 1)
 
         import app.api.routes.vaults as vaults_module
-        vaults_module.get_effective_vault_permissions = MagicMock(return_value={vid: "admin" for vid in vault_ids})
+        vaults_module.get_effective_vault_permissions = AsyncMock(return_value={vid: "admin" for vid in vault_ids})
 
         try:
             loop = asyncio.new_event_loop()
@@ -292,7 +298,7 @@ class TestVaultQueryLimit(unittest.TestCase):
             intersection = truncated_names & returned_names
             self.assertEqual(len(intersection), 0, "Truncated vaults should not appear in results")
         finally:
-            vaults_module.get_effective_vault_permissions = MagicMock(return_value={})
+            vaults_module.get_effective_vault_permissions = AsyncMock(return_value={})
 
     # ===== 5. Adversarial: Admin expects full list =====
 
@@ -306,7 +312,7 @@ class TestVaultQueryLimit(unittest.TestCase):
             self._create_vault_member(vid, 1)
 
         import app.api.routes.vaults as vaults_module
-        vaults_module.get_effective_vault_permissions = MagicMock(return_value={vid: "admin" for vid in vault_ids})
+        vaults_module.get_effective_vault_permissions = AsyncMock(return_value={vid: "admin" for vid in vault_ids})
 
         try:
             loop = asyncio.new_event_loop()
@@ -325,7 +331,7 @@ class TestVaultQueryLimit(unittest.TestCase):
             self.assertNotIn("admin_vault_1000", vault_names)
             self.assertNotIn("admin_vault_1499", vault_names)
         finally:
-            vaults_module.get_effective_vault_permissions = MagicMock(return_value={})
+            vaults_module.get_effective_vault_permissions = AsyncMock(return_value={})
 
     def test_superadmin_gets_truncated_list(self):
         """Superadmin users calling /vaults also receive truncated results (by design)."""
@@ -337,7 +343,7 @@ class TestVaultQueryLimit(unittest.TestCase):
             self._create_vault_member(vid, 1)
 
         import app.api.routes.vaults as vaults_module
-        vaults_module.get_effective_vault_permissions = MagicMock(return_value={vid: "admin" for vid in vault_ids})
+        vaults_module.get_effective_vault_permissions = AsyncMock(return_value={vid: "admin" for vid in vault_ids})
 
         try:
             loop = asyncio.new_event_loop()
@@ -347,7 +353,7 @@ class TestVaultQueryLimit(unittest.TestCase):
             # Superadmin gets 1000, not 1200
             self.assertEqual(len(vaults), 1000)
         finally:
-            vaults_module.get_effective_vault_permissions = MagicMock(return_value={})
+            vaults_module.get_effective_vault_permissions = AsyncMock(return_value={})
 
 
 class TestVaultQueryLimitSQLiteVerification(unittest.TestCase):

@@ -118,6 +118,13 @@ def setup_db(monkeypatch):
 
     monkeypatch.setattr("app.config.settings.data_dir", Path(temp_dir))
     monkeypatch.setattr("app.config.settings.users_enabled", True)
+    monkeypatch.setattr("app.config.settings.jwt_secret_key", "test-jwt-secret-key-for-testing-only")
+
+    # Recreate module-level tokens using the patched key so they always match
+    # the verification key regardless of which file was imported first.
+    global admin_token, superadmin_token
+    admin_token = create_access_token(ADMIN_ID, "admin1", "admin")
+    superadmin_token = create_access_token(SUPERADMIN_ID, "superadmin1", "superadmin")
 
     yield db_path
 
@@ -130,7 +137,9 @@ def setup_db(monkeypatch):
 
 @pytest.fixture
 def client():
+    from app.security import csrf_protect
     app = FastAPI()
+    app.dependency_overrides[csrf_protect] = lambda: "test-bypass"
     app.include_router(users_router_module.router)  # router has prefix="/users" built-in
     return TestClient(app)
 

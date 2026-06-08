@@ -13,7 +13,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -117,7 +117,7 @@ class TestVaultAuthBase(unittest.TestCase):
 
         # Mock vector store for tests
         self._mock_vector_store = MagicMock()
-        self._mock_vector_store.delete_by_vault = MagicMock(return_value=0)
+        self._mock_vector_store.delete_by_vault = AsyncMock(return_value=0)
 
         app.dependency_overrides[get_db] = override_get_db
         app.dependency_overrides[get_vector_store] = lambda: self._mock_vector_store
@@ -269,7 +269,7 @@ class TestListVaultsAuthorization(TestVaultAuthBase):
     def test_member_sees_only_accessible_vaults(self):
         """Member user sees only vaults they have access to."""
         response = self.client.get(
-            "/api/vaults", headers=self._auth_headers(self._member_token())
+            "/api/vaults/accessible", headers=self._auth_headers(self._member_token())
         )
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -312,7 +312,8 @@ class TestListVaultsAuthorization(TestVaultAuthBase):
     def test_member_with_no_vault_access_sees_empty_list(self):
         """Member with no vault access sees empty list."""
         response = self.client.get(
-            "/api/vaults", headers=self._auth_headers(self._member_no_access_token())
+            "/api/vaults/accessible",
+            headers=self._auth_headers(self._member_no_access_token()),
         )
         self.assertEqual(response.status_code, 200)
         data = response.json()
