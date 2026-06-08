@@ -37,6 +37,7 @@ class TestOptionalCurrentUser(unittest.TestCase):
         with patch.object(settings, "users_enabled", False):
             result = asyncio.run(
                 _optional_current_user(
+                    request=MagicMock(),
                     authorization="Bearer sometoken",
                     db=MagicMock(),
                 )
@@ -50,6 +51,7 @@ class TestOptionalCurrentUser(unittest.TestCase):
         with patch.object(settings, "users_enabled", True):
             result = asyncio.run(
                 _optional_current_user(
+                    request=MagicMock(),
                     authorization=None,
                     db=MagicMock(),
                 )
@@ -69,6 +71,7 @@ class TestOptionalCurrentUser(unittest.TestCase):
             ):
                 result = asyncio.run(
                     _optional_current_user(
+                        request=MagicMock(),
                         authorization="Bearer badtoken",
                         db=MagicMock(),
                     )
@@ -88,6 +91,7 @@ class TestOptionalCurrentUser(unittest.TestCase):
             ):
                 result = asyncio.run(
                     _optional_current_user(
+                        request=MagicMock(),
                         authorization="Bearer validtoken",
                         db=MagicMock(),
                     )

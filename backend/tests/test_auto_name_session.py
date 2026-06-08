@@ -308,10 +308,9 @@ class TestAutoNameSession(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(fallback_queries), 1)
 
         fallback_params = fallback_queries[0]["params"]
-        # Should contain truncated message (first 50 chars + "...")
+        # Fallback now uses "New conversation" as the default title
         actual_title = fallback_params[0]
-        self.assertEqual(len(actual_title), 53)  # 50 + 3 for "..."
-        self.assertTrue(actual_title.endswith("..."))
+        self.assertEqual(actual_title, "New conversation")
 
     async def test_auto_name_fallback_title_too_short(self):
         """

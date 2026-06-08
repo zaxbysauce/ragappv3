@@ -223,8 +223,8 @@ class TestContextualizeChunks(unittest.TestCase):
             )
         )
 
-        # Chunk should still be marked as contextualized
-        self.assertTrue(result[0].metadata.get("contextualized"))
+        # Chunk should NOT be marked as contextualized when LLM fails
+        self.assertFalse(result[0].metadata.get("contextualized"))
         # Original text should remain unchanged (no context prepended)
         self.assertEqual(result[0].text, "Chunk content")
 
@@ -277,7 +277,7 @@ class TestContextualizeSingleChunk(unittest.TestCase):
         self.assertTrue(chunk.metadata["contextualized"])
 
     def test_metadata_contextualized_always_set(self):
-        """Test that contextualized is always set to True in metadata."""
+        """Test that contextualized metadata is always set (False on LLM error)."""
         from app.services.llm_client import LLMError
 
         self.mock_llm_client.chat_completion = AsyncMock(side_effect=LLMError("Error"))
@@ -294,7 +294,8 @@ class TestContextualizeSingleChunk(unittest.TestCase):
             )
         )
 
-        self.assertTrue(chunk.metadata["contextualized"])
+        # LLM error sets contextualized=False (not True)
+        self.assertFalse(chunk.metadata["contextualized"])
 
 
 class TestDependencyInjection(unittest.TestCase):
@@ -526,7 +527,7 @@ class TestRetryBehavior(unittest.TestCase):
         self.assertIn("Context on second try", chunk.metadata.get("contextual_context", ""))
 
     def test_all_three_attempts_fail(self):
-        """Test that all 3 attempts failing raises LLMError."""
+        """Test that all 3 attempts failing is caught by outer handler (no exception raised)."""
         from app.services.contextual_chunking import ContextualChunker, ProcessedChunk
         from app.services.llm_client import LLMError
 
@@ -540,20 +541,19 @@ class TestRetryBehavior(unittest.TestCase):
         chunker = ContextualChunker(llm_client=self.mock_llm_client)
         chunk = ProcessedChunk(text="Content", metadata={}, chunk_index=0)
 
-        # Should raise LLMError after all 3 attempts
-        with self.assertRaises(LLMError) as context:
-            asyncio.run(
-                chunker._contextualize_single_chunk(
-                    chunk=chunk,
-                    document_text="Document",
-                    chunk_index=0,
-                    total_chunks=1,
-                    source_filename="test.txt",
-                )
+        # LLMError from all 3 attempts is caught by outer handler — does not propagate
+        asyncio.run(
+            chunker._contextualize_single_chunk(
+                chunk=chunk,
+                document_text="Document",
+                chunk_index=0,
+                total_chunks=1,
+                source_filename="test.txt",
             )
+        )
 
         self.assertEqual(call_count[0], 3)
-        self.assertIn("attempt 3", str(context.exception))
+        self.assertFalse(chunk.metadata.get("contextualized"))
 
     def test_non_llm_error_bypasses_retry(self):
         """Test that non-LLMError exceptions bypass retry and propagate immediately."""
@@ -643,8 +643,8 @@ class TestRetryBehavior(unittest.TestCase):
 
         # Should have tried 3 times
         self.assertEqual(call_count[0], 3)
-        # Contextualized flag should still be set due to outer handler
-        self.assertTrue(chunk.metadata["contextualized"])
+        # Outer handler catches LLMError and sets contextualized=False
+        self.assertFalse(chunk.metadata["contextualized"])
 
 
 class TestIntegrationWithSanitization(unittest.TestCase):
@@ -667,7 +667,7 @@ class TestIntegrationWithSanitization(unittest.TestCase):
             return "Context"
 
         mock_llm_client = MagicMock()
-        mock_llm_client.chat_completion = AsyncMock(mock_chat_completion)
+        mock_llm_client.chat_completion = AsyncMock(side_effect=mock_chat_completion)
         chunker = ContextualChunker(llm_client=mock_llm_client)
 
         chunks = [ProcessedChunk(text="Content", metadata={}, chunk_index=0)]
