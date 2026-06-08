@@ -6,7 +6,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -33,7 +33,16 @@ class TestSanitizeOnPersist(unittest.TestCase):
         )
         self.conn.commit()
 
+        # Patch evaluate_policy so the route doesn't attempt a live DB lookup.
+        # These tests focus on sanitization behaviour, not authorization.
+        self._policy_patcher = patch(
+            "app.api.routes.chat.evaluate_policy",
+            new=AsyncMock(return_value=True),
+        )
+        self._policy_patcher.start()
+
     def tearDown(self):
+        self._policy_patcher.stop()
         try:
             self.conn.close()
         finally:
