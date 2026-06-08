@@ -87,6 +87,12 @@ class TestAPI(unittest.TestCase):
                 "error": None,
             }
         )
+        # check_chat_modes must return a JSON-serializable dict; an un-mocked
+        # AsyncMock returns a MagicMock which causes infinite recursion in the
+        # FastAPI response encoder.
+        mock_llm_checker.check_chat_modes = AsyncMock(
+            return_value={"thinking": False, "instant": False}
+        )
 
         mock_model_checker = AsyncMock()
         mock_model_checker.check_models = AsyncMock(
@@ -118,18 +124,27 @@ class TestAPI(unittest.TestCase):
 
     def test_get_api_settings_returns_expected_keys(self):
         """Test GET /api/settings returns expected configuration keys."""
-        response = self.client.get("/api/settings")
-        self.assertEqual(response.status_code, 200)
-        data = response.json()
+        from app.api.deps import get_current_active_user
 
-        expected_keys = [
-            "chunk_size",
-            "chunk_overlap",
-            "max_context_chunks",
-            "rag_relevance_threshold",
-        ]
-        for key in expected_keys:
-            self.assertIn(key, data)
+        app.dependency_overrides[get_current_active_user] = lambda: {
+            "id": 0, "username": "admin", "role": "superadmin",
+            "is_active": 1, "must_change_password": 0,
+        }
+        try:
+            response = self.client.get("/api/settings")
+            self.assertEqual(response.status_code, 200)
+            data = response.json()
+
+            expected_keys = [
+                "chunk_size",
+                "chunk_overlap",
+                "max_context_chunks",
+                "rag_relevance_threshold",
+            ]
+            for key in expected_keys:
+                self.assertIn(key, data)
+        finally:
+            app.dependency_overrides.pop(get_current_active_user, None)
 
 
 if __name__ == "__main__":

@@ -21,9 +21,41 @@ except ImportError:
 
 try:
     import pyarrow
+    if not hasattr(pyarrow, 'Array'):
+        # A stub module (no Array attribute) was registered by an earlier test
+        # file. pandas needs pyarrow.Array and pyarrow.ChunkedArray for its
+        # internal is_pyarrow_array() check. Provide dummy classes so pandas
+        # returns False rather than raising AttributeError.
+        import types
+
+        class _StubMeta(type):
+            def __instancecheck__(cls, instance):
+                return False
+
+        _stub_class = _StubMeta('_PyArrowStub', (), {})
+
+        class _PyArrowModule(types.ModuleType):
+            def __getattr__(self, name):
+                return _stub_class
+
+        _pa = _PyArrowModule('pyarrow')
+        _pa.__dict__.update(pyarrow.__dict__)
+        sys.modules['pyarrow'] = _pa
 except ImportError:
     import types
-    sys.modules['pyarrow'] = types.ModuleType('pyarrow')
+
+    class _StubMeta(type):
+        def __instancecheck__(cls, instance):
+            return False
+
+    _stub_class = _StubMeta('_PyArrowStub', (), {})
+
+    class _PyArrowModule(types.ModuleType):
+        def __getattr__(self, name):
+            return _stub_class
+
+    _pa = _PyArrowModule('pyarrow')
+    sys.modules['pyarrow'] = _pa
 
 try:
     from unstructured.partition.auto import partition
