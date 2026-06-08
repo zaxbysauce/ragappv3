@@ -11,6 +11,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import asyncio
+from unittest.mock import patch
 
 import pytest
 
@@ -20,6 +21,12 @@ from app.services.llm_client import (
     create_instant_client,
     create_thinking_client,
 )
+
+
+@pytest.fixture(autouse=True)
+def _patch_ssrf():
+    with patch("app.services.llm_client.assert_url_safe"):
+        yield
 
 
 def test_per_instance_circuit_breaker_distinct_objects():
