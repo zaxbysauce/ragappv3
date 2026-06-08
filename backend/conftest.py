@@ -22,11 +22,19 @@ sys.modules["lancedb.index"] = _lancedb.index
 # Stub pyarrow only when the real package is unavailable. Replacing a real
 # pyarrow install with an attribute-less stub breaks `import pandas`, because
 # pandas.compat.pyarrow reads `pyarrow.__version__` during its own import.
+# pandas._libs.lib also sets PYARROW_INSTALLED=True and caches pa=this stub,
+# so pa.Array must exist as a class whose isinstance() always returns False.
 try:
     import pyarrow  # noqa: F401
 except ImportError:
+    class _PyArrowStubMeta(type):
+        def __instancecheck__(cls, instance):
+            return False
+    _pa_stub_cls = _PyArrowStubMeta("_PyArrowStub", (), {})
     _pa_stub = types.ModuleType("pyarrow")
     _pa_stub.__version__ = "0.0.0"
+    _pa_stub.Array = _pa_stub_cls
+    _pa_stub.ChunkedArray = _pa_stub_cls
     sys.modules["pyarrow"] = _pa_stub
 
 # Stub numpy when not installed. vector_store.py imports numpy at the top level;

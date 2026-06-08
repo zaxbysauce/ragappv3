@@ -105,21 +105,42 @@ def pytest_configure(config):
     Sets environment variables and clears all app.* modules from the
     import cache so they re-import with test-compatible settings.
     """
-    # Pre-import pyarrow/pandas while real modules are available.
-    # Many test files stub sys.modules["pyarrow"] at module-level, which
-    # breaks pandas on subsequent imports. Caching them here first prevents
-    # later stubs from affecting already-loaded submodules.
+    # pandas' is_pyarrow_array() looks up pyarrow.Array from sys.modules at
+    # call time. Many test files stub sys.modules['pyarrow'] with a bare
+    # types.ModuleType that has no Array attribute, causing AttributeError.
+    # Fix: import pandas first (while pyarrow is absent), THEN install a rich
+    # stub with __getattr__ so pandas can import cleanly and later calls to
+    # is_pyarrow_array() return False gracefully.
+    import sys
+    import types as _types
+
+    # Import pandas before any pyarrow stub so it initialises without errors.
     try:
-        import pyarrow  # noqa: F401
         import pandas  # noqa: F401
     except ImportError:
         pass
 
+    try:
+        import pyarrow  # noqa: F401
+    except ImportError:
+        # pyarrow not installed — install a stub whose __getattr__ returns a
+        # dummy class with __instancecheck__ = False so isinstance() checks pass.
+        class _StubMeta(type):
+            def __instancecheck__(cls, instance):
+                return False
+
+        _stub_cls = _StubMeta('_PyArrowStub', (), {})
+
+        class _PyArrowModule(_types.ModuleType):
+            def __getattr__(self, name):
+                return _stub_cls
+
+        _pa = _PyArrowModule('pyarrow')
+        sys.modules['pyarrow'] = _pa
+
     os.environ["ADMIN_SECRET_TOKEN"] = "test-admin-key"
     os.environ["USERS_ENABLED"] = "false"
     os.environ["JWT_SECRET_KEY"] = "test-jwt-secret-key-for-testing-only"
-
-    import sys
 
     app_keys = [
         k for k in list(sys.modules.keys()) if k == "app" or k.startswith("app.")
