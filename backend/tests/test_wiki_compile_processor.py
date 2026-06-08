@@ -1,10 +1,13 @@
 """Tests for WikiCompileProcessor and the new WikiCompiler job methods."""
 
 import asyncio
+import logging
 import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 
 def _make_env():
@@ -567,6 +570,99 @@ class TestWikiCompileProcessorLifecycle(unittest.IsolatedAsyncioTestCase):
             row = conn.execute("SELECT status FROM wiki_compile_jobs").fetchone()
         # After start+stop, the orphan should have been reset to pending (then possibly processed)
         self.assertNotEqual(dict(row)["status"], "running")
+
+
+# ---------------------------------------------------------------------------
+# Regression for issue #106: SSE _publish_event must log at WARNING (not DEBUG)
+# when event delivery fails. Terminal-state notifications are operationally
+# significant and must not be silently dropped.
+# ---------------------------------------------------------------------------
+
+class TestPublishEventFailureLogging(unittest.TestCase):
+    """Ensure _publish_event surfaces failures at WARNING level (issue #106)."""
+
+    LOGGER_NAME = "app.services.wiki_compile_processor"
+
+    def _make_job(self):
+        return SimpleNamespace(id=42, vault_id=1, trigger_type="manual")
+
+    def _make_proc(self):
+        from unittest.mock import MagicMock
+
+        from app.services.wiki_compile_processor import WikiCompileProcessor
+
+        # _publish_event never touches self._pool, so a sentinel is fine.
+        return WikiCompileProcessor(pool=MagicMock())  # type: ignore[arg-type]
+
+    def test_publish_failure_emits_warning_with_traceback(self):
+        proc = self._make_proc()
+        with patch(
+            "app.services.wiki_events.get_wiki_event_bus",
+            side_effect=RuntimeError("simulated SSE bus failure"),
+        ):
+            with self.assertLogs(self.LOGGER_NAME, level=logging.DEBUG) as cap:
+                proc._publish_event(
+                    self._make_job(),
+                    "job_completed",
+                    result={"page": None, "claims": [], "entities": [], "skipped": False},
+                )
+
+        warnings = [r for r in cap.records if r.levelno >= logging.WARNING]
+        self.assertTrue(
+            warnings,
+            "Expected a WARNING-level log on SSE publish failure, got "
+            f"{[r.levelname for r in cap.records]}",
+        )
+        # Operators need the traceback to diagnose the failure.
+        self.assertTrue(
+            any(r.exc_info for r in warnings),
+            "Expected exc_info on the WARNING record so operators can see the cause",
+        )
+        # Message must include the context that helps an on-call engineer
+        # pinpoint the dropped terminal-state event.
+        msg = warnings[0].getMessage()
+        self.assertIn("event publish failed", msg)
+        self.assertIn("job_id=42", msg)
+        self.assertIn("vault_id=1", msg)
+        self.assertIn("event=job_completed", msg)
+
+    def test_publish_success_does_not_warn(self):
+        from app.services.wiki_events import WikiEventBus
+
+        class _StubBus(WikiEventBus):
+            def publish(self, vault_id, event):  # noqa: D401
+                return None
+
+        proc = self._make_proc()
+        records = []
+
+        class _CapturingHandler(logging.Handler):
+            def emit(self, record):
+                records.append(record)
+
+        logger = logging.getLogger(self.LOGGER_NAME)
+        handler = _CapturingHandler(level=logging.WARNING)
+        prev_level = logger.level
+        logger.addHandler(handler)
+        logger.setLevel(logging.WARNING)
+        try:
+            with patch(
+                "app.services.wiki_events.get_wiki_event_bus", return_value=_StubBus()
+            ):
+                proc._publish_event(
+                    self._make_job(),
+                    "job_completed",
+                    result={"page": None, "claims": [], "entities": [], "skipped": False},
+                )
+        finally:
+            logger.removeHandler(handler)
+            logger.setLevel(prev_level)
+        self.assertEqual(
+            [r for r in records if r.levelno >= logging.WARNING],
+            [],
+            "Expected no WARNING logs on successful publish, got: "
+            f"{[r.getMessage() for r in records]}",
+        )
 
 
 # ---------------------------------------------------------------------------
