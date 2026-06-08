@@ -283,7 +283,7 @@ class TestVaultCreatePermissionAutoGrant(unittest.TestCase):
         vault_id = resp.json()["id"]
 
         # List vaults as the same member user
-        list_resp = self.client.get("/api/vaults")
+        list_resp = self.client.get("/api/vaults/accessible")
         self.assertEqual(list_resp.status_code, 200)
         vault_ids = [v["id"] for v in list_resp.json()["vaults"]]
         self.assertIn(vault_id, vault_ids)
@@ -300,7 +300,7 @@ class TestVaultCreatePermissionAutoGrant(unittest.TestCase):
         # User B lists vaults — should NOT see user A's vault
         user_b, override_b = self._create_member_user()
         app.dependency_overrides[get_current_active_user] = override_b
-        list_resp = self.client.get("/api/vaults")
+        list_resp = self.client.get("/api/vaults/accessible")
         vault_ids = [v["id"] for v in list_resp.json()["vaults"]]
         self.assertNotIn(vault_id, vault_ids)
 

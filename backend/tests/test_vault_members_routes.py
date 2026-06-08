@@ -299,14 +299,14 @@ class TestAddVaultMember:
         assert response.status_code == 409
 
     def test_nonexistent_user_rejected(self, client):
-        """Non-existent user is rejected with 409 (FK constraint violation)."""
+        """Non-existent user is rejected with 404."""
         response = client.post(
             "/api/vaults/1/members",
             json={"member_user_id": 999, "permission": "read"},
             headers=auth_headers(superadmin_token),
         )
-        # Foreign key constraint fails, returns 409 Conflict
-        assert response.status_code == 409
+        # Route validates user existence before INSERT, returns 404
+        assert response.status_code == 404
 
     def test_invalid_permission_rejected(self, client):
         """Invalid permission is rejected with 422 from Pydantic."""

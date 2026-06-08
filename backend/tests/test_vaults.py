@@ -113,7 +113,9 @@ class TestVaultEndpoints(unittest.TestCase):
 
         # Mock vector store for delete tests
         self._mock_vector_store = MagicMock()
-        self._mock_vector_store.delete_by_vault = MagicMock(return_value=0)
+        self._mock_vector_store.delete_by_vault = AsyncMock(return_value=0)
+
+        from app.security import csrf_protect
 
         app.dependency_overrides[get_db] = override_get_db
         app.dependency_overrides[get_vector_store] = lambda: self._mock_vector_store
@@ -125,12 +127,15 @@ class TestVaultEndpoints(unittest.TestCase):
             "is_active": True,
             "must_change_password": False,
         }
+        app.dependency_overrides[csrf_protect] = lambda: "test-csrf-token"
+        self._csrf_protect = csrf_protect
         self._db_path = db_path
 
     def tearDown(self):
         app.dependency_overrides.pop(get_db, None)
         app.dependency_overrides.pop(get_vector_store, None)
         app.dependency_overrides.pop(get_current_active_user, None)
+        app.dependency_overrides.pop(self._csrf_protect, None)
         if hasattr(self, '_connection_pool'):
             self._connection_pool.close_all()
         import shutil
@@ -902,6 +907,9 @@ class TestVaultScopedRoutes(unittest.TestCase):
             return True
 
         app.dependency_overrides[get_evaluate_policy] = lambda: allow_policy
+        from app.security import csrf_protect
+        app.dependency_overrides[csrf_protect] = lambda: "test-csrf-token"
+        self._csrf_protect = csrf_protect
         self._db_path = db_path
 
     def tearDown(self):
@@ -912,6 +920,7 @@ class TestVaultScopedRoutes(unittest.TestCase):
         app.dependency_overrides.pop(get_memory_store, None)
         app.dependency_overrides.pop(get_rag_engine, None)
         app.dependency_overrides.pop(get_embedding_service, None)
+        app.dependency_overrides.pop(getattr(self, '_csrf_protect', None), None)
         for patcher in getattr(self, '_evaluate_policy_patches', []):
             patcher.stop()
         if hasattr(self, '_connection_pool'):
@@ -1205,8 +1214,8 @@ class TestVaultScopedRoutes(unittest.TestCase):
         mock_embedding.embed_single = AsyncMock(return_value=[0.1] * 768)
 
         mock_vs = MagicMock()
-        mock_vs.search = MagicMock(return_value=[])
-        mock_vs.init_table = MagicMock()
+        mock_vs.search = AsyncMock(return_value=[])
+        mock_vs.init_table = AsyncMock()
 
         app.dependency_overrides[get_embedding_service] = lambda: mock_embedding
         app.dependency_overrides[get_vector_store] = lambda: mock_vs
@@ -1227,8 +1236,8 @@ class TestVaultScopedRoutes(unittest.TestCase):
         mock_embedding.embed_single = AsyncMock(return_value=[0.1] * 768)
 
         mock_vs = MagicMock()
-        mock_vs.search = MagicMock(return_value=[])
-        mock_vs.init_table = MagicMock()
+        mock_vs.search = AsyncMock(return_value=[])
+        mock_vs.init_table = AsyncMock()
 
         app.dependency_overrides[get_embedding_service] = lambda: mock_embedding
         app.dependency_overrides[get_vector_store] = lambda: mock_vs
