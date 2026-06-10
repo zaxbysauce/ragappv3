@@ -41,7 +41,11 @@ def main() -> int:
         print("missing required files:", ", ".join(missing), file=sys.stderr)
         return 1
     skill = (root / "SKILL.md").read_text(encoding="utf-8")
-    fm = parse_frontmatter(skill)
+    try:
+        fm = parse_frontmatter(skill)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     for field in ["name", "description"]:
         if field not in fm or not fm[field]:
             print(f"missing frontmatter field: {field}", file=sys.stderr)

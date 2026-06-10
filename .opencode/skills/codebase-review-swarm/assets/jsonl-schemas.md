@@ -17,7 +17,7 @@ Write one block per selected track to `ledgers/review-depth-plan.md` after track
 ```text
 TRACK_DEPTH_PLAN
   track: <A|B|C|D|E|F|G|1X>
-  mode: focused | multi_track | complete_integrated | custom
+  depth_tier: focused | multi_track | complete_integrated | custom
   coverage_unit_basis: <public_surface | trust_boundary | test_cluster | ui_component_family | hot_path | dependency_family | ai_surface | domain_component | cross_boundary_pair>
   expected_units: <count or unknown_until_inventory>
   granularity_rule: <how complex units are split>
