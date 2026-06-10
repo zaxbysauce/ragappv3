@@ -33,6 +33,14 @@ LEDGERS = [
     "final-critic-check.md",
 ]
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+# Windows reserved device names that break file creation regardless of the
+# leading-character regex. Match is case-insensitive; on non-Windows the names
+# are valid directory names, so the check is unconditional.
+WINDOWS_RESERVED = (
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+)
 
 
 def run(cmd: list[str], cwd: Path) -> str | None:
@@ -58,6 +66,10 @@ def validate_run_id(raw: str) -> str:
     if not RUN_ID_RE.fullmatch(raw) or raw in {".", ".."}:
         raise ValueError(
             "Invalid --run-id. Use 1-128 letters, numbers, dot, underscore, or dash; path segments are not allowed."
+        )
+    if raw.upper() in WINDOWS_RESERVED:
+        raise ValueError(
+            f"Invalid --run-id {raw!r}: matches a Windows reserved device name."
         )
     return raw
 
@@ -92,7 +104,7 @@ def main() -> int:
     cwd = Path(args.root).resolve()
     repo = git_root(cwd)
     try:
-        run_id = validate_run_id(args.run_id or dt.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ"))
+        run_id = validate_run_id(args.run_id or dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
         run_dir = resolve_run_dir(repo, run_id)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
@@ -111,7 +123,7 @@ def main() -> int:
 
     metadata = {
         "run_id": run_id,
-        "created_at_utc": dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        "created_at_utc": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "review_type": args.review_type,
         "repo_root": str(repo),
         "git_branch": run(["git", "branch", "--show-current"], repo),

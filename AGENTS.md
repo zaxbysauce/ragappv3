@@ -27,6 +27,7 @@ skills:
 - `ci-compatibility-audit` — reproduce CI gates locally before pushing.
 - `commit-pr` — branch / commit / PR protocol.
 - `config-env-contract-check`, `review-finding-validator` — config-contract and finding-validation helpers.
+- `codebase-review-swarm` — read-only, quote-grounded full-repo audit (Phase 0 inventory, selected-track depth, reviewer/critic validation); canonical at `.opencode/skills/codebase-review-swarm/`.
 
 When you add or change a repo-specific skill, mirror it across all three trees
 (or keep it a thin pointer to a canonical doc) so every runner stays consistent.
