@@ -699,6 +699,21 @@ class Settings(BaseSettings):
         """Validate optimize_interval_chunks is >= 1."""
         return cls._validate_int_range(v, 1, None, "optimize_interval_chunks")
 
+    @field_validator("ingestion_queue_max_size", mode="after")
+    @classmethod
+    def validate_ingestion_queue_max_size(cls, v: int) -> int:
+        """Ensure the ingestion queue maxsize is at least 1 (0/negative would be unbounded).
+
+        asyncio.Queue(maxsize=0) creates an unbounded queue per asyncio docs, silently
+        negating FR-6 DoS mitigation. This validator enforces v >= 1.
+        """
+        if v < 1:
+            raise ValueError(
+                f"ingestion_queue_max_size must be >= 1 (got {v}); "
+                "0 or negative values create an unbounded asyncio.Queue"
+            )
+        return v
+
     @field_validator("embedding_concurrent_batches", mode="after")
     @classmethod
     def validate_embedding_concurrent_batches(cls, v: int) -> int:

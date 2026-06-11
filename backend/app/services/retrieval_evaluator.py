@@ -1,6 +1,7 @@
 """Retrieval evaluation service for CRAG (Corrective RAG) self-evaluation."""
 
 import logging
+from html import escape as _xml_escape
 from typing import Any, Dict, List
 
 from .llm_client import LLMClient
@@ -56,7 +57,7 @@ class RetrievalEvaluator:
                 {
                     "role": "user",
                     "content": (
-                        f"Query: <user_query>{query}</user_query>\n\nDocuments:\n{chunks_str}\n\nClassification:"
+                        f"Query: <user_query>{_xml_escape(query)}</user_query>\n\nDocuments:\n{chunks_str}\n\nClassification:"
                     ),
                 },
             ]

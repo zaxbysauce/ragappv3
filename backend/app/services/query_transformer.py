@@ -5,6 +5,7 @@ import json
 import logging
 import re
 from collections import OrderedDict
+from html import escape as _xml_escape
 from typing import List, Optional, Tuple
 
 from app.config import settings
@@ -214,7 +215,7 @@ class QueryTransformer:
                     "content": (
                         f"Generate a broader, more general version of this question that "
                         f"captures the underlying concept:\n"
-                        f"Original: <user_query>{query}</user_query>\n"
+                        f"Original: <user_query>{_xml_escape(query)}</user_query>\n"
                         f"Step-back:"
                     ),
                 },
@@ -348,11 +349,11 @@ class QueryTransformer:
             "appropriate."
         )
         user_prompt = (
-            f"Previous user question:\n<user_query>{prior_user_clipped}</user_query>\n\n"
+            f"Previous user question:\n<user_query>{_xml_escape(prior_user_clipped)}</user_query>\n\n"
             f"Previous assistant answer (for context only):\n"
             f"<assistant_answer>{prior_assistant_clipped}</assistant_answer>\n\n"
             f"New follow-up message from the user:\n"
-            f"<user_query>{query}</user_query>\n\n"
+            f"<user_query>{_xml_escape(query)}</user_query>\n\n"
             "Rewrite the follow-up as a standalone question that captures what "
             "the user wants now, using the prior question/answer for missing "
             "subject matter. If the follow-up is a retry/regenerate signal "
@@ -397,7 +398,7 @@ class QueryTransformer:
             "contains the answer. Be specific and use domain-appropriate language. Do not hedge "
             "or say 'I think' — write as a confident factual passage."
         )
-        user_prompt = f"Question: <user_query>{query}</user_query>\n\nPassage:"
+        user_prompt = f"Question: <user_query>{_xml_escape(query)}</user_query>\n\nPassage:"
         try:
             messages = [
                 {"role": "system", "content": system_prompt},
