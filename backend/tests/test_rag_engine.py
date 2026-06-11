@@ -235,7 +235,7 @@ class RAGEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(2, len(messages))
         self.assertEqual("system", messages[0]["role"])
         self.assertEqual("user", messages[1]["role"])
-        self.assertEqual("No relevant documents found for this query.\n\nQuestion: my question", messages[1]["content"])
+        self.assertEqual("No relevant documents found for this query.\n\nQuestion: <user_query>my question</user_query>", messages[1]["content"])
 
     async def test_filter_relevant_filters_by_distance_with_lancedb_results(self):
         """Test that _distance field from LanceDB is used correctly (lower = better)."""
