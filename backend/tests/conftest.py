@@ -99,6 +99,44 @@ def _reset_rate_limiter():
         pass
 
 
+@pytest.fixture(autouse=True)
+def _reset_db_pool():
+    """Reset the singleton SQLite connection pool between every test.
+
+    The pool is a module-level global (``app.models.database._pool_cache``)
+    that persists across the full test run. Without a reset, prior tests can
+    leave open WAL journals / file locks / leaked connections where subsequent
+    tests' ``sqlite3.connect() + PRAGMA journal_mode=WAL`` calls block on
+    filesystem contention for 1h+, producing multi-hour CI hangs.
+
+    This is a test-infra-only change that mirrors the existing
+    ``_reset_rate_limiter`` pattern. ``close_all()`` sets ``_closed = True``
+    but does not reset ``_created_count``; ``_pool_cache.clear()`` is
+    mandatory so the next ``get_pool()`` creates a fresh pool.
+    """
+    try:
+        from app.models.database import _pool_cache
+        for pool in _pool_cache.values():
+            try:
+                pool.close_all()
+            except Exception:
+                pass
+        _pool_cache.clear()
+    except (ImportError, AttributeError):
+        pass
+    yield
+    try:
+        from app.models.database import _pool_cache
+        for pool in _pool_cache.values():
+            try:
+                pool.close_all()
+            except Exception:
+                pass
+        _pool_cache.clear()
+    except (ImportError, AttributeError):
+        pass
+
+
 def pytest_configure(config):
     """Called before test collection.
 
