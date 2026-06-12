@@ -3,6 +3,7 @@
 import logging
 import math
 import re
+from html import escape as _xml_escape
 from typing import TYPE_CHECKING, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -259,8 +260,8 @@ class ContextDistiller:
 
         passages = "\n---\n".join(src.text for src in top3)
         user_msg = _SYNTHESIS_PROMPT_USER.format(
-            query=f"<user_query>{query}</user_query>",
-            passages=f"<source_passages>{passages}</source_passages>",
+            query=f"<user_query>{_xml_escape(query)}</user_query>",
+            passages=f"<source_passages>{_xml_escape(passages)}</source_passages>",
         )
 
         try:

@@ -96,6 +96,10 @@ class Settings(BaseSettings):
     """Minimum sub-batch size for adaptive batching fallback."""
 
     # ── Ingestion performance configuration ──────────────────────────────────
+    ingestion_queue_max_size: int = 1000
+    """Max size for the ingestion and enrichment asyncio.Queue (backpressure bound).
+    1000 follows the Python/asyncio best-practice range (100-1000) for I/O-bound RAG workers.
+    """
     ingestion_worker_count: int = 2
     """Number of concurrent document ingestion workers (1-16)."""
     optimize_mode: str = "periodic"
@@ -462,6 +466,11 @@ class Settings(BaseSettings):
         ""  # Must be set via environment variable - no default for security
     )
 
+    # Server-side token→scopes mapping for require_scope dependency.
+    # Keys are admin tokens; values are lists of scopes authorized for that token.
+    # The X-Scopes HTTP header is IGNORED — scopes derive only from this mapping.
+    admin_token_scopes: dict[str, list[str]] = {}
+
     # User authentication
     users_enabled: bool = True
     """Enable multi-user JWT authentication. When False, only admin_secret_token auth is used."""
@@ -690,6 +699,21 @@ class Settings(BaseSettings):
         """Validate optimize_interval_chunks is >= 1."""
         return cls._validate_int_range(v, 1, None, "optimize_interval_chunks")
 
+    @field_validator("ingestion_queue_max_size", mode="after")
+    @classmethod
+    def validate_ingestion_queue_max_size(cls, v: int) -> int:
+        """Ensure the ingestion queue maxsize is at least 1 (0/negative would be unbounded).
+
+        asyncio.Queue(maxsize=0) creates an unbounded queue per asyncio docs, silently
+        negating FR-6 DoS mitigation. This validator enforces v >= 1.
+        """
+        if v < 1:
+            raise ValueError(
+                f"ingestion_queue_max_size must be >= 1 (got {v}); "
+                "0 or negative values create an unbounded asyncio.Queue"
+            )
+        return v
+
     @field_validator("embedding_concurrent_batches", mode="after")
     @classmethod
     def validate_embedding_concurrent_batches(cls, v: int) -> int:
@@ -866,6 +890,18 @@ class Settings(BaseSettings):
                 "In single-admin mode this token is the sole authentication mechanism. "
                 'Generate one with: python -c "import secrets; print(secrets.token_urlsafe(48))"'
             )
+        return self
+
+    @model_validator(mode="after")
+    def _build_admin_token_scopes_default(self) -> "Settings":
+        """Seed admin_token_scopes from admin_secret_token when the field is empty.
+
+        This provides a working default for deployments that set ADMIN_SECRET_TOKEN
+        but don't explicitly configure admin_token_scopes. The key is the actual
+        configured token value, which is available after env loading.
+        """
+        if not self.admin_token_scopes and self.admin_secret_token:
+            self.admin_token_scopes = {self.admin_secret_token: ["admin:config"]}
         return self
 
     @model_validator(mode="after")

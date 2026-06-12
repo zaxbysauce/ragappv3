@@ -99,6 +99,105 @@ def _reset_rate_limiter():
         pass
 
 
+@pytest.fixture(autouse=True)
+def _reset_db_pool():
+    """Reset the singleton SQLite connection pool between every test.
+
+    The pool is a module-level global (``app.models.database._pool_cache``)
+    that persists across the full test run. Without a reset, prior tests can
+    leave open WAL journals / file locks / leaked connections where subsequent
+    tests' ``sqlite3.connect() + PRAGMA journal_mode=WAL`` calls block on
+    filesystem contention for 1h+, producing multi-hour CI hangs.
+
+    This is a test-infra-only change that mirrors the existing
+    ``_reset_rate_limiter`` pattern. ``close_all()`` sets ``_closed = True``
+    but does not reset ``_created_count``; ``_pool_cache.clear()`` is
+    mandatory so the next ``get_pool()`` creates a fresh pool.
+    """
+    try:
+        from app.models.database import _pool_cache
+        for pool in _pool_cache.values():
+            try:
+                pool.close_all()
+            except Exception:
+                pass
+        _pool_cache.clear()
+    except (ImportError, AttributeError):
+        pass
+    yield
+    try:
+        from app.models.database import _pool_cache
+        for pool in _pool_cache.values():
+            try:
+                pool.close_all()
+            except Exception:
+                pass
+        _pool_cache.clear()
+    except (ImportError, AttributeError):
+        pass
+
+
+# Cache for bcrypt hash of common test passwords (saves ~1 sec per hash)
+# Created lazily on first test invocation. Keyed by password string.
+_bcrypt_hash_cache: dict = {}
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _cache_bcrypt_hash_for_test_passwords():
+    """Pre-compute and cache the bcrypt hash for the common test password 'pass123'.
+
+    The test_users_routes_adversarial.py test class creates 50+ users in a loop
+    with the same password 'pass123' in its setUp. Without this cache, each
+    hash_password() call takes ~1 sec locally and ~2-3 sec on slow CI runners,
+    pushing the test suite past the 30m job timeout.
+
+    This fixture patches pwd_context.hash (the underlying CryptContext method
+    that hash_password calls internally) with a fast version that returns
+    the cached value for 'pass123' and delegates to the original for any
+    other password. Patching pwd_context.hash (rather than hash_password) is
+    necessary because some test modules do `from app.services.auth_service
+    import hash_password` at module level, which captures a direct reference
+    to the original function that won't see a later patch on the module-level
+    name.
+
+    The cache is lazy: the first test that needs 'pass123' triggers the real
+    bcrypt call, subsequent tests get the cached value. Tests that use other
+    passwords (rare) are unaffected.
+    """
+    # Lazy import — auth_service may not be available during early collection
+    try:
+        from app.services import auth_service as _auth_module
+    except ImportError:
+        return  # app.services.auth_service not importable; skip this fixture
+
+    # Patch pwd_context.hash (the underlying CryptContext method), NOT
+    # auth_service.hash_password. The latter is bypassed by tests that do
+    # `from app.services.auth_service import hash_password` at module level.
+    original_pwd_hash = _auth_module.pwd_context.hash
+    common_password = "pass123"
+
+    def _get_cached_hash(password: str) -> str:
+        if password not in _bcrypt_hash_cache:
+            _bcrypt_hash_cache[password] = original_pwd_hash(password)
+        return _bcrypt_hash_cache[password]
+
+    def _fast_pwd_hash(secret, *args, **kwargs):
+        if isinstance(secret, str) and secret == common_password:
+            return _get_cached_hash(secret)
+        return original_pwd_hash(secret, *args, **kwargs)
+
+    # Monkey-patch pwd_context.hash (the underlying method that hash_password calls)
+    _auth_module.pwd_context.hash = _fast_pwd_hash
+
+    yield
+
+    # Restore the original on session teardown (best-effort)
+    try:
+        _auth_module.pwd_context.hash = original_pwd_hash
+    except Exception:
+        pass
+
+
 def pytest_configure(config):
     """Called before test collection.
 

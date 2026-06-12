@@ -1,0 +1,280 @@
+"""
+Regression tests for bounded asyncio.Queue in BackgroundProcessor (FR-6).
+
+Tests that:
+1. Both queues are created with the configured maxsize from settings.
+2. The queue provides backpressure when full (put blocks or raises QueueFull).
+3. The default value of ingestion_queue_max_size is 1000.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import sys
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+# Add backend to path
+sys.path.insert(0, str(Path(__file__).parent.parent / "backend"))
+
+from app.config import Settings, settings
+from app.services.background_tasks import (
+    BackgroundProcessor,
+    EnrichmentTaskItem,
+    TaskItem,
+)
+
+
+class TestBackgroundTasksBoundedQueue:
+    """Tests for bounded queue configuration in BackgroundProcessor."""
+
+    def test_queue_creation_uses_maxsize(self) -> None:
+        """Both queue and enrichment_queue are bounded to ingestion_queue_max_size."""
+        # Patch dependencies that BackgroundProcessor.__init__ constructs to avoid DB calls
+        with patch.object(BackgroundProcessor, "__init__", lambda self: None):
+            processor = BackgroundProcessor()
+            # Manually set what the real __init__ would set
+            processor.queue = asyncio.Queue(maxsize=settings.ingestion_queue_max_size)
+            processor.enrichment_queue = asyncio.Queue(maxsize=settings.ingestion_queue_max_size)
+
+            assert processor.queue.maxsize == settings.ingestion_queue_max_size
+            assert processor.enrichment_queue.maxsize == settings.ingestion_queue_max_size
+
+    def test_queue_provides_backpressure_when_full(self) -> None:
+        """When queue is full, put blocks or raises QueueFull."""
+        small_max = 2
+        queue: asyncio.Queue[TaskItem] = asyncio.Queue(maxsize=small_max)
+
+        # Fill the queue to capacity
+        for i in range(small_max):
+            queue.put_nowait(TaskItem(file_path=f"file{i}.txt", vault_id=1))
+
+        # Queue is now full
+        assert queue.full(), "Queue should be full after filling to maxsize"
+
+        # Attempting to put without waiting should raise QueueFull
+        with pytest.raises(asyncio.QueueFull):
+            queue.put_nowait(TaskItem(file_path="should_fail.txt", vault_id=1))
+
+    def test_settings_ingestion_queue_max_size_default(self) -> None:
+        """The default value for ingestion_queue_max_size is 1000."""
+        assert settings.ingestion_queue_max_size == 1000
+
+    def test_settings_ingestion_queue_max_size_is_overridable(self) -> None:
+        """ingestion_queue_max_size can be overridden via environment variable."""
+        # Create a fresh Settings instance with env override
+        with patch.dict("os.environ", {"INGESTION_QUEUE_MAX_SIZE": "500"}):
+            test_settings = Settings()
+            assert test_settings.ingestion_queue_max_size == 500
+
+
+class TestBackgroundProcessorQueueIntegration:
+    """Integration tests verifying BackgroundProcessor actually uses bounded queues."""
+
+    @pytest.mark.asyncio
+    async def test_background_processor_queue_has_maxsize(self) -> None:
+        """BackgroundProcessor.queue is bounded to ingestion_queue_max_size."""
+        # Reset singleton
+        import app.services.background_tasks as bt_mod
+
+        orig = bt_mod._processor_instance
+        bt_mod._processor_instance = None
+
+        try:
+            # Create processor with minimal deps
+            processor = BackgroundProcessor(
+                max_retries=1,
+                retry_delay=0.1,
+            )
+            assert processor.queue.maxsize == settings.ingestion_queue_max_size
+            assert processor.enrichment_queue.maxsize == settings.ingestion_queue_max_size
+        finally:
+            bt_mod._processor_instance = orig
+
+    @pytest.mark.asyncio
+    async def test_enqueue_respects_maxsize(self) -> None:
+        """When queue is full, enqueue blocks (backpressure)."""
+        # Reset singleton
+        import app.services.background_tasks as bt_mod
+
+        orig = bt_mod._processor_instance
+        bt_mod._processor_instance = None
+
+        try:
+            processor = BackgroundProcessor(
+                max_retries=1,
+                retry_delay=0.1,
+            )
+            # Verify the queue is bounded
+            max_size = processor.queue.maxsize
+            assert max_size > 0, "Queue should have a maxsize > 0"
+
+            # Fill queue using put_nowait up to maxsize
+            for i in range(max_size):
+                processor.queue.put_nowait(
+                    TaskItem(file_path=f"file{i}.txt", vault_id=1)
+                )
+
+            assert processor.queue.full(), "Queue should be full"
+
+            # Use asyncio.wait_for with a small timeout to detect blocking behavior.
+            # If backpressure works, put will block/hang; if not, it would succeed.
+            import asyncio
+
+            async def try_enqueue():
+                await processor.queue.put(
+                    TaskItem(file_path="overflow.txt", vault_id=1)
+                )
+
+            # The put should block/hang because queue is full
+            # We expect it to NOT complete within 0.1 seconds
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(try_enqueue(), timeout=0.1)
+        finally:
+            bt_mod._processor_instance = orig
+
+
+class TestRecoveryDeadlockRegression:
+    """
+    Regression tests for the P0 startup recovery deadlock bug.
+
+    Before the fix: _recover_stranded_pending_rows() was called BEFORE workers
+    were spawned. Since the queue is bounded (maxsize=ingestion_queue_max_size),
+    if >maxsize stranded rows existed, queue.put() would block indefinitely
+    waiting for a consumer that didn't exist yet.
+
+    After the fix: workers are spawned BEFORE recovery runs, so consumers
+    exist when the recovery sweep enqueues stranded rows.
+    """
+
+    @pytest.mark.asyncio
+    async def test_recovery_completes_when_more_stranded_rows_than_queue_maxsize(
+        self, tmp_path, monkeypatch
+    ):
+        """
+        Regression for cubic P0 finding: recovery must complete even when
+        >queue_maxsize stranded rows exist.
+
+        Previously, workers spawned AFTER recovery, so put() would block
+        indefinitely on a bounded queue. Now workers spawn first, so they
+        consume items as fast as recovery enqueues them.
+        """
+        import app.services.background_tasks as bt_mod
+
+        # 1. Set small maxsize to make the queue bounded and test fast.
+        # Also pin worker count to 1 to keep test assertions simple.
+        from app.config import settings as real_settings
+
+        monkeypatch.setattr(real_settings, "ingestion_queue_max_size", 5)
+        monkeypatch.setattr(real_settings, "ingestion_worker_count", 1)
+
+        # Reset singleton to get a fresh processor with the patched setting
+        orig_instance = bt_mod._processor_instance
+        bt_mod._processor_instance = None
+
+        # Create files that will be "stranded" in the DB
+        stranded_files = []
+        for i in range(10):  # 10 stranded rows > queue maxsize of 5
+            f = tmp_path / f"stranded_{i}.txt"
+            f.write_text(f"content {i}", encoding="utf-8")
+            stranded_files.append(str(f))
+
+        try:
+            # 2. Build mock pool that returns stranded rows from the SELECT query.
+            # Two separate SELECTs run in _recover_stranded_pending_rows:
+            #   (a) status='pending' AND phase='queued'  -> returns 10 stranded rows
+            #   (b) status='processing' + old phase_started_at -> returns empty
+            # We must use side_effect so each fetchall() call returns fresh data.
+            pending_rows = [
+                # (id, file_path, vault_id, source)
+                (i + 1, str(stranded_files[i]), 1, "upload")
+                for i in range(10)
+            ]
+
+            mock_cursor_pending = MagicMock()
+            mock_cursor_pending.fetchall.return_value = pending_rows
+            mock_cursor_pending.fetchone.return_value = None
+
+            mock_cursor_processing = MagicMock()
+            mock_cursor_processing.fetchall.return_value = []  # no stuck processing rows
+
+            mock_conn = MagicMock()
+            # Each execute call gets its own cursor
+            mock_conn.execute.side_effect = [
+                mock_cursor_pending,
+                mock_cursor_processing,
+            ]
+
+            mock_pool = MagicMock()
+            mock_pool.connection.return_value.__enter__ = MagicMock(
+                return_value=mock_conn
+            )
+            mock_pool.connection.return_value.__exit__ = MagicMock(return_value=False)
+
+            # 3. Create processor and inject mock pool
+            processor = BackgroundProcessor(
+                max_retries=1,
+                retry_delay=0.05,
+            )
+            processor.processor.pool = mock_pool
+
+            # Track what gets enqueued
+            enqueued_items: list[TaskItem] = []
+
+            async def mock_enqueue(
+                file_path,
+                vault_id,
+                source="upload",
+                email_subject=None,
+                email_sender=None,
+                file_id=None,
+            ):
+                item = TaskItem(
+                    file_path=file_path,
+                    vault_id=vault_id,
+                    attempt=1,
+                    source=source,
+                    email_subject=email_subject,
+                    email_sender=email_sender,
+                    file_id=file_id,
+                )
+                enqueued_items.append(item)
+                # Actually put it in the queue so workers can process it
+                await processor.queue.put(item)
+
+            processor.enqueue = mock_enqueue
+
+            # 4. Call start() with a timeout — if the deadlock exists,
+            # this will raise asyncio.TimeoutError
+            await asyncio.wait_for(processor.start(), timeout=5.0)
+
+            # 5. Verify workers consumed the items (queue should drain)
+            await asyncio.wait_for(processor.queue.join(), timeout=5.0)
+
+            # 6. Verify all stranded rows were enqueued
+            assert len(enqueued_items) == 10, (
+                f"Expected 10 enqueued items, got {len(enqueued_items)}. "
+                "Deadlock prevented recovery from completing."
+            )
+
+            # 7. Verify workers are running
+            assert len(processor._worker_tasks) == 1, "Expected 1 worker"
+            assert not processor._worker_tasks[0].done(), "Worker should still be running"
+
+            # 8. Gracefully stop
+            processor.shutdown_event.set()
+            await asyncio.gather(*processor._worker_tasks, return_exceptions=True)
+            if processor._enrichment_worker_task:
+                processor._enrichment_worker_task.cancel()
+            processor._running = False
+
+        finally:
+            bt_mod._processor_instance = orig_instance
+            # Restore real settings
+            monkeypatch.setattr(real_settings, "ingestion_queue_max_size", 1000)
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

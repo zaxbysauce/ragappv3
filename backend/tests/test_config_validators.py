@@ -132,3 +132,27 @@ class TestValidateInstantChatConfig:
             Settings(hyde_enabled=False, query_transformation_enabled=True)
             # Verify no warnings were raised
             assert len(w) == 0
+
+
+class TestIngestionQueueMaxSize:
+    """Tests for the ingestion_queue_max_size field validator (F-002)."""
+
+    def test_ingestion_queue_max_size_zero_raises(self):
+        """INGESTION_QUEUE_MAX_SIZE=0 must raise ValueError (creates unbounded asyncio.Queue)."""
+        with pytest.raises(ValueError, match="ingestion_queue_max_size must be >= 1"):
+            Settings(ingestion_queue_max_size=0)
+
+    def test_ingestion_queue_max_size_negative_raises(self):
+        """INGESTION_QUEUE_MAX_SIZE=-1 must raise ValueError."""
+        with pytest.raises(ValueError, match="ingestion_queue_max_size must be >= 1"):
+            Settings(ingestion_queue_max_size=-1)
+
+    def test_ingestion_queue_max_size_default_1000(self):
+        """Default ingestion_queue_max_size is 1000."""
+        settings = Settings()
+        assert settings.ingestion_queue_max_size == 1000
+
+    def test_ingestion_queue_max_size_positive_override_accepted(self):
+        """INGESTION_QUEUE_MAX_SIZE=500 is accepted."""
+        settings = Settings(ingestion_queue_max_size=500)
+        assert settings.ingestion_queue_max_size == 500

@@ -174,8 +174,8 @@ class BackgroundProcessor:
         """
         self.max_retries = max_retries
         self.retry_delay = retry_delay
-        self.queue: asyncio.Queue[TaskItem] = asyncio.Queue()
-        self.enrichment_queue: asyncio.Queue[EnrichmentTaskItem] = asyncio.Queue()
+        self.queue: asyncio.Queue[TaskItem] = asyncio.Queue(maxsize=settings.ingestion_queue_max_size)
+        self.enrichment_queue: asyncio.Queue[EnrichmentTaskItem] = asyncio.Queue(maxsize=settings.ingestion_queue_max_size)
         self.shutdown_event = asyncio.Event()
         self.processor = DocumentProcessor(
             chunk_size_chars=chunk_size_chars,
@@ -208,6 +208,13 @@ class BackgroundProcessor:
         the worker pickup, the row would be stranded forever and the
         in-flight duplicate check would 409 every retry of the same hash.
         The sweep re-enqueues stranded rows so they are processed normally.
+
+        CRITICAL ORDERING: workers MUST be spawned before _recover_stranded_pending_rows()
+        runs. The recovery sweep enqueues into the bounded queue
+        (maxsize=settings.ingestion_queue_max_size, default 1000). If more
+        stranded rows exist than the queue can hold, put() blocks indefinitely
+        waiting for a consumer. Spawning workers first ensures the consumers
+        exist before any enqueue happens.
         """
         if self._running:
             logger.warning("Background processor is already running")
@@ -215,11 +222,9 @@ class BackgroundProcessor:
 
         self._running = True
         self.shutdown_event.clear()
-        await self._recover_stranded_pending_rows()
-        await self._recover_stranded_enrichment_rows()
 
+        # Step 1: configure write semaphore (before any worker can consume)
         worker_count = settings.ingestion_worker_count
-        # Create write semaphore before workers can consume queued/recovered items.
         if worker_count > 1:
             self._write_semaphore = asyncio.Semaphore(1)
             self.processor._write_semaphore = self._write_semaphore
@@ -227,7 +232,9 @@ class BackgroundProcessor:
             self._write_semaphore = None
             self.processor._write_semaphore = None
 
-        # Spawn N workers based on configuration
+        # Step 2: spawn workers BEFORE recovery so consumers exist when
+        # the recovery sweep enqueues stranded rows. Workers will be idle
+        # but available to consume recovered items.
         self._worker_tasks = []
         for i in range(worker_count):
             task = asyncio.create_task(self._worker_loop(), name=f"worker-{i}")
@@ -235,6 +242,11 @@ class BackgroundProcessor:
         self._enrichment_worker_task = asyncio.create_task(
             self._enrichment_worker_loop(), name="enrichment-worker"
         )
+
+        # Step 3: NOW run recovery. Workers are ready to consume.
+        await self._recover_stranded_pending_rows()
+        await self._recover_stranded_enrichment_rows()
+
         logger.info(f"Background processor started with {worker_count} worker(s)")
 
     async def _recover_stranded_pending_rows(self) -> None:
