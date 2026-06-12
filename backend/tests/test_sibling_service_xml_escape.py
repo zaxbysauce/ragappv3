@@ -33,7 +33,7 @@ class TestQueryTransformerUserQueryEscaped:
 
     @pytest.mark.asyncio
     async def test_step_back_user_query_escaped(self):
-        """Step-back prompt: </user_query> injection in query must be escaped."""
+        """Step-back prompt: </user_query> injection in query must be escaped. Verifies the step-back call (keyword args) explicitly, not the last recorded call which may be from HyDE."""
         mock_llm = MagicMock()
         mock_llm.chat_completion = AsyncMock(return_value="broader question")
 
@@ -49,11 +49,19 @@ class TestQueryTransformerUserQueryEscaped:
 
             await qt.transform(query=query)
 
-            # Verify the LLM was called
+            # Verify the LLM was called at least once
             assert mock_llm.chat_completion.call_count >= 1
-            # messages is the first positional arg in transform's _build_step_back_prompt
-            call_args = mock_llm.chat_completion.call_args
-            messages = call_args[0][0]
+            # transform() may call chat_completion twice (step-back + HyDE).
+            # Step-back uses keyword args (query_transformer.py:224):
+            #   chat_completion(messages=messages, max_tokens=100, temperature=...)
+            # HyDE uses positional args (query_transformer.py:407):
+            #   chat_completion(messages, max_tokens=350, temperature=...)
+            # Find the step-back call (the one with messages= as a kwarg).
+            step_back_call = next(
+                call for call in mock_llm.chat_completion.call_args_list
+                if "messages" in call.kwargs
+            )
+            messages = step_back_call.kwargs["messages"]
             user_content = messages[1]["content"]
 
             # 1. Escaped form must appear

@@ -136,5 +136,145 @@ class TestBackgroundProcessorQueueIntegration:
             bt_mod._processor_instance = orig
 
 
+class TestRecoveryDeadlockRegression:
+    """
+    Regression tests for the P0 startup recovery deadlock bug.
+
+    Before the fix: _recover_stranded_pending_rows() was called BEFORE workers
+    were spawned. Since the queue is bounded (maxsize=ingestion_queue_max_size),
+    if >maxsize stranded rows existed, queue.put() would block indefinitely
+    waiting for a consumer that didn't exist yet.
+
+    After the fix: workers are spawned BEFORE recovery runs, so consumers
+    exist when the recovery sweep enqueues stranded rows.
+    """
+
+    @pytest.mark.asyncio
+    async def test_recovery_completes_when_more_stranded_rows_than_queue_maxsize(
+        self, tmp_path, monkeypatch
+    ):
+        """
+        Regression for cubic P0 finding: recovery must complete even when
+        >queue_maxsize stranded rows exist.
+
+        Previously, workers spawned AFTER recovery, so put() would block
+        indefinitely on a bounded queue. Now workers spawn first, so they
+        consume items as fast as recovery enqueues them.
+        """
+        import app.services.background_tasks as bt_mod
+
+        # 1. Set small maxsize to make the queue bounded and test fast.
+        # Also pin worker count to 1 to keep test assertions simple.
+        from app.config import settings as real_settings
+
+        monkeypatch.setattr(real_settings, "ingestion_queue_max_size", 5)
+        monkeypatch.setattr(real_settings, "ingestion_worker_count", 1)
+
+        # Reset singleton to get a fresh processor with the patched setting
+        orig_instance = bt_mod._processor_instance
+        bt_mod._processor_instance = None
+
+        # Create files that will be "stranded" in the DB
+        stranded_files = []
+        for i in range(10):  # 10 stranded rows > queue maxsize of 5
+            f = tmp_path / f"stranded_{i}.txt"
+            f.write_text(f"content {i}", encoding="utf-8")
+            stranded_files.append(str(f))
+
+        try:
+            # 2. Build mock pool that returns stranded rows from the SELECT query.
+            # Two separate SELECTs run in _recover_stranded_pending_rows:
+            #   (a) status='pending' AND phase='queued'  -> returns 10 stranded rows
+            #   (b) status='processing' + old phase_started_at -> returns empty
+            # We must use side_effect so each fetchall() call returns fresh data.
+            pending_rows = [
+                # (id, file_path, vault_id, source)
+                (i + 1, str(stranded_files[i]), 1, "upload")
+                for i in range(10)
+            ]
+
+            mock_cursor_pending = MagicMock()
+            mock_cursor_pending.fetchall.return_value = pending_rows
+            mock_cursor_pending.fetchone.return_value = None
+
+            mock_cursor_processing = MagicMock()
+            mock_cursor_processing.fetchall.return_value = []  # no stuck processing rows
+
+            mock_conn = MagicMock()
+            # Each execute call gets its own cursor
+            mock_conn.execute.side_effect = [
+                mock_cursor_pending,
+                mock_cursor_processing,
+            ]
+
+            mock_pool = MagicMock()
+            mock_pool.connection.return_value.__enter__ = MagicMock(
+                return_value=mock_conn
+            )
+            mock_pool.connection.return_value.__exit__ = MagicMock(return_value=False)
+
+            # 3. Create processor and inject mock pool
+            processor = BackgroundProcessor(
+                max_retries=1,
+                retry_delay=0.05,
+            )
+            processor.processor.pool = mock_pool
+
+            # Track what gets enqueued
+            enqueued_items: list[TaskItem] = []
+
+            async def mock_enqueue(
+                file_path,
+                vault_id,
+                source="upload",
+                email_subject=None,
+                email_sender=None,
+                file_id=None,
+            ):
+                item = TaskItem(
+                    file_path=file_path,
+                    vault_id=vault_id,
+                    attempt=1,
+                    source=source,
+                    email_subject=email_subject,
+                    email_sender=email_sender,
+                    file_id=file_id,
+                )
+                enqueued_items.append(item)
+                # Actually put it in the queue so workers can process it
+                await processor.queue.put(item)
+
+            processor.enqueue = mock_enqueue
+
+            # 4. Call start() with a timeout — if the deadlock exists,
+            # this will raise asyncio.TimeoutError
+            await asyncio.wait_for(processor.start(), timeout=5.0)
+
+            # 5. Verify workers consumed the items (queue should drain)
+            await asyncio.wait_for(processor.queue.join(), timeout=5.0)
+
+            # 6. Verify all stranded rows were enqueued
+            assert len(enqueued_items) == 10, (
+                f"Expected 10 enqueued items, got {len(enqueued_items)}. "
+                "Deadlock prevented recovery from completing."
+            )
+
+            # 7. Verify workers are running
+            assert len(processor._worker_tasks) == 1, "Expected 1 worker"
+            assert not processor._worker_tasks[0].done(), "Worker should still be running"
+
+            # 8. Gracefully stop
+            processor.shutdown_event.set()
+            await asyncio.gather(*processor._worker_tasks, return_exceptions=True)
+            if processor._enrichment_worker_task:
+                processor._enrichment_worker_task.cancel()
+            processor._running = False
+
+        finally:
+            bt_mod._processor_instance = orig_instance
+            # Restore real settings
+            monkeypatch.setattr(real_settings, "ingestion_queue_max_size", 1000)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
