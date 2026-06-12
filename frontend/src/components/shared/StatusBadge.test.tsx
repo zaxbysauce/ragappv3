@@ -41,6 +41,31 @@ describe("StatusBadge", () => {
     });
   });
 
+  describe("Partially indexed (chunks_failed > 0)", () => {
+    it("indexed with chunksFailed shows amber Partially indexed badge with title", () => {
+      render(<StatusBadge status="indexed" chunksFailed={3} />);
+      const badge = screen.getByText("Partially indexed").closest("span");
+      expect(badge).toHaveClass("bg-warning");
+      expect(badge).toHaveAttribute(
+        "title",
+        "3 chunks failed to embed — retrieval may miss content"
+      );
+      expect(screen.queryByText("Indexed")).not.toBeInTheDocument();
+    });
+
+    it("indexed with zero chunksFailed shows normal Indexed badge", () => {
+      render(<StatusBadge status="indexed" chunksFailed={0} />);
+      expect(screen.getByText("Indexed")).toBeInTheDocument();
+      expect(screen.queryByText("Partially indexed")).not.toBeInTheDocument();
+    });
+
+    it("non-indexed status ignores chunksFailed", () => {
+      render(<StatusBadge status="error" chunksFailed={3} />);
+      expect(screen.getByText("Error")).toBeInTheDocument();
+      expect(screen.queryByText("Partially indexed")).not.toBeInTheDocument();
+    });
+  });
+
   describe("Handling invalid/unknown statuses", () => {
     it("test_processed_shows_unknown", () => {
       // "processed" is no longer a valid status - should show "Unknown"

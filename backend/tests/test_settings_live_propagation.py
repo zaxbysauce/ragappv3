@@ -397,3 +397,37 @@ class TestDocumentProcessorChunkerLiveReads:
         chunker = processor._get_chunker()
         assert chunker.chunk_size == 1500
         assert chunker.chunk_overlap == 150
+
+    def test_get_chunker_default_strategy_returns_title_chunker(self, mock_settings):
+        from app.services.chunking import SemanticChunker
+
+        mock_settings.semantic_chunking_strategy = "title"
+        processor = DocumentProcessor(chunk_size_chars=2000, chunk_overlap_chars=200)
+        processor.embedding_service = MagicMock()
+        chunker = processor._get_chunker()
+        assert isinstance(chunker, SemanticChunker)
+
+    def test_get_chunker_embedding_strategy_returns_embedding_chunker(
+        self, mock_settings
+    ):
+        from app.services.chunking import EmbeddingSemanticChunker
+
+        mock_settings.semantic_chunking_strategy = "embedding"
+        processor = DocumentProcessor(chunk_size_chars=2000, chunk_overlap_chars=200)
+        embedding_service = MagicMock()
+        processor.embedding_service = embedding_service
+        chunker = processor._get_chunker()
+        assert isinstance(chunker, EmbeddingSemanticChunker)
+        assert chunker.embedding_service is embedding_service
+        assert chunker.max_chunk_size == 2000
+
+    def test_get_chunker_embedding_strategy_without_service_falls_back(
+        self, mock_settings
+    ):
+        from app.services.chunking import SemanticChunker
+
+        mock_settings.semantic_chunking_strategy = "embedding"
+        processor = DocumentProcessor(chunk_size_chars=2000, chunk_overlap_chars=200)
+        processor.embedding_service = None
+        chunker = processor._get_chunker()
+        assert isinstance(chunker, SemanticChunker)

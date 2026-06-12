@@ -536,7 +536,8 @@ export interface Document {
   processing_started_at?: string | null;
   enrichment_status?: "pending" | "processing" | "complete" | "error" | string | null;
   enrichment_error?: string | null;
-  metadata?: Record<string, unknown>;
+  /** Mirrors chunk_count/status; chunks_failed counts chunks dropped by embedding failures (Issue #221). */
+  metadata?: Record<string, unknown> & { chunks_failed?: number };
   tags?: Tag[];
   folder_id?: number | null;
 }

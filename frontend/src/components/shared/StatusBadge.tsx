@@ -1,5 +1,5 @@
 import { Badge } from "@/components/ui/badge";
-import { CheckCircle, Loader2, Clock, AlertCircle } from "lucide-react";
+import { CheckCircle, Loader2, Clock, AlertCircle, AlertTriangle } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 export const FILE_STATUS_LABELS: Record<string, string> = {
@@ -18,16 +18,30 @@ export const FILE_STATUS_COLORS: Record<string, { variant: "default" | "secondar
 
 interface StatusBadgeProps {
   status?: string;
+  /** Chunks dropped due to embedding failures; >0 on an indexed doc renders "Partially indexed". */
+  chunksFailed?: number;
 }
 
 /** Renders a color-coded badge for document processing status. */
-export function StatusBadge({ status }: StatusBadgeProps) {
+export function StatusBadge({ status, chunksFailed }: StatusBadgeProps) {
   if (!status) {
     return <Badge variant="outline">Unknown</Badge>;
   }
   const config = FILE_STATUS_COLORS[status];
   if (!config) {
     return <Badge variant="outline">Unknown</Badge>;
+  }
+  if (status === "indexed" && (chunksFailed ?? 0) > 0) {
+    return (
+      <Badge
+        variant="default"
+        className="bg-warning"
+        title={`${chunksFailed} chunks failed to embed — retrieval may miss content`}
+      >
+        <AlertTriangle className="w-3 h-3 mr-1" />
+        Partially indexed
+      </Badge>
+    );
   }
   const Icon = config.icon;
   const label = FILE_STATUS_LABELS[status] ?? status;

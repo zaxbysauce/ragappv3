@@ -182,7 +182,10 @@ export function DocumentCard({
           <div className="space-y-1">
             <div className="text-muted-foreground">Status</div>
             <div title={isFailed && errorMessage ? errorMessage : undefined}>
-              <StatusBadge status={status} />
+              <StatusBadge
+                status={status}
+                chunksFailed={Number(document.metadata?.chunks_failed ?? 0)}
+              />
             </div>
           </div>
           <div className="space-y-1">

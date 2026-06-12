@@ -27,6 +27,11 @@ logger = logging.getLogger(__name__)
 # it will be reset to 'pending' for re-processing.
 STRANDED_PROCESSING_TIMEOUT_MINUTES = 30
 
+# Retry cap for pending vector-store deletes (Issue #219). Rows that exceed
+# this are left in place and logged for operator visibility — we never delete
+# a pending record without confirming the chunks are actually gone.
+MAX_VECTOR_DELETE_ATTEMPTS = 10
+
 # Singleton instance
 _processor_instance: Optional["BackgroundProcessor"] = None
 
@@ -246,6 +251,7 @@ class BackgroundProcessor:
         # Step 3: NOW run recovery. Workers are ready to consume.
         await self._recover_stranded_pending_rows()
         await self._recover_stranded_enrichment_rows()
+        await self.retry_pending_vector_deletes()
 
         logger.info(f"Background processor started with {worker_count} worker(s)")
 
@@ -389,6 +395,85 @@ class BackgroundProcessor:
                 len(processing_stranded),
                 STRANDED_PROCESSING_TIMEOUT_MINUTES,
             )
+
+    async def retry_pending_vector_deletes(self) -> None:
+        """Retry vector-store chunk deletes recorded by failed document deletes.
+
+        Document deletes record a `vector_delete_pending` row when removing the
+        file's LanceDB chunks fails (Issue #219) — without this sweep those
+        orphaned chunks would stay searchable forever. On success the pending
+        row is removed; on failure `attempts` is incremented and the row is
+        left for the next sweep. Rows past MAX_VECTOR_DELETE_ATTEMPTS are kept
+        and logged for operator visibility.
+
+        Best-effort: pool/vector-store absence (e.g. tests) is silently skipped.
+        VectorStore.delete_by_file serializes writes via its own write lock.
+        """
+        if self.processor is None or self.processor.pool is None:
+            return
+        vector_store = self.processor.vector_store
+        if vector_store is None:
+            return
+
+        try:
+            with self.processor.pool.connection() as conn:
+                cursor = conn.execute(
+                    "SELECT id, file_id, attempts FROM vector_delete_pending"
+                )
+                pending = cursor.fetchall()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning("Pending vector-delete sweep failed at SELECT: %s", e)
+            return
+
+        if not pending:
+            return
+
+        logger.info("Retrying %d pending vector delete(s)", len(pending))
+        for row in pending:
+            row_id = row["id"] if hasattr(row, "keys") else row[0]
+            file_id = row["file_id"] if hasattr(row, "keys") else row[1]
+            attempts = row["attempts"] if hasattr(row, "keys") else row[2]
+
+            if attempts >= MAX_VECTOR_DELETE_ATTEMPTS:
+                logger.error(
+                    "Pending vector delete for file_id=%s exceeded %d attempts; "
+                    "leaving row for operator review",
+                    file_id,
+                    MAX_VECTOR_DELETE_ATTEMPTS,
+                )
+                continue
+
+            try:
+                await vector_store.delete_by_file(str(file_id))
+            except Exception as e:
+                logger.warning(
+                    "Retry of vector delete for file_id=%s failed: %s", file_id, e
+                )
+                try:
+                    with self.processor.pool.connection() as conn:
+                        conn.execute(
+                            "UPDATE vector_delete_pending "
+                            "SET attempts = attempts + 1 WHERE id = ?",
+                            (row_id,),
+                        )
+                        conn.commit()
+                except Exception:  # pragma: no cover - defensive
+                    pass
+                continue
+
+            try:
+                with self.processor.pool.connection() as conn:
+                    conn.execute(
+                        "DELETE FROM vector_delete_pending WHERE id = ?", (row_id,)
+                    )
+                    conn.commit()
+                logger.info(
+                    "Completed deferred vector delete for file_id=%s", file_id
+                )
+            except Exception as e:  # pragma: no cover - defensive
+                logger.warning(
+                    "Failed to clear pending vector delete row id=%s: %s", row_id, e
+                )
 
     async def _recover_stranded_enrichment_rows(self) -> None:
         """Mark interrupted post-index enrichment as failed without touching indexed files."""
