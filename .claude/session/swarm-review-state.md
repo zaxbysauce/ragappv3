@@ -97,3 +97,26 @@
 - NEW: pool _created_count double-decrement underflow on create-failure path (database.py:2569-2573 + 2645-2647) LOW.
 
 ## Pending: critic verdicts on F1-F14 batch, then final report synthesis.
+
+## DEEP DIVE (403s / onboarding / reverse-proxy) — issues filed #216-#231
+
+### Reverse-proxy (reviewer-validated, #231): NO code criticals; default deploy safe.
+- Explorer CRITICALs (rate-limiter single-bucket, XFP spoofing) DISPROVED as default-config; both misconfig-dependent.
+- Real: docs contradiction FORWARDED_ALLOW_IPS=* (admin-guide) vs warn (.env.example) MEDIUM; no TrustedHostMiddleware MEDIUM(defensible); no SSE heartbeat LOW; X-Accel-Buffering:no already correct (Connection:close advice was WRONG).
+
+### must_change_password onboarding (orchestrator-verified, #230 HIGH):
+- deps.py:278-290 exempt_paths = only change-password+login; /auth/me NOT exempt though its docstring says it surfaces the flag.
+- Frontend: must_change_password consumed ONLY in AdminUsersPage (admin side). No forced-change route/guard. Login lands user on /documents → every call 403s. Reload: init→refresh→fetchMe→/auth/me 403→catch clears auth→bounced to login.
+- Escape hatch reachable (/csrf-token ungated settings.py:853; /auth/change-password exempt) but undiscoverable.
+
+### Onboarding/403 reviewer IN PROGRESS (a42274a70783760f9) — validating contested claims:
+- C2 temp-password-can't-verify: expect DISPROVED (admin sets bcrypt hash normally).
+- R1 default vault "read" → members can't upload: verify permission + frontend gating.
+- U1/U2 users_enabled=False login UX: verify guards.
+- I1 init needsSetup=null spinner: expect DISPROVED (checkSetupStatus catch sets false).
+- F1/C3 CSRF race: expect mitigated by interceptor.
+- A2 admin reset doesn't signal must_change_password: confirm UX gap.
+- M3 session list/revoke endpoints exist, no frontend UI.
+- 403: viewer can't list orgs (require_role member) LOW; /memories no vault_id requires admin (frontend always passes?) ; chat vault perm check EXISTS (DISPROVE explorer #12).
+
+### Already-tracked (NOT re-filed): P3 XML-escaping/prompt-injection (#209 HIGH-1/2/CRIT-1); CI 8/214 (#209 CRIT-2).
