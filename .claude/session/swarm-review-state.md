@@ -120,3 +120,16 @@
 - 403: viewer can't list orgs (require_role member) LOW; /memories no vault_id requires admin (frontend always passes?) ; chat vault perm check EXISTS (DISPROVE explorer #12).
 
 ### Already-tracked (NOT re-filed): P3 XML-escaping/prompt-injection (#209 HIGH-1/2/CRIT-1); CI 8/214 (#209 CRIT-2).
+
+## Onboarding/403 reviewer COMPLETE — filed #232 (consolidated onboarding UX)
+- C2 temp-password-can't-verify: DISPROVED (single bcrypt ctx; all paths use async_hash_password). DROPPED.
+- I1 infinite spinner: DISPROVED (checkSetupStatus catch sets needsSetup=false). DROPPED.
+- F1/C3 CSRF race: DISPROVED (interceptor auto-fetch+retry; login resets+ensures). DROPPED.
+- chat-routes-no-vault-check: DISPROVED (chat.py:491-504,539-552 explicit read check). DROPPED.
+- viewer-can't-list-orgs / memories-no-vault-id: BY-DESIGN niche. DROPPED.
+- R1 read-only default vault: MEDIUM friction (NOT dead-end; member can create own vault vaults.py:328). FILED #232.
+- A2 reset warning unreachable: LOW (AdminUsersPage.tsx:118/250/279). FILED #232.
+- M3 session mgmt endpoints unwired: LOW feature gap. FILED #232.
+- U1/U2 single-admin-mode login 401 (not 500): LOW. FILED #232.
+
+## ALL ISSUES FILED: #216-#232 (17). Deep dive complete.
