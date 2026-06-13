@@ -31,6 +31,7 @@ import {
   getSettings,
   updateSettings,
   testConnections,
+  reindexAll,
 } from "@/lib/api";
 import type { ConnectionTestResult, UpdateSettingsRequest } from "@/lib/api";
 import { useTestMode } from "@/fixtures/TestModeContext";
@@ -107,6 +108,8 @@ function SettingsPageContent({
   const activeVaultId = useVaultStore((s) => s.activeVaultId);
   const [activeTab, setActiveTab] = useState<SettingsTab>("overview");
   const [reindexDialogOpen, setReindexDialogOpen] = useState(false);
+  const [embeddingMismatch, setEmbeddingMismatch] = useState(false);
+  const [reindexing, setReindexing] = useState(false);
 
   useEffect(() => {
     if (testMode) {
@@ -120,6 +123,7 @@ function SettingsPageContent({
         if (mounted) {
           setSettings(data);
           initializeForm(data);
+          setEmbeddingMismatch(!!data.embedding_model_mismatch);
         }
       })
       .catch((err) => {
@@ -258,7 +262,46 @@ function SettingsPageContent({
 
   return (
     <>
-      {reindexRequired && (
+      {embeddingMismatch && (
+        <div className="flex items-start gap-3 rounded-sm border border-amber-300 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 p-4">
+          <AlertTriangle
+            className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5"
+            aria-hidden
+          />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+              Embedding model has changed
+            </p>
+            <p className="text-xs text-amber-700 dark:text-amber-300 mt-0.5">
+              Existing documents may return degraded search results.
+              Reindex all documents to update embeddings with the current model.
+            </p>
+          </div>
+          <button
+            disabled={reindexing}
+            onClick={async () => {
+              setReindexing(true);
+              try {
+                const result = await reindexAll();
+                toast.success(`Reindex started: ${result.queued} documents queued`);
+                setEmbeddingMismatch(false);
+                setReindexRequired(false);
+              } catch (err) {
+                toast.error(
+                  err instanceof Error ? err.message : "Failed to start reindex",
+                );
+              } finally {
+                setReindexing(false);
+              }
+            }}
+            className="rounded-sm border border-amber-400 bg-amber-100 dark:bg-amber-900/40 px-3 py-1 text-xs font-medium text-amber-800 dark:text-amber-200 hover:bg-amber-200 dark:hover:bg-amber-900/60 disabled:opacity-50 flex-shrink-0"
+          >
+            {reindexing ? "Reindexing..." : "Reindex All"}
+          </button>
+        </div>
+      )}
+
+      {reindexRequired && !embeddingMismatch && (
         <div className="flex items-start gap-3 rounded-sm border border-amber-300 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 p-4">
           <AlertTriangle
             className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5"

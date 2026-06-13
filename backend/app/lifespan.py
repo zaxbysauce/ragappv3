@@ -272,6 +272,60 @@ async def _validate_tei_embedding_model(embedding_service) -> None:
         logger.warning("TEI model validation failed (continuing): %s", e)
 
 
+def _check_embedding_model_identity(app: FastAPI) -> None:
+    """Compare the current embedding model config against the persisted identity.
+
+    On first run, writes the current model info. On subsequent runs, if the
+    stored model name differs from the configured model, sets
+    ``app.state.embedding_model_mismatch = True`` and logs a warning.
+    """
+    import sqlite3 as _sqlite3
+
+    conn = _sqlite3.connect(str(settings.sqlite_path))
+    conn.row_factory = _sqlite3.Row
+    try:
+        current_model = settings.embedding_model
+        current_dim = settings.embedding_dim
+
+        row = conn.execute(
+            "SELECT model_name, dimensions FROM embedding_model_info WHERE id = 1"
+        ).fetchone()
+
+        if row is None:
+            # First-time setup: persist the current model info.
+            conn.execute(
+                "INSERT INTO embedding_model_info (id, model_name, dimensions, updated_at) "
+                "VALUES (1, ?, ?, CURRENT_TIMESTAMP)",
+                (current_model, current_dim),
+            )
+            conn.commit()
+            logger.info(
+                "Embedding model identity recorded: model=%s, dim=%d",
+                current_model,
+                current_dim,
+            )
+            return
+
+        stored_model = row["model_name"]
+        if stored_model != current_model:
+            logger.warning("=" * 60)
+            logger.warning(
+                "Embedding model changed from '%s' to '%s'. "
+                "Existing vectors may return degraded results. "
+                "Run a full reindex to update all documents.",
+                stored_model,
+                current_model,
+            )
+            logger.warning("=" * 60)
+            app.state.embedding_model_mismatch = True
+        else:
+            logger.info(
+                "Embedding model identity check passed: %s", current_model
+            )
+    finally:
+        conn.close()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown events."""
@@ -405,6 +459,16 @@ async def lifespan(app: FastAPI):
         logger.error("Please run the reindex process or delete the LanceDB database.")
         logger.error("=" * 60)
         # Continue startup but warn that reindex is needed
+
+    # Embedding model identity check (Issue #220): detect same-dimension model
+    # swaps that would silently corrupt retrieval by mixing incompatible
+    # embedding spaces. The mismatch flag is surfaced via GET /api/settings.
+    app.state.embedding_model_mismatch = False
+    try:
+        _check_embedding_model_identity(app)
+    except Exception as exc:
+        logger.warning("Embedding model identity check failed (continuing): %s", exc)
+
     # Parent-window retrieval startup check: if the operator has enabled
     # parent_retrieval but the on-disk chunks were ingested before the
     # parent_window_text was being persisted, the feature degrades to

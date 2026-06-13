@@ -715,6 +715,15 @@ CREATE TABLE IF NOT EXISTS vector_delete_pending (
     attempts INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_vector_delete_pending_file_id ON vector_delete_pending(file_id);
+
+-- Embedding model identity: singleton row tracking the active embedding model
+-- so model changes between same-dimension models are detected (Issue #220).
+CREATE TABLE IF NOT EXISTS embedding_model_info (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    model_name TEXT NOT NULL,
+    dimensions INTEGER NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 -- NOTE: the idx_files_folder_id index is created by migrate_add_folders(), not
 -- here. The files table's executescript path also runs against pre-existing
 -- (legacy) databases where files.folder_id may not exist yet; indexing it here
@@ -872,6 +881,7 @@ def run_migrations(sqlite_path: str) -> None:
     migrate_add_wiki_claims_unique_claim_text(sqlite_path)
     migrate_assign_orphan_users_to_default_vault(sqlite_path)
     migrate_add_wiki_lint_findings_json_check(sqlite_path)
+    migrate_add_embedding_model_info(sqlite_path)
 
     # Add partial unique index for duplicate hash detection (HIGH-10)
     # Wrapped in IntegrityError handler: existing databases may have duplicate
@@ -3031,5 +3041,28 @@ def migrate_add_wiki_lint_findings_json_check(sqlite_path: str) -> None:
         except Exception:
             pass
         raise
+    finally:
+        conn.close()
+
+
+def migrate_add_embedding_model_info(sqlite_path: str) -> None:
+    """Migration: add embedding_model_info singleton table (Issue #220).
+
+    Tracks which embedding model produced the stored vectors so that swapping
+    between two same-dimension models is detected at startup.
+
+    Idempotent -- safe to run multiple times.
+    """
+    conn = sqlite3.connect(sqlite_path)
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS embedding_model_info (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                model_name TEXT NOT NULL,
+                dimensions INTEGER NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.commit()
     finally:
         conn.close()

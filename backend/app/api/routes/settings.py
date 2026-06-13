@@ -598,6 +598,10 @@ class SettingsResponse(BaseModel):
     # CORS (safe to expose)
     backend_cors_origins: list[str]
 
+    # Embedding model mismatch flag (Issue #220). True when the configured
+    # embedding model differs from the model that produced the stored vectors.
+    embedding_model_mismatch: bool = False
+
     # Source map: per field, where the effective runtime value came from.
     # Values: "kv" (settings_kv override), "env" (matches an env variable),
     # "default" (Pydantic default). The Models tab uses this to label each
@@ -800,12 +804,16 @@ def _apply_settings_update(update: SettingsUpdate) -> SettingsResponse:
 @router.get("/settings/", response_model=SettingsResponse, include_in_schema=False)
 @router.get("/settings", response_model=SettingsResponse)
 def get_settings(
+    request: Request,
     user: dict = Depends(get_current_active_user),
     conn: sqlite3.Connection = Depends(get_db),
 ):
     """Return current public settings dict (including embedding_batch_size)."""
     settings_dict = _build_settings_dict()
     settings_dict["effective_sources"] = _compute_effective_sources(conn)
+    settings_dict["embedding_model_mismatch"] = getattr(
+        request.app.state, "embedding_model_mismatch", False
+    )
     return SettingsResponse.model_validate(settings_dict)
 
 

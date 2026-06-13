@@ -402,6 +402,10 @@ export interface SettingsResponse {
    */
   effective_sources?: Record<string, "kv" | "env" | "default">;
 
+  /** True when the configured embedding model differs from the model that
+   *  produced the stored vectors (Issue #220). */
+  embedding_model_mismatch?: boolean;
+
   // Limits
   max_file_size_mb: number;
   allowed_extensions: string[];
@@ -887,6 +891,18 @@ export async function updateSettings(
   request: UpdateSettingsRequest
 ): Promise<SettingsResponse> {
   const response = await apiClient.put<SettingsResponse>("/settings", request);
+  return response.data;
+}
+
+export async function reindexAll(
+  vaultId?: number,
+): Promise<{ queued: number; vault_id: number | null }> {
+  const params = vaultId != null ? { vault_id: vaultId } : {};
+  const response = await apiClient.post<{ queued: number; vault_id: number | null }>(
+    "/admin/reindex",
+    null,
+    { params },
+  );
   return response.data;
 }
 
