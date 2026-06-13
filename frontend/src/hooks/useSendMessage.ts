@@ -138,11 +138,28 @@ export function useSendMessage(
       // below overwrites this if the server applied a fallback.
       updateMessage(assistantMessageId, { mode: effectiveMode });
 
+      // --- rAF coalescing (issue #224) ---
+      // Buffer incoming token chunks and flush to appendToMessage at frame
+      // cadence instead of on every SSE event, avoiding O(n²) re-parses.
+      let pendingChunks = "";
+      let rafId: number | null = null;
+
+      function flushChunks() {
+        if (pendingChunks) {
+          appendToMessage(assistantMessageId, pendingChunks);
+          pendingChunks = "";
+        }
+        rafId = null;
+      }
+
       const abort = chatStream(
         chatMessages,
         {
           onMessage: (chunk) => {
-            appendToMessage(assistantMessageId, chunk);
+            pendingChunks += chunk;
+            if (rafId === null) {
+              rafId = requestAnimationFrame(flushChunks);
+            }
           },
           onSources: (sources) => {
             updateMessage(assistantMessageId, { sources });
@@ -168,6 +185,10 @@ export function useSendMessage(
             updateMessage(assistantMessageId, { content });
           },
           onError: (error) => {
+            // Flush any buffered rAF chunks before handling the error
+            if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
+            flushChunks();
+
             console.error("Chat stream error:", error);
             const isAbort =
               error.name === "AbortError" || /aborted|abort/i.test(error.message);
@@ -192,6 +213,10 @@ export function useSendMessage(
             sendingRef.current = false;
           },
           onComplete: async () => {
+            // Flush any buffered rAF chunks so the final content is complete
+            if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
+            flushChunks();
+
             setIsStreaming(false);
             setAbortFn(null);
             setStreamingMessageId(null);
@@ -199,22 +224,26 @@ export function useSendMessage(
             try {
               const storeState = useChatStore.getState();
               const assistantMsg = storeState.messagesById[assistantMessageId];
+
+              // Guard: if the assistant message was removed (e.g. session
+              // switched while streaming — issue #235), skip persistence
+              // entirely to avoid orphaning a lone user message.
+              if (!assistantMsg) {
+                return;
+              }
+
               const saves: Promise<ChatSessionMessage>[] = [
                 addChatMessage(sessionId, { role: "user", content }),
+                addChatMessage(sessionId, {
+                  role: "assistant",
+                  content: assistantMsg.content,
+                  sources: assistantMsg.sources ?? undefined,
+                  memories: assistantMsg.memoriesUsed ?? undefined,
+                  wiki_refs: streamedWikiRefs.length > 0 ? streamedWikiRefs : undefined,
+                  kms_refs: streamedKmsRefs.length > 0 ? streamedKmsRefs : undefined,
+                  mode: assistantMsg.mode,
+                }),
               ];
-              if (assistantMsg) {
-                saves.push(
-                  addChatMessage(sessionId, {
-                    role: "assistant",
-                    content: assistantMsg.content,
-                    sources: assistantMsg.sources ?? undefined,
-                    memories: assistantMsg.memoriesUsed ?? undefined,
-                    wiki_refs: streamedWikiRefs.length > 0 ? streamedWikiRefs : undefined,
-                    kms_refs: streamedKmsRefs.length > 0 ? streamedKmsRefs : undefined,
-                    mode: assistantMsg.mode,
-                  })
-                );
-              }
               const [userSaveResult, assistantSaveResult] = await Promise.all(saves);
 
               // Atomically migrate temp client IDs to DB-assigned IDs.
@@ -234,7 +263,7 @@ export function useSendMessage(
               };
 
               migrateId(userMessage.id, userSaveResult);
-              if (assistantSaveResult) migrateId(assistantMessageId, assistantSaveResult);
+              migrateId(assistantMessageId, assistantSaveResult);
 
               await refreshHistory(true);
               useChatShellStore.getState().requestSessionListRefresh();

@@ -191,41 +191,217 @@ describe("useSendMessage", () => {
     });
   });
 
-  describe("error-path coverage (issue #55)", () => {
-    type StreamHandlers = {
-      onMessage: (chunk: string) => void;
-      onSources: (sources: unknown[]) => void;
-      onMemories: (memories: unknown[]) => void;
-      onWiki: (wikiRefs: unknown[]) => void;
-      onKMS: (kmsRefs: unknown[]) => void;
-      onMode: (mode: string) => void;
-      onError: (error: Error) => void;
-      onComplete: () => Promise<void> | void;
-    };
+  type StreamHandlers = {
+    onMessage: (chunk: string) => void;
+    onSources: (sources: unknown[]) => void;
+    onMemories: (memories: unknown[]) => void;
+    onWiki: (wikiRefs: unknown[]) => void;
+    onKMS: (kmsRefs: unknown[]) => void;
+    onMode: (mode: string) => void;
+    onError: (error: Error) => void;
+    onComplete: () => Promise<void> | void;
+  };
 
-    // Install a chatStream mock that captures the handlers so each test can
-    // fire them at will. The captured handler is read from a mutable cell
-    // so subsequent mock invocations (e.g. retries) update the reference
-    // and trigger calls operate on the latest invocation.
-    function installCapturingStreamMock(): { trigger: { error: (e: Error) => void; complete: () => void } } {
-      const cell: { current: StreamHandlers | null } = { current: null };
-      apiMocks.chatStream.mockImplementation((_messages: unknown, handlers: StreamHandlers) => {
-        cell.current = handlers;
-        return vi.fn(); // abort function
-      });
-      return {
-        trigger: {
-          error: (e: Error) => {
-            if (!cell.current) throw new Error("chatStream was not invoked yet");
-            cell.current.onError(e);
-          },
-          complete: () => {
-            if (!cell.current) throw new Error("chatStream was not invoked yet");
-            void cell.current.onComplete();
-          },
+  // Install a chatStream mock that captures the handlers so each test can
+  // fire them at will. The captured handler is read from a mutable cell
+  // so subsequent mock invocations (e.g. retries) update the reference
+  // and trigger calls operate on the latest invocation.
+  function installCapturingStreamMock(): { trigger: { error: (e: Error) => void; complete: () => void; message: (chunk: string) => void } } {
+    const cell: { current: StreamHandlers | null } = { current: null };
+    apiMocks.chatStream.mockImplementation((_messages: unknown, handlers: StreamHandlers) => {
+      cell.current = handlers;
+      return vi.fn(); // abort function
+    });
+    return {
+      trigger: {
+        error: (e: Error) => {
+          if (!cell.current) throw new Error("chatStream was not invoked yet");
+          cell.current.onError(e);
         },
-      };
-    }
+        complete: () => {
+          if (!cell.current) throw new Error("chatStream was not invoked yet");
+          void cell.current.onComplete();
+        },
+        message: (chunk: string) => {
+          if (!cell.current) throw new Error("chatStream was not invoked yet");
+          cell.current.onMessage(chunk);
+        },
+      },
+    };
+  }
+
+  describe("rAF coalescing (issue #224)", () => {
+    it("coalesces multiple onMessage chunks into a single appendToMessage call per frame", async () => {
+      // Stub rAF to capture the callback without auto-firing
+      const rafCallbacks: FrameRequestCallback[] = [];
+      vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((cb) => {
+        rafCallbacks.push(cb);
+        return rafCallbacks.length;
+      });
+      vi.spyOn(globalThis, "cancelAnimationFrame").mockImplementation(() => {});
+
+      const capture = installCapturingStreamMock();
+      const refreshHistory = vi.fn().mockResolvedValue(undefined);
+      useChatStore.setState({ activeChatId: "42", input: "Hello" });
+
+      const { result } = renderHook(() => useSendMessage(7, refreshHistory));
+
+      await act(async () => {
+        await result.current.handleSend();
+      });
+
+      const streamingId = useChatStore.getState().streamingMessageId!;
+
+      // Send 3 chunks — only one rAF should be scheduled
+      act(() => {
+        capture.trigger.message("He");
+        capture.trigger.message("ll");
+        capture.trigger.message("o!");
+      });
+
+      // rAF was called exactly once (first chunk schedules; subsequent chunks buffer)
+      expect(globalThis.requestAnimationFrame).toHaveBeenCalledTimes(1);
+
+      // Content should not have been flushed yet (rAF hasn't fired)
+      expect(useChatStore.getState().messagesById[streamingId].content).toBe("");
+
+      // Fire the rAF callback — all 3 chunks flushed at once
+      act(() => {
+        rafCallbacks[0](0);
+      });
+
+      expect(useChatStore.getState().messagesById[streamingId].content).toBe("Hello!");
+
+      vi.restoreAllMocks();
+    });
+
+    it("flushes remaining buffered chunks on stream completion", async () => {
+      vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((cb) => {
+        // Don't fire automatically — let onComplete flush
+        return 1;
+      });
+      vi.spyOn(globalThis, "cancelAnimationFrame").mockImplementation(() => {});
+
+      apiMocks.addChatMessage
+        .mockReset()
+        .mockResolvedValueOnce({ id: 200, created_at: "2026-06-01T00:00:00Z" })
+        .mockResolvedValueOnce({ id: 201, created_at: "2026-06-01T00:00:01Z" });
+
+      const capture = installCapturingStreamMock();
+      const refreshHistory = vi.fn().mockResolvedValue(undefined);
+      useChatStore.setState({ activeChatId: "42", input: "Hi" });
+
+      const { result } = renderHook(() => useSendMessage(7, refreshHistory));
+
+      await act(async () => {
+        await result.current.handleSend();
+      });
+
+      const streamingId = useChatStore.getState().streamingMessageId!;
+
+      // Buffer chunks without firing rAF
+      act(() => {
+        capture.trigger.message("done");
+      });
+
+      expect(useChatStore.getState().messagesById[streamingId].content).toBe("");
+
+      // Complete — should cancel pending rAF and flush
+      await act(async () => {
+        capture.trigger.complete();
+      });
+
+      // After onComplete, the message ID may have been migrated by migrateId.
+      // Find the assistant message by role to verify content was flushed.
+      await waitFor(() => {
+        const allMessages = useChatStore.getState().messagesById;
+        const assistantMsg = Object.values(allMessages).find(
+          (m) => m.role === "assistant"
+        );
+        expect(assistantMsg).toBeDefined();
+        expect(assistantMsg?.content).toBe("done");
+      });
+
+      vi.restoreAllMocks();
+    });
+
+    it("flushes remaining buffered chunks on stream error", async () => {
+      vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation(() => 1);
+      vi.spyOn(globalThis, "cancelAnimationFrame").mockImplementation(() => {});
+
+      const capture = installCapturingStreamMock();
+      const refreshHistory = vi.fn().mockResolvedValue(undefined);
+      useChatStore.setState({ activeChatId: "42", input: "Fail" });
+
+      const { result } = renderHook(() => useSendMessage(7, refreshHistory));
+
+      await act(async () => {
+        await result.current.handleSend();
+      });
+
+      const streamingId = useChatStore.getState().streamingMessageId!;
+
+      act(() => {
+        capture.trigger.message("partial");
+      });
+
+      // Error should flush buffered content before stamping the error
+      await act(async () => {
+        capture.trigger.error(new Error("server down"));
+      });
+
+      await waitFor(() => {
+        expect(useChatStore.getState().isStreaming).toBe(false);
+      });
+
+      const assistant = useChatStore.getState().messagesById[streamingId];
+      expect(assistant?.content).toBe("partial");
+      expect(assistant?.error).toBe("server down");
+
+      vi.restoreAllMocks();
+    });
+  });
+
+  describe("abort guard in onComplete (issue #235)", () => {
+    it("skips persistence when assistant message was removed (session switched during stream)", async () => {
+      const capture = installCapturingStreamMock();
+      const refreshHistory = vi.fn().mockResolvedValue(undefined);
+      useChatStore.setState({ activeChatId: "42", input: "Will be abandoned" });
+
+      const { result } = renderHook(() => useSendMessage(7, refreshHistory));
+
+      await act(async () => {
+        await result.current.handleSend();
+      });
+
+      const streamingId = useChatStore.getState().streamingMessageId!;
+      expect(streamingId).toBeTruthy();
+
+      // Simulate a session switch: loadChat clears messages and aborts,
+      // but the orphan stream's onComplete can still fire asynchronously.
+      // Remove the assistant message from the store to simulate this.
+      act(() => {
+        useChatStore.setState({
+          messageIds: [],
+          messagesById: {},
+          streamingMessageId: null,
+          activeChatId: "99",
+        });
+      });
+
+      // Now fire onComplete — should skip persistence because assistant
+      // message no longer exists.
+      await act(async () => {
+        capture.trigger.complete();
+      });
+
+      // Neither user nor assistant message should have been persisted
+      expect(apiMocks.addChatMessage).not.toHaveBeenCalled();
+      expect(refreshHistory).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("error-path coverage (issue #55)", () => {
 
     it("flips isStreaming to true synchronously when send begins", async () => {
       // Arrange: a stream that never completes, so we can observe the
