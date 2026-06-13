@@ -219,7 +219,10 @@ export function DocumentTable({
                       className="p-4 flex-none w-[120px]"
                       title={documentProgress(doc).errorMessage ?? undefined}
                     >
-                      <StatusBadge status={doc.metadata?.status as string} />
+                      <StatusBadge
+                        status={doc.metadata?.status as string}
+                        chunksFailed={Number(doc.metadata?.chunks_failed ?? 0)}
+                      />
                     </td>
                     <td className="p-4 flex-none w-[180px]">
                       <DocumentProgressCell doc={doc} />

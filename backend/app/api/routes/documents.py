@@ -311,6 +311,7 @@ class DocumentResponse(BaseModel):
     vault_id: Optional[int] = None
     status: str
     chunk_count: int
+    chunks_failed: int = 0  # Chunks dropped due to embedding failures (Issue #221)
     size: Optional[int] = None  # Frontend expects size
     created_at: Optional[str]
     processed_at: Optional[str]
@@ -440,6 +441,7 @@ def _row_to_document_response(row: sqlite3.Row) -> DocumentResponse:
     keys = row.keys()
     file_name = row["file_name"]
     chunk_count = row["chunk_count"] or 0
+    chunks_failed = (row["chunks_failed"] if "chunks_failed" in keys else 0) or 0
     status = row["status"]
     error_message = row["error_message"] if "error_message" in keys else None
     phase = row["phase"] if "phase" in keys else None
@@ -463,6 +465,7 @@ def _row_to_document_response(row: sqlite3.Row) -> DocumentResponse:
         vault_id=row["vault_id"] if "vault_id" in keys else None,
         status=status,
         chunk_count=chunk_count,
+        chunks_failed=chunks_failed,
         size=row["file_size"]
         if "file_size" in row.keys() and row["file_size"] is not None
         else None,
@@ -484,6 +487,7 @@ def _row_to_document_response(row: sqlite3.Row) -> DocumentResponse:
             "status": status,
             "chunk_count": chunk_count,
             "chunks": chunk_count,  # Backward compatibility
+            "chunks_failed": chunks_failed,
             # Keep progress fields mirrored for legacy metadata-based clients.
             "error_message": error_message,
             "phase": phase,
@@ -630,7 +634,7 @@ async def list_documents(
         cursor = await asyncio.to_thread(
             conn.execute,
             f"""
-            SELECT id, file_name, file_path, status, chunk_count, file_size,
+            SELECT id, file_name, file_path, status, chunk_count, chunks_failed, file_size,
                    created_at, processed_at, error_message, phase, phase_message,
                    progress_percent, processed_units, total_units, unit_label,
                    phase_started_at, processing_started_at, enrichment_status,
@@ -660,7 +664,7 @@ async def list_documents(
             cursor = await asyncio.to_thread(
                 conn.execute,
                 f"""
-                SELECT id, file_name, file_path, status, chunk_count, file_size,
+                SELECT id, file_name, file_path, status, chunk_count, chunks_failed, file_size,
                        created_at, processed_at, error_message, phase, phase_message,
                        progress_percent, processed_units, total_units, unit_label,
                        phase_started_at, processing_started_at, enrichment_status,
@@ -684,7 +688,7 @@ async def list_documents(
             cursor = await asyncio.to_thread(
                 conn.execute,
                 f"""
-                SELECT id, file_name, file_path, status, chunk_count, file_size,
+                SELECT id, file_name, file_path, status, chunk_count, chunks_failed, file_size,
                        created_at, processed_at, error_message, phase, phase_message,
                        progress_percent, processed_units, total_units, unit_label,
                        phase_started_at, processing_started_at, enrichment_status,
@@ -1035,7 +1039,7 @@ async def get_document(
     cursor = await asyncio.to_thread(
         conn.execute,
         """
-        SELECT id, file_name, file_path, status, chunk_count, file_size, vault_id,
+        SELECT id, file_name, file_path, status, chunk_count, chunks_failed, file_size, vault_id,
                created_at, processed_at, error_message, phase, phase_message,
                progress_percent, processed_units, total_units, unit_label,
                phase_started_at, processing_started_at, enrichment_status,
@@ -1451,20 +1455,45 @@ def _unlink_document_file(stored_path: str, vault_id: int) -> None:
         logger.warning("Failed to unlink document file %s: %s", file_path, exc)
 
 
+def _record_pending_vector_delete(
+    conn: sqlite3.Connection, file_id: int, vault_id: int
+) -> None:
+    """Best-effort durable record of a failed vector-store chunk delete.
+
+    Inserted on the caller's connection (no commit) so it lands in the same
+    transaction as the files-row delete: either both are committed or neither.
+    A background sweep retries these rows so orphaned chunks never stay
+    silently searchable after the file record is gone (Issue #219).
+    """
+    try:
+        conn.execute(
+            "INSERT INTO vector_delete_pending (file_id, vault_id) VALUES (?, ?)",
+            (file_id, vault_id),
+        )
+    except sqlite3.Error as exc:
+        logger.warning(
+            "Failed to record pending vector delete for file_id=%s: %s",
+            file_id,
+            exc,
+        )
+
+
 async def _purge_file_derived_data(
     conn: sqlite3.Connection,
     vector_store: VectorStore,
     file_id: int,
     vault_id: int,
-) -> Optional[str]:
+) -> tuple[Optional[str], bool]:
     """Best-effort cleanup of a file's derived data, without deleting its row.
 
     Removes vector chunks and marks dependent wiki claims stale (both external
     to the files-table transaction and best-effort), then returns the resolved
-    on-disk path so the caller can GC it after the row is gone. Does NOT delete
-    the files row and does NOT commit.
+    on-disk path so the caller can GC it after the row is gone, plus whether
+    the vector-store chunk deletion failed (so the caller can durably record
+    the failure for retry). Does NOT delete the files row and does NOT commit.
     """
     stored_path: Optional[str] = None
+    vector_delete_failed = False
     try:
         path_cursor = await asyncio.to_thread(
             conn.execute, "SELECT file_path FROM files WHERE id = ?", (file_id,)
@@ -1492,6 +1521,7 @@ async def _purge_file_derived_data(
             )
     except Exception as e:
         logger.warning("Error deleting chunks from vector store: %s", e)
+        vector_delete_failed = True
 
     try:
         from app.services.wiki_store import WikiStore as _WikiStore
@@ -1502,7 +1532,7 @@ async def _purge_file_derived_data(
     except Exception as e:
         logger.warning("mark_claims_stale_by_file(%d) failed: %s", file_id, e)
 
-    return stored_path
+    return stored_path, vector_delete_failed
 
 
 async def _delete_file_record(
@@ -1516,9 +1546,17 @@ async def _delete_file_record(
     try:
         # Resolve the on-disk path and purge derived data before deleting the
         # row so the file can be garbage-collected from disk afterwards (DD-C003).
-        stored_path = await _purge_file_derived_data(
+        stored_path, vector_delete_failed = await _purge_file_derived_data(
             conn, vector_store, file_id, vault_id
         )
+
+        # Record the failed chunk delete in the same transaction as the row
+        # delete so the background sweep can retry it (Issue #219). The user-
+        # facing delete is never blocked on this.
+        if vector_delete_failed:
+            await asyncio.to_thread(
+                _record_pending_vector_delete, conn, file_id, vault_id
+            )
 
         await asyncio.to_thread(
             conn.execute, "DELETE FROM files WHERE id = ?", (file_id,)
@@ -1705,19 +1743,23 @@ async def delete_all_vault_documents(
     # Purge derived data (vector chunks, wiki claims) per file first. These are
     # external to the files-table transaction and best-effort by design.
     stored_paths: list[str] = []
+    vector_delete_failed_ids: list[int] = []
     for file_id in file_ids:
         try:
-            path = await _purge_file_derived_data(
+            path, vector_delete_failed = await _purge_file_derived_data(
                 conn, vector_store, file_id, vault_id
             )
             if path:
                 stored_paths.append(path)
+            if vector_delete_failed:
+                vector_delete_failed_ids.append(file_id)
         except Exception:
             logger.exception(
                 "Error purging derived data for document %d in vault %d",
                 file_id,
                 vault_id,
             )
+            vector_delete_failed_ids.append(file_id)
 
     # Delete every files row for the vault atomically: either all rows are
     # removed or none are, so a mid-batch failure can no longer leave the vault
@@ -1751,6 +1793,10 @@ async def delete_all_vault_documents(
                             file_id,
                             exc,
                         )
+            # Record failed chunk deletes in the same transaction as the row
+            # deletes so the background sweep can retry them (Issue #219).
+            for failed_file_id in vector_delete_failed_ids:
+                _record_pending_vector_delete(conn, failed_file_id, vault_id)
             cur = conn.execute(
                 "DELETE FROM files WHERE vault_id = ?", (vault_id,)
             )

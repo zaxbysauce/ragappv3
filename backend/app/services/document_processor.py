@@ -22,7 +22,12 @@ from ..models.database import SQLiteConnectionPool, get_pool
 from ..utils.file_utils import compute_file_hash
 from ..utils.retry import with_retry
 from .chunk_enrichment import ChunkEnrichmentService
-from .chunking import ProcessedChunk, SemanticChunker, compute_parent_windows
+from .chunking import (
+    EmbeddingSemanticChunker,
+    ProcessedChunk,
+    SemanticChunker,
+    compute_parent_windows,
+)
 from .contextual_chunking import ContextualChunker
 from .document_progress import (
     PHASE_CHUNKING,
@@ -570,20 +575,43 @@ class DocumentProcessor:
         self._contextual_chunker = None
         self._chunk_enrichment_service = None
 
-    def _get_chunker(self) -> SemanticChunker:
+    def _get_chunker(self) -> "SemanticChunker | EmbeddingSemanticChunker":
         """Return a chunker configured with the live settings values.
 
         Reading ``settings.chunk_size_chars`` / ``settings.chunk_overlap_chars``
         at call time lets admins change chunking via the Settings UI and have
         the next ingested document use the new values without restarting.
         Falls back to the values passed to ``__init__`` when settings are unset.
+
+        Honors ``settings.semantic_chunking_strategy``: 'embedding' selects the
+        cosine-similarity ``EmbeddingSemanticChunker`` (requires an embedding
+        service; falls back to title-based chunking with a warning when none is
+        available), while the default 'title' keeps the existing behavior.
         """
         size = settings.chunk_size_chars or self._chunk_size_fallback
         overlap = settings.chunk_overlap_chars or self._chunk_overlap_fallback
+        if settings.semantic_chunking_strategy == "embedding":
+            if self.embedding_service is None:
+                logger.warning(
+                    "semantic_chunking_strategy='embedding' but no embedding "
+                    "service is available; falling back to title-based chunking"
+                )
+            else:
+                existing = getattr(self, "chunker", None)
+                if (
+                    isinstance(existing, EmbeddingSemanticChunker)
+                    and existing.max_chunk_size == size
+                ):
+                    return existing
+                self.chunker = EmbeddingSemanticChunker(
+                    embedding_service=self.embedding_service,
+                    max_chunk_size=size,
+                )
+                return self.chunker
         # Reuse the cached chunker if it already matches; rebuild when settings change.
         existing = getattr(self, "chunker", None)
         if (
-            existing is not None
+            isinstance(existing, SemanticChunker)
             and getattr(existing, "chunk_size", None) == size
             and getattr(existing, "chunk_overlap", None) == overlap
         ):
@@ -1240,6 +1268,7 @@ class DocumentProcessor:
         conn: sqlite3.Connection,
         chunk_count: Optional[int] = None,
         error_message: Optional[str] = None,
+        chunks_failed: int = 0,
     ) -> None:
         """
         Update the processing status of a file.
@@ -1250,6 +1279,7 @@ class DocumentProcessor:
             conn: Database connection
             chunk_count: Number of chunks produced (optional)
             error_message: Error message if status is 'error' (optional)
+            chunks_failed: Chunks dropped due to embedding failures (Issue #221)
 
         Note:
             This method does not commit - caller is responsible for transaction management.
@@ -1259,9 +1289,10 @@ class DocumentProcessor:
         if status == "indexed":
             conn.execute(
                 """UPDATE files
-                   SET status = ?, chunk_count = ?, processed_at = ?, modified_at = ?
+                   SET status = ?, chunk_count = ?, chunks_failed = ?,
+                       processed_at = ?, modified_at = ?
                    WHERE id = ?""",
-                (status, chunk_count, now, now, file_id),
+                (status, chunk_count, chunks_failed, now, now, file_id),
             )
         elif status == "error":
             conn.execute(
@@ -1453,7 +1484,14 @@ class DocumentProcessor:
             # Existing single-scale behavior — use the live-settings chunker so
             # chunk_size_chars / chunk_overlap_chars changes apply per-document.
             active_chunker = self._get_chunker()
-            chunks = await asyncio.to_thread(active_chunker.chunk_elements, elements)
+            if isinstance(active_chunker, EmbeddingSemanticChunker):
+                # Embedding-based chunking is async (it embeds sentence windows)
+                # and operates on the joined document text rather than elements.
+                chunks = await active_chunker.chunk_text(document_text)
+            else:
+                chunks = await asyncio.to_thread(
+                    active_chunker.chunk_elements, elements
+                )
             if stage_timings is not None:
                 _add_elapsed_ms(stage_timings, "chunk_ms", chunk_started_at)
             return chunks, document_text
@@ -1646,6 +1684,10 @@ class DocumentProcessor:
                 percent=100.0,
             )
 
+            # Chunks dropped due to partial embedding failures (Issue #221);
+            # persisted to files.chunks_failed when the document is indexed.
+            chunks_failed_count = 0
+
             # Generate embeddings and store in vector store
             if self.embedding_service is not None and self.vector_store is not None:
                 # Skip embedding/indexing if no chunks (status indexed with 0 chunks is acceptable)
@@ -1714,6 +1756,7 @@ class DocumentProcessor:
                         original_chunk_count = len(chunks)
                         chunks = kept_chunks
                         embeddings = kept_embeddings
+                        chunks_failed_count = len(failed_chunk_indices)
 
                         if failure_pct > 50:
                             raise DocumentProcessingError(
@@ -1843,7 +1886,13 @@ class DocumentProcessor:
             await self._write_semaphore.acquire()
         conn = self.pool.get_connection()
         try:
-            self._update_status(file_id, "indexed", conn, chunk_count=len(chunks))
+            self._update_status(
+                file_id,
+                "indexed",
+                conn,
+                chunk_count=len(chunks),
+                chunks_failed=chunks_failed_count,
+            )
             conn.commit()
         finally:
             self.pool.release_connection(conn)
@@ -2125,6 +2174,10 @@ class DocumentProcessor:
                 percent=100.0,
             )
 
+            # Chunks dropped due to partial embedding failures (Issue #221);
+            # persisted to files.chunks_failed when the document is indexed.
+            chunks_failed_count = 0
+
             if self.embedding_service is not None and self.vector_store is not None:
                 if chunks:
                     chunks = [c for c in chunks if c.text and c.text.strip()]
@@ -2182,6 +2235,7 @@ class DocumentProcessor:
                         original_chunk_count = len(chunks)
                         chunks = kept_chunks
                         embeddings = kept_embeddings
+                        chunks_failed_count = len(failed_chunk_indices)
 
                         if failure_pct > 50:
                             raise DocumentProcessingError(
@@ -2298,7 +2352,13 @@ class DocumentProcessor:
             await self._write_semaphore.acquire()
         conn = self.pool.get_connection()
         try:
-            self._update_status(file_id, "indexed", conn, chunk_count=len(chunks))
+            self._update_status(
+                file_id,
+                "indexed",
+                conn,
+                chunk_count=len(chunks),
+                chunks_failed=chunks_failed_count,
+            )
             conn.commit()
         finally:
             self.pool.release_connection(conn)

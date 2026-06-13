@@ -150,7 +150,11 @@ vi.mock('@/components/vault/VaultSelector', () => ({
 }));
 
 vi.mock('@/components/shared/StatusBadge', () => ({
-  StatusBadge: ({ status }: { status: string }) => <span data-testid="status-badge">{status}</span>,
+  StatusBadge: ({ status, chunksFailed }: { status: string; chunksFailed?: number }) => (
+    <span data-testid="status-badge">
+      {status === 'indexed' && (chunksFailed ?? 0) > 0 ? 'Partially indexed' : status}
+    </span>
+  ),
 }));
 
 vi.mock('@/components/shared/DocumentCard', () => ({
@@ -359,6 +363,31 @@ describe('DocumentsPage - Drag to Resize Filename Column', () => {
       expect(screen.getByText('embedding - 0 / 0 chunks')).toBeInTheDocument();
       expect(screen.queryByText('NaN%')).not.toBeInTheDocument();
       expect(container.querySelector('[title="Parser could not read the file"]')).toBeInTheDocument();
+    });
+
+    it('renders Partially indexed for an indexed doc with failed chunks', async () => {
+      vi.mocked(listDocuments).mockResolvedValueOnce({
+        documents: [
+          {
+            id: 'partial-doc',
+            filename: 'partial.pdf',
+            size: 1024,
+            created_at: '2024-01-01',
+            metadata: { status: 'indexed', chunk_count: 7, chunks_failed: 3 },
+          },
+        ],
+        total: 1,
+      });
+
+      await act(async () => {
+        const result = render(<DocumentsPage />);
+        container = result.container;
+        unmount = result.unmount;
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText('Partially indexed')).toBeInTheDocument();
+      });
     });
 
     it('requests all-vault stats when no active vault is selected', async () => {

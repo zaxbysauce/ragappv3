@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS files (
     file_size INTEGER NOT NULL,
     file_type TEXT,
     chunk_count INTEGER DEFAULT 0,
+    chunks_failed INTEGER NOT NULL DEFAULT 0,
     status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'indexed', 'error')),
     error_message TEXT,
     source TEXT DEFAULT 'upload',
@@ -702,6 +703,18 @@ CREATE TABLE IF NOT EXISTS folders (
 
 CREATE INDEX IF NOT EXISTS idx_folders_vault ON folders(vault_id);
 CREATE INDEX IF NOT EXISTS idx_folders_parent ON folders(parent_folder_id);
+
+-- Pending vector-store chunk deletions: recorded when a document delete could
+-- not remove the file's LanceDB chunks so a background sweep can retry and
+-- orphaned chunks never stay silently searchable (Issue #219).
+CREATE TABLE IF NOT EXISTS vector_delete_pending (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_id INTEGER NOT NULL,
+    vault_id INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    attempts INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_vector_delete_pending_file_id ON vector_delete_pending(file_id);
 -- NOTE: the idx_files_folder_id index is created by migrate_add_folders(), not
 -- here. The files table's executescript path also runs against pre-existing
 -- (legacy) databases where files.folder_id may not exist yet; indexing it here
@@ -755,6 +768,7 @@ def init_db(sqlite_path: str) -> None:
                 ("enrichment_status", "TEXT"),
                 ("enrichment_error", "TEXT"),
                 ("enrichment_updated_at", "TIMESTAMP"),
+                ("chunks_failed", "INTEGER NOT NULL DEFAULT 0"),
             ):
                 if name not in existing_file_cols:
                     conn.execute(f"ALTER TABLE files ADD COLUMN {name} {ddl}")
@@ -845,6 +859,8 @@ def run_migrations(sqlite_path: str) -> None:
     migrate_add_files_parsed_text(sqlite_path)
     migrate_add_files_processing_progress(sqlite_path)
     migrate_add_files_enrichment_status(sqlite_path)
+    migrate_add_chunks_failed_column(sqlite_path)
+    migrate_add_vector_delete_pending(sqlite_path)
     migrate_add_files_search_fts(sqlite_path)
     migrate_add_files_content_fts(sqlite_path)
     migrate_add_curator_claim_support(sqlite_path)
@@ -2044,6 +2060,58 @@ def migrate_add_files_enrichment_status(sqlite_path: str) -> None:
         ):
             if name not in existing_cols:
                 conn.execute(f"ALTER TABLE files ADD COLUMN {name} {ddl}")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def migrate_add_chunks_failed_column(sqlite_path: str) -> None:
+    """Migration: add files.chunks_failed for partial embedding failures.
+
+    Records how many chunks were dropped because their embeddings failed
+    (Issue #221) so 'indexed' documents with silently missing chunks are
+    visible to operators and the frontend.
+
+    Idempotent — safe to run multiple times.
+    """
+    conn = sqlite3.connect(sqlite_path)
+    try:
+        existing_cols = {
+            row[1] for row in conn.execute("PRAGMA table_info(files)").fetchall()
+        }
+        if "chunks_failed" not in existing_cols:
+            conn.execute(
+                "ALTER TABLE files ADD COLUMN chunks_failed INTEGER NOT NULL DEFAULT 0"
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def migrate_add_vector_delete_pending(sqlite_path: str) -> None:
+    """Migration: add vector_delete_pending retry-queue table.
+
+    Records file IDs whose LanceDB chunk deletion failed during a document
+    delete so a background sweep can retry the delete instead of leaving
+    orphaned chunks searchable forever (Issue #219).
+
+    Idempotent — safe to run multiple times.
+    """
+    conn = sqlite3.connect(sqlite_path)
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS vector_delete_pending (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id INTEGER NOT NULL,
+                vault_id INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                attempts INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_vector_delete_pending_file_id
+            ON vector_delete_pending(file_id)
+        """)
         conn.commit()
     finally:
         conn.close()

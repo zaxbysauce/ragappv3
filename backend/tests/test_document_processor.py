@@ -246,7 +246,7 @@ CREATE TABLE posts (
         conn = sqlite3.connect(self.temp_db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.execute(
-            "SELECT status, chunk_count FROM files WHERE id = ?",
+            "SELECT status, chunk_count, chunks_failed FROM files WHERE id = ?",
             (result.file_id,)
         )
         row = cursor.fetchone()
@@ -258,6 +258,9 @@ CREATE TABLE posts (
 
         # Assert chunk_count matches number of chunks
         self.assertEqual(row['chunk_count'], len(result.chunks))
+
+        # No embedding failures occurred, so chunks_failed stays 0 (Issue #221)
+        self.assertEqual(row['chunks_failed'], 0)
 
     def test_process_file_raises_duplicate_error_on_second_call(self):
         """Test that second call with same file raises DuplicateFileError."""
@@ -342,6 +345,64 @@ CREATE TABLE posts (
         self.assertIsNotNone(row)
         self.assertEqual(row["status"], "error")
         self.assertIn("zero LanceDB rows", row["error_message"])
+
+    def test_process_file_persists_chunks_failed_on_partial_embedding_failure(self):
+        """Dropped chunks from partial embedding failures are recorded (Issue #221)."""
+
+        class FakeEmbeddingService:
+            MAX_TEXT_LENGTH = 8192
+            embedding_doc_prefix = ""
+
+            async def embed_batch(self, texts, fail_fast=False):
+                # With embedding_batch_size=1 each text is its own batch:
+                # batch 1 fails, so chunk 1 is dropped (50% failure — allowed).
+                embeddings = [[0.1, 0.2, 0.3, 0.4] for _ in texts]
+                embeddings[1] = None
+                return (embeddings, [1])
+
+        class FakeVectorStore:
+            def __init__(self):
+                self.records = []
+
+            async def init_table(self, embedding_dim):
+                self.embedding_dim = embedding_dim
+
+            async def add_chunks(self, records):
+                self.records.extend(records)
+
+            async def delete_old_generation_by_file(self, file_id, new_hash_short):
+                return 0
+
+            async def delete_by_file(self, file_id):
+                return 0
+
+            async def count_by_file(self, file_id):
+                return 1
+
+        original_batch_size = settings.embedding_batch_size
+        settings.embedding_batch_size = 1
+        self.processor.embedding_service = FakeEmbeddingService()
+        self.processor.vector_store = FakeVectorStore()
+
+        try:
+            result = asyncio.run(
+                self.processor.process_file(self.sql_file_path, vault_id=1)
+            )
+        finally:
+            settings.embedding_batch_size = original_batch_size
+
+        conn = sqlite3.connect(self.temp_db_path)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT status, chunk_count, chunks_failed FROM files WHERE id = ?",
+            (result.file_id,),
+        ).fetchone()
+        conn.close()
+
+        self.assertIsNotNone(row)
+        self.assertEqual(row["status"], "indexed")
+        self.assertEqual(row["chunk_count"], 1)
+        self.assertEqual(row["chunks_failed"], 1)
 
     def test_base_vector_record_preserves_raw_text_without_enrichment(self):
         """Initial indexing stores raw evidence and does not add synthetic search text."""
