@@ -80,3 +80,4 @@ tmp/
 
 # SQLite files created by tests with MagicMock paths
 backend/<MagicMock*
+.claude/worktrees/
