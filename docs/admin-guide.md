@@ -597,8 +597,15 @@ For a subpath deployment such as `https://example.com/knowledgevault/`, configur
 APP_ROOT_PATH=/knowledgevault
 VITE_APP_BASENAME=/knowledgevault
 BACKEND_CORS_ORIGINS=https://example.com
-FORWARDED_ALLOW_IPS=*
+FORWARDED_ALLOW_IPS=172.16.0.0/12
 ```
+
+> **Security note:** Avoid setting `FORWARDED_ALLOW_IPS=*` in production.
+> When set to `*`, any client can forge `X-Forwarded-For` and
+> `X-Forwarded-Proto` headers, spoofing their IP address and protocol.
+> Instead, set the specific IP or CIDR of your reverse proxy (e.g.
+> `172.16.0.0/12` for a Docker bridge network, or `127.0.0.1` for a
+> local proxy).
 
 `VITE_API_URL` is automatically derived as `/knowledgevault/api` when left empty. To set it explicitly (e.g., for a custom API gateway), add it to your config:
 

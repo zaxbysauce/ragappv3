@@ -537,6 +537,12 @@ class Settings(BaseSettings):
         "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     }
 
+    # Host-header validation (TrustedHostMiddleware)
+    allowed_hosts: list[str] = ["*"]
+    """Allowed Host header values for TrustedHostMiddleware. Default ["*"] accepts
+    all hosts (safe for single-tenant self-hosting). Set to specific hostnames
+    (e.g. ["knowledgevault.example.com", "localhost"]) behind a reverse proxy."""
+
     # CORS settings
     backend_cors_origins: Annotated[list[str], NoDecode] = [
         "http://localhost:5173",

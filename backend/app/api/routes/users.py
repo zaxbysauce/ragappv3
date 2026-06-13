@@ -596,6 +596,7 @@ async def update_user_organizations(
     user_id: int,
     body: UserOrgsUpdateRequest,
     user: dict = Depends(require_role("admin")),
+    _csrf_token: str = Depends(csrf_protect),
 ):
     """Replace user's organization memberships (admin/superadmin only)."""
     pool = get_pool(str(settings.sqlite_path))
@@ -627,6 +628,23 @@ async def update_user_organizations(
             missing = set(org_ids) - found
             if missing:
                 raise HTTPException(status_code=400, detail=f"Organizations not found: {sorted(missing)}")
+
+        # Caller-org scoping: non-superadmin admins can only assign orgs
+        # they themselves belong to.
+        if memberships and user.get("role") != "superadmin":
+            caller_id = user.get("id")
+            cursor = conn.execute(
+                "SELECT org_id FROM org_members WHERE user_id = ?",
+                (caller_id,),
+            )
+            caller_orgs = {row[0] for row in cursor.fetchall()}
+            requested_orgs = {m.org_id for m in memberships}
+            unauthorized = requested_orgs - caller_orgs
+            if unauthorized:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Cannot assign user to organizations you do not belong to: {sorted(unauthorized)}",
+                )
 
         try:
             # Delete existing memberships (except owner roles to protect org ownership)
@@ -735,6 +753,7 @@ async def update_user_groups(
     user_id: int,
     body: UserGroupsUpdateRequest,
     user: dict = Depends(require_role("admin")),
+    _csrf_token: str = Depends(csrf_protect),
 ):
     """Replace user's group memberships (admin/superadmin only).
 

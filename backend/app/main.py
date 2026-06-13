@@ -112,6 +112,15 @@ if "*" in settings.backend_cors_origins:
         "Set BACKEND_CORS_ORIGINS to specific origins (e.g., http://localhost:5173)."
     )
 
+# TrustedHostMiddleware: validate Host header when allowed_hosts is configured.
+# Default ["*"] accepts all hosts (safe for single-tenant self-hosting).
+if settings.allowed_hosts and settings.allowed_hosts != ["*"]:
+    from starlette.middleware.trustedhost import TrustedHostMiddleware
+
+    app.add_middleware(
+        TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts
+    )
+
 app.include_router(health_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
 app.include_router(search_router, prefix="/api")

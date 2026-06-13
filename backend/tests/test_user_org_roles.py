@@ -113,6 +113,15 @@ def setup_db(monkeypatch):
         "INSERT INTO organizations (id, name, slug) VALUES (?,?,?)",
         (ORG2_ID, "Org2", "org2"),
     )
+    # Admin must be a member of both orgs for caller-org scoping checks
+    conn.execute(
+        "INSERT INTO org_members (org_id, user_id, role) VALUES (?,?,?)",
+        (ORG1_ID, ADMIN_ID, "admin"),
+    )
+    conn.execute(
+        "INSERT INTO org_members (org_id, user_id, role) VALUES (?,?,?)",
+        (ORG2_ID, ADMIN_ID, "admin"),
+    )
     conn.commit()
     conn.close()
 

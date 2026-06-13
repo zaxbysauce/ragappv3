@@ -258,9 +258,28 @@ def stream_chat_response(
         yield f"data: {json.dumps({'type': 'mode', 'mode': resolved_mode.value})}\n\n"
 
         try:
-            async for chunk in rag_engine.query(
+            # Use __anext__ with asyncio.wait_for to emit SSE keepalive
+            # comments every ~15s while waiting for LLM tokens, preventing
+            # reverse proxies with short read timeouts from dropping the
+            # connection during retrieval/generation pauses.
+            _KEEPALIVE_INTERVAL = 15  # seconds
+            chunk_iter = rag_engine.query(
                 message, history, stream=True, vault_id=vault_id, mode=mode
-            ):
+            ).__aiter__()
+            while True:
+                try:
+                    chunk = await asyncio.wait_for(
+                        chunk_iter.__anext__(), timeout=_KEEPALIVE_INTERVAL
+                    )
+                except StopAsyncIteration:
+                    break
+                except asyncio.TimeoutError:
+                    # No chunk received within the keepalive interval — emit
+                    # an SSE comment (ignored by conforming clients) to keep
+                    # the TCP connection alive through proxies.
+                    yield ": keepalive\n\n"
+                    continue
+
                 chunk_type = chunk.get("type")
 
                 if chunk_type == "content":
